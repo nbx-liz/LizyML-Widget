@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lizyml-widget"
+version = "0.1.0"
+description = "Jupyter Notebook / Google Colab / VS Code Notebooks widget for LizyML"
+readme = {text = "", content-type = "text/markdown"}
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "anywidget>=0.9",
+    "traitlets>=5.0",
+    "pandas>=1.5",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+lizyml = ["lizyml[plots,tuning,calibration,explain]"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+    "mypy>=1.0",
+    "jupyterlab>=4.0",
+    "pandas-stubs>=2.0",
+    "lizyml[plots,tuning,calibration,explain]",
+]
+
+[tool.hatch.build]
+artifacts = ["src/lizyml_widget/static/**"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lizyml_widget"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["lizyml_widget"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

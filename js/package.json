@@ -1,0 +1,16 @@
+{
+  "name": "lizyml-widget-js",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "esbuild src/index.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=preact --outfile=../src/lizyml_widget/static/widget.js --sourcemap --watch",
+    "build": "esbuild src/index.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=preact --outfile=../src/lizyml_widget/static/widget.js --minify && cp src/widget.css ../src/lizyml_widget/static/widget.css"
+  },
+  "dependencies": {
+    "preact": "^10.25.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}
