@@ -4,7 +4,9 @@
   font-size: 13px;
   box-sizing: border-box;
   width: 100%;
-  height: 480px;
+  min-height: 620px;
+  height: 620px;
+  resize: vertical;
   border: 1px solid var(--jp-border-color1, #e0e0e0);
   border-radius: 6px;
   overflow: hidden;
@@ -207,6 +209,27 @@
   font-size: 12px;
 }
 
+.lzw-table--columns {
+  table-layout: fixed;
+  min-width: 560px;
+}
+
+.lzw-col--name {
+  width: 46%;
+}
+
+.lzw-col--uniq {
+  width: 90px;
+}
+
+.lzw-col--exclude {
+  width: 72px;
+}
+
+.lzw-col--type {
+  width: 180px;
+}
+
 .lzw-table th {
   text-align: left;
   padding: 4px 8px;
@@ -222,11 +245,25 @@
 
 .lzw-table__name {
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .lzw-table__num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.lzw-table__num--uniq {
+  white-space: nowrap;
+}
+
+.lzw-table__cell--excl {
+  text-align: center;
+}
+
+.lzw-table__type-select {
+  width: 100%;
+  min-width: 120px;
 }
 
 .lzw-row--excluded {
@@ -258,6 +295,10 @@
   padding-bottom: 8px;
   border-bottom: 1px solid var(--jp-border-color2, #f0f0f0);
   margin-bottom: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--jp-layout-color0, #fff);
 }
 
 .lzw-subtabs__btn {
@@ -366,6 +407,24 @@
 .lzw-progress__actions {
   display: flex;
   justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.lzw-progress__folds {
+  margin-top: 12px;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--jp-ui-font-color2, #666);
+}
+
+.lzw-progress__fold-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+.lzw-progress__fold-label {
+  min-width: 80px;
 }
 
 /* ── Results ─────────────────────────────────────────────── */
@@ -447,10 +506,173 @@
   font-size: 12px;
 }
 
+/* ── Disabled tabs ───────────────────────────────────────── */
+.lzw-tabs__btn--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Config footer ───────────────────────────────────────── */
+.lzw-config-tab__footer {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--jp-border-color2, #f0f0f0);
+}
+
+/* ── Calibration toggle ──────────────────────────────────── */
+.lzw-toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.lzw-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.lzw-toggle__slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--jp-layout-color2, #ccc);
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+
+.lzw-toggle__slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.lzw-toggle input:checked + .lzw-toggle__slider {
+  background: var(--jp-brand-color1, #2196f3);
+}
+
+.lzw-toggle input:checked + .lzw-toggle__slider::before {
+  transform: translateX(16px);
+}
+
+/* ── Checkbox group (evaluation metrics) ─────────────────── */
+.lzw-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.lzw-checkbox-group label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* ── Tag Input ───────────────────────────────────────────── */
+.lzw-tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border-radius: 3px;
+  background: var(--jp-layout-color0, #fff);
+  min-width: 160px;
+  cursor: text;
+}
+
+.lzw-tag-input__field {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 12px;
+  min-width: 80px;
+  flex: 1;
+  color: var(--jp-ui-font-color1, #333);
+}
+
+.lzw-tag--removable {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.lzw-tag__remove {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 1px;
+  color: var(--jp-ui-font-color2, #666);
+}
+
+.lzw-tag__remove:hover {
+  color: var(--jp-error-color1, #e53935);
+}
+
+/* ── KV Editor ───────────────────────────────────── */
+.lzw-kv-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 240px;
+}
+
+.lzw-kv-editor__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* ── Placeholder ─────────────────────────────────────────── */
 .lzw-tab-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100%;
+}
+
+/* ── Modal ───────────────────────────────────────────────── */
+.lzw-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.lzw-modal {
+  background: var(--jp-layout-color1, #fff);
+  border-radius: 8px;
+  padding: 16px;
+  max-width: 600px;
+  max-height: 70vh;
+  overflow: auto;
+  width: 90%;
+}
+.lzw-modal__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-weight: 600;
 }

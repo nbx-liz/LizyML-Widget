@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from typing import Any
 
@@ -16,6 +17,27 @@ from .types import (
     PredictionSummary,
     TuningSummary,
 )
+
+# LightGBM model.params defaults for pre-population (BLUEPRINT §5.3)
+_LGBM_PARAMS_TASK_INDEPENDENT: dict[str, Any] = {
+    "n_estimators": 1500,
+    "learning_rate": 0.001,
+    "max_depth": 5,
+    "max_bin": 511,
+    "feature_fraction": 0.7,
+    "bagging_fraction": 0.7,
+    "bagging_freq": 10,
+    "lambda_l1": 0.0,
+    "lambda_l2": 0.000001,
+    "first_metric_only": False,
+    "verbose": -1,
+}
+
+_LGBM_PARAMS_BY_TASK: dict[str, dict[str, Any]] = {
+    "regression": {"objective": "huber", "metric": ["huber", "mae", "mape"]},
+    "binary": {"objective": "binary", "metric": ["auc", "binary_logloss"]},
+    "multiclass": {"objective": "multiclass", "metric": ["auc_mu", "multi_logloss"]},
+}
 
 
 class WidgetService:
@@ -57,21 +79,25 @@ class WidgetService:
             "shape": list(df.shape),
             "target": None,
             "task": None,
+            "auto_task": None,
             "columns": columns,
-            "cv": {"strategy": "kfold", "n_splits": 5, "group_column": None},
+            "cv": self._default_cv_state(strategy="kfold", n_splits=5),
             "feature_summary": self._calc_feature_summary(columns),
         }
 
         if target:
             self.set_target(target)
 
-        return self._df_info
+        return copy.deepcopy(self._df_info)
 
     def set_target(self, target: str) -> dict[str, Any]:
         """Set target column, auto-detect task, auto-configure columns."""
         df = self._df
         if df is None:
             msg = "No data loaded"
+            raise ValueError(msg)
+        if target not in df.columns:
+            msg = f"Unknown target column: {target}"
             raise ValueError(msg)
 
         col = df[target]
@@ -86,18 +112,25 @@ class WidgetService:
                 continue  # exclude target from feature columns
             updated_columns.append(self._auto_configure_column(c, n_rows))
 
-        cv_strategy = "stratified_kfold" if task in ("binary", "multiclass") else "kfold"
-
         self._df_info.update(
             {
                 "target": target,
-                "task": task,
                 "columns": updated_columns,
-                "cv": {**self._df_info["cv"], "strategy": cv_strategy},
                 "feature_summary": self._calc_feature_summary(updated_columns),
             }
         )
-        return self._df_info
+        self._apply_task_defaults(task, update_auto_task=True)
+        return copy.deepcopy(self._df_info)
+
+    def set_task(self, task: str) -> dict[str, Any]:
+        """Override auto-detected task type."""
+        valid_tasks = {"binary", "multiclass", "regression"}
+        if task not in valid_tasks:
+            msg = f"Invalid task: {task}. Must be one of {valid_tasks}"
+            raise ValueError(msg)
+
+        self._apply_task_defaults(task, update_auto_task=False)
+        return copy.deepcopy(self._df_info)
 
     def update_column(self, name: str, *, excluded: bool, col_type: str) -> dict[str, Any]:
         """Update a single column's settings."""
@@ -109,21 +142,57 @@ class WidgetService:
                     c["exclude_reason"] = None
                 break
         self._df_info["feature_summary"] = self._calc_feature_summary(self._df_info["columns"])
-        return self._df_info
+        return copy.deepcopy(self._df_info)
 
     def update_cv(
         self,
         strategy: str,
         n_splits: int,
+        *,
         group_column: str | None = None,
+        time_column: str | None = None,
+        random_state: int | None = 42,
+        shuffle: bool | None = True,
+        gap: int = 0,
+        purge_gap: int = 0,
+        embargo: int = 0,
+        train_size_max: int | None = None,
+        test_size_max: int | None = None,
     ) -> dict[str, Any]:
         """Update cross-validation settings."""
         self._df_info["cv"] = {
             "strategy": strategy,
             "n_splits": n_splits,
             "group_column": group_column,
+            "time_column": time_column,
+            "random_state": random_state,
+            "shuffle": shuffle,
+            "gap": gap,
+            "purge_gap": purge_gap,
+            "embargo": embargo,
+            "train_size_max": train_size_max,
+            "test_size_max": test_size_max,
         }
-        return self._df_info
+        return copy.deepcopy(self._df_info)
+
+    def get_df_info(self) -> dict[str, Any]:
+        """Return a copy of the current df_info state."""
+        return copy.deepcopy(self._df_info)
+
+    def initial_model_params(
+        self, task: str | None, *, auto_num_leaves: bool = True
+    ) -> dict[str, Any]:
+        """Return LightGBM model.params defaults to pre-populate (BLUEPRINT §5.3)."""
+        params: dict[str, Any] = dict(_LGBM_PARAMS_TASK_INDEPENDENT)
+        if task and task in _LGBM_PARAMS_BY_TASK:
+            params.update(_LGBM_PARAMS_BY_TASK[task])
+        if not auto_num_leaves:
+            params["num_leaves"] = 256
+        return params
+
+    def get_task_params(self, task: str) -> dict[str, Any]:
+        """Return task-dependent model.params (objective/metric) only."""
+        return dict(_LGBM_PARAMS_BY_TASK.get(task, {}))
 
     # ── Config ───────────────────────────────────────────────
 
@@ -138,29 +207,71 @@ class WidgetService:
         info = self._df_info
         active_cols = [c for c in info["columns"] if not c.get("excluded", False)]
 
-        data_section = {
+        data_section: dict[str, Any] = {
             "target": info["target"],
-            "task": info["task"],
         }
+
+        cv = info["cv"]
+        strategy = cv["strategy"]
+
+        # group_col / time_col belong in data section per BLUEPRINT §5.2
+        if cv.get("group_column"):
+            data_section["group_col"] = cv["group_column"]
+        if cv.get("time_column"):
+            data_section["time_col"] = cv["time_column"]
+
         features_section = {
             "categorical": [c["name"] for c in active_cols if c.get("col_type") == "categorical"],
             "exclude": [c["name"] for c in info["columns"] if c.get("excluded", False)],
         }
 
-        cv = info["cv"]
         split_section: dict[str, Any] = {
-            "method": cv["strategy"],
+            "method": strategy,
             "n_splits": cv["n_splits"],
         }
-        if cv.get("group_column"):
-            split_section["group_col"] = cv["group_column"]
 
-        return {
+        # Strategy-dependent split fields per BLUEPRINT §5.2
+        if strategy in ("kfold", "stratified_kfold"):
+            split_section["random_state"] = cv.get("random_state", 42)
+        if strategy == "kfold":
+            split_section["shuffle"] = cv.get("shuffle", True)
+        if strategy in ("time_series", "group_time_series"):
+            split_section["gap"] = cv.get("gap", 0)
+        if strategy == "purged_time_series":
+            split_section["purge_gap"] = cv.get("purge_gap", 0)
+            split_section["embargo"] = cv.get("embargo", 0)
+        if strategy in ("time_series", "purged_time_series", "group_time_series"):
+            if cv.get("train_size_max") is not None:
+                split_section["train_size_max"] = cv["train_size_max"]
+            if cv.get("test_size_max") is not None:
+                split_section["test_size_max"] = cv["test_size_max"]
+
+        result = {
             **user_config,
+            "task": info["task"],
             "data": {**user_config.get("data", {}), **data_section},
             "features": {**user_config.get("features", {}), **features_section},
             "split": {**user_config.get("split", {}), **split_section},
         }
+        # Remove task from data section if it leaked from user_config
+        result.get("data", {}).pop("task", None)
+
+        # Ensure required top-level fields are present (BLUEPRINT §5.3)
+        result.setdefault("config_version", 1)
+        if "model" not in result:
+            result["model"] = {"name": "lgbm", "params": self.initial_model_params(info["task"])}
+
+        # Enforce auto_num_leaves exclusivity (BLUEPRINT §5.3)
+        model = result.get("model", {})
+        auto_nl = model.get("auto_num_leaves", True)
+        params = dict(model.get("params", {}))
+        if auto_nl:
+            params.pop("num_leaves", None)
+        elif "num_leaves" not in params:
+            params["num_leaves"] = 256
+        result["model"] = {**model, "params": params}
+
+        return result
 
     # ── Execution ────────────────────────────────────────────
 
@@ -247,6 +358,36 @@ class WidgetService:
                 return "multiclass"
             return "regression"
         return "multiclass"
+
+    @staticmethod
+    def _default_strategy_for_task(task: str) -> str:
+        return "stratified_kfold" if task in ("binary", "multiclass") else "kfold"
+
+    @staticmethod
+    def _default_cv_state(*, strategy: str, n_splits: int) -> dict[str, Any]:
+        return {
+            "strategy": strategy,
+            "n_splits": n_splits,
+            "group_column": None,
+            "time_column": None,
+            "random_state": 42,
+            "shuffle": True,
+            "gap": 0,
+            "purge_gap": 0,
+            "embargo": 0,
+            "train_size_max": None,
+            "test_size_max": None,
+        }
+
+    def _apply_task_defaults(self, task: str, *, update_auto_task: bool) -> None:
+        cv = self._df_info.get("cv", {})
+        n_splits = int(cv.get("n_splits", 5))
+        strategy = self._default_strategy_for_task(task)
+
+        self._df_info["task"] = task
+        if update_auto_task:
+            self._df_info["auto_task"] = task
+        self._df_info["cv"] = self._default_cv_state(strategy=strategy, n_splits=n_splits)
 
     def _auto_configure_column(self, col_info: dict[str, Any], n_rows: int) -> dict[str, Any]:
         """Auto-configure a single column (exclusion + type)."""

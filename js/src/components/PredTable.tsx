@@ -6,7 +6,7 @@ interface PredTableProps {
   pageSize?: number;
 }
 
-export function PredTable({ data, pageSize = 20 }: PredTableProps) {
+export function PredTable({ data, pageSize = 50 }: PredTableProps) {
   const [page, setPage] = useState(0);
 
   const columns = useMemo(() => {

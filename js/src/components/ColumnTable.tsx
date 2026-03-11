@@ -20,12 +20,18 @@ export function ColumnTable({ columns, onUpdate }: ColumnTableProps) {
 
   return (
     <div class="lzw-table-wrap">
-      <table class="lzw-table">
+      <table class="lzw-table lzw-table--columns">
+        <colgroup>
+          <col class="lzw-col--name" />
+          <col class="lzw-col--uniq" />
+          <col class="lzw-col--exclude" />
+          <col class="lzw-col--type" />
+        </colgroup>
         <thead>
           <tr>
             <th>Column</th>
-            <th>Unique</th>
-            <th>Exclude</th>
+            <th>Uniq</th>
+            <th>Excl</th>
             <th>Type</th>
           </tr>
         </thead>
@@ -34,14 +40,9 @@ export function ColumnTable({ columns, onUpdate }: ColumnTableProps) {
             <tr key={col.name} class={col.excluded ? "lzw-row--excluded" : ""}>
               <td class="lzw-table__name">
                 {col.name}
-                {col.exclude_reason && (
-                  <span class="lzw-tag lzw-tag--muted">
-                    {col.exclude_reason}
-                  </span>
-                )}
               </td>
-              <td class="lzw-table__num">{col.unique_count}</td>
-              <td>
+              <td class="lzw-table__num lzw-table__num--uniq">{col.unique_count}</td>
+              <td class="lzw-table__cell--excl">
                 <input
                   type="checkbox"
                   checked={col.excluded}
@@ -55,20 +56,26 @@ export function ColumnTable({ columns, onUpdate }: ColumnTableProps) {
                 />
               </td>
               <td>
-                <select
-                  value={col.col_type}
-                  disabled={col.excluded}
-                  onChange={(e) =>
-                    onUpdate(
-                      col.name,
-                      col.excluded,
-                      (e.target as HTMLSelectElement).value,
-                    )
-                  }
-                >
-                  <option value="numeric">Numeric</option>
-                  <option value="categorical">Categorical</option>
-                </select>
+                {col.excluded ? (
+                  <span class="lzw-muted">
+                    ── {col.exclude_reason === "id" ? "[ID]" : col.exclude_reason === "constant" ? "[Const]" : "[Manual]"}
+                  </span>
+                ) : (
+                  <select
+                    class="lzw-select lzw-table__type-select"
+                    value={col.col_type}
+                    onChange={(e) =>
+                      onUpdate(
+                        col.name,
+                        col.excluded,
+                        (e.target as HTMLSelectElement).value,
+                      )
+                    }
+                  >
+                    <option value="numeric">Numeric</option>
+                    <option value="categorical">Categorical</option>
+                  </select>
+                )}
               </td>
             </tr>
           ))}

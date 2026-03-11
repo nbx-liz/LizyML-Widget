@@ -15,7 +15,7 @@ async function getPlotly(): Promise<any> {
   if ((window as any).Plotly) return (window as any).Plotly;
   // Dynamic import from CDN
   const mod = await import(
-    /* @vite-ignore */
+    /* @vite-ignore */ // @ts-expect-error dynamic CDN import
     "https://esm.sh/plotly.js-dist-min@2.35.0"
   );
   return mod.default ?? mod;

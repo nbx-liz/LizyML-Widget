@@ -7,7 +7,7 @@ import { DataTab } from "./tabs/DataTab";
 import { ConfigTab } from "./tabs/ConfigTab";
 import { ResultsTab } from "./tabs/ResultsTab";
 
-const TABS = ["Data", "Config", "Results"] as const;
+const TABS = ["Data", "Model", "Results"] as const;
 type Tab = (typeof TABS)[number];
 
 interface AppProps {
@@ -63,16 +63,22 @@ export function App({ model }: AppProps) {
 
       {/* Tab bar */}
       <div class="lzw-tabs">
-        {TABS.map((tab) => (
-          <button
-            key={tab}
-            class={`lzw-tabs__btn ${activeTab === tab ? "lzw-tabs__btn--active" : ""}`}
-            onClick={() => setActiveTab(tab)}
-            type="button"
-          >
-            {tab}
-          </button>
-        ))}
+        {TABS.map((tab) => {
+          const enabled =
+            tab === "Data" ||
+            (tab === "Model" && status !== "idle") ||
+            (tab === "Results" && (jobIndex > 0 || status === "running" || status === "completed" || status === "failed"));
+          return (
+            <button
+              key={tab}
+              class={`lzw-tabs__btn ${activeTab === tab ? "lzw-tabs__btn--active" : ""} ${!enabled ? "lzw-tabs__btn--disabled" : ""}`}
+              onClick={() => enabled && setActiveTab(tab)}
+              type="button"
+            >
+              {tab}
+            </button>
+          );
+        })}
       </div>
 
       {/* Tab content */}
@@ -84,12 +90,14 @@ export function App({ model }: AppProps) {
             sendAction={sendAction}
           />
         )}
-        {activeTab === "Config" && (
+        {activeTab === "Model" && (
           <ConfigTab
             configSchema={configSchema}
             config={config}
+            dfInfo={dfInfo}
             status={status}
             sendAction={sendAction}
+            model={model}
           />
         )}
         {activeTab === "Results" && (

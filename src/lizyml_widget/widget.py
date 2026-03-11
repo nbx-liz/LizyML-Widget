@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib.resources
-import json
+import statistics
 import threading
 import time
 import traceback
@@ -15,6 +15,7 @@ import traitlets
 
 from .adapter import LizyMLAdapter
 from .service import WidgetService
+from .types import FitSummary, PredictionSummary, TuningSummary
 
 
 class LizyWidget(anywidget.AnyWidget):
@@ -55,7 +56,7 @@ class LizyWidget(anywidget.AnyWidget):
 
     # ── Public Python API ─────────────────────────────────────
 
-    def load(self, df: pd.DataFrame, target: str | None = None) -> None:
+    def load(self, df: pd.DataFrame, target: str | None = None) -> LizyWidget:
         """Load a DataFrame into the widget."""
         df_info = self._service.load_data(df, target=target)
         self.df_info = df_info
@@ -67,36 +68,152 @@ class LizyWidget(anywidget.AnyWidget):
 
         schema = self._service.get_config_schema()
         self.config_schema = schema.json_schema
+        config = self._extract_defaults(schema.json_schema)
+        # Ensure config_version is always present (required by LizyML, may lack schema default)
+        config.setdefault("config_version", 1)
+        # Pre-populate model.params with LightGBM defaults (BLUEPRINT §5.3)
+        model_section = dict(config.get("model", {}))
+        auto_num_leaves = model_section.get("auto_num_leaves", True)
+        defaults = self._service.initial_model_params(
+            df_info.get("task"), auto_num_leaves=auto_num_leaves
+        )
+        model_section["params"] = {**defaults, **model_section.get("params", {})}
+        config["model"] = model_section
+        self.config = config
+        return self
 
-    def load_inference(self, df: pd.DataFrame) -> None:
+    def set_target(self, col: str) -> LizyWidget:
+        """Set target column and trigger auto-detection."""
+        df_info = self._service.set_target(col)
+        self.df_info = df_info
+        self.status = "data_loaded"
+        return self
+
+    def fit(self, *, timeout: float | None = None) -> LizyWidget:
+        """Run Fit in a background thread and block until complete.
+
+        Raises RuntimeError if the job fails.
+        """
+        done = threading.Event()
+
+        def _watch(change: dict[str, Any]) -> None:
+            if change["new"] in ("completed", "failed"):
+                done.set()
+
+        self.observe(_watch, names=["status"])
+        self._run_job("fit")
+        # Validation failure sets status synchronously before thread starts
+        if self.status in ("completed", "failed"):
+            done.set()
+        done.wait(timeout=timeout)
+        self.unobserve(_watch, names=["status"])
+        if self.status == "failed":
+            msg = self.error.get("message", "Fit failed")
+            raise RuntimeError(msg)
+        return self
+
+    def tune(self, *, timeout: float | None = None) -> LizyWidget:
+        """Run Tune in a background thread and block until complete.
+
+        Raises RuntimeError if the job fails.
+        """
+        done = threading.Event()
+
+        def _watch(change: dict[str, Any]) -> None:
+            if change["new"] in ("completed", "failed"):
+                done.set()
+
+        self.observe(_watch, names=["status"])
+        self._run_job("tune")
+        if self.status in ("completed", "failed"):
+            done.set()
+        done.wait(timeout=timeout)
+        self.unobserve(_watch, names=["status"])
+        if self.status == "failed":
+            msg = self.error.get("message", "Tune failed")
+            raise RuntimeError(msg)
+        return self
+
+    @property
+    def task(self) -> str | None:
+        """Auto-detected task type (binary / multiclass / regression)."""
+        return self.df_info.get("task")
+
+    @property
+    def cv_method(self) -> str:
+        """Current CV strategy name."""
+        return str(self.df_info.get("cv", {}).get("strategy", "kfold"))
+
+    @property
+    def cv_n_splits(self) -> int:
+        """Number of CV splits."""
+        return int(self.df_info.get("cv", {}).get("n_splits", 5))
+
+    @property
+    def df_shape(self) -> list[int]:
+        """Shape [rows, cols] of the loaded DataFrame."""
+        return list(self.df_info.get("shape", []))
+
+    @property
+    def df_columns(self) -> list[dict[str, Any]]:
+        """Column metadata list from the loaded DataFrame."""
+        return list(self.df_info.get("columns", []))
+
+    def load_inference(self, df: pd.DataFrame) -> LizyWidget:
         """Load a DataFrame for inference."""
         self._inference_df = df
         self.inference_result = {"status": "ready", "rows": len(df)}
+        return self
 
-    def set_config(self, config: dict[str, Any]) -> None:
-        """Set config programmatically."""
+    def set_config(self, config: dict[str, Any]) -> LizyWidget:
+        """Set config programmatically. Preserves config_version if not supplied."""
+        if "config_version" not in config:
+            existing_version = self.config.get("config_version", 1)
+            config = {**config, "config_version": existing_version}
         self.config = config
+        return self
 
     def get_config(self) -> dict[str, Any]:
         """Get current config."""
         return dict(self.config)
 
-    def get_fit_summary(self) -> dict[str, Any]:
+    def get_fit_summary(self) -> FitSummary | None:
         """Get last fit summary."""
-        return dict(self.fit_summary)
+        if not self.fit_summary:
+            return None
+        return FitSummary(
+            metrics=self.fit_summary["metrics"],
+            fold_count=self.fit_summary["fold_count"],
+            params=self.fit_summary["params"],
+        )
 
-    def get_tune_summary(self) -> dict[str, Any]:
+    def get_tune_summary(self) -> TuningSummary | None:
         """Get last tune summary."""
-        return dict(self.tune_summary)
+        if not self.tune_summary:
+            return None
+        return TuningSummary(
+            best_params=self.tune_summary["best_params"],
+            best_score=self.tune_summary["best_score"],
+            trials=self.tune_summary["trials"],
+            metric_name=self.tune_summary["metric_name"],
+            direction=self.tune_summary["direction"],
+        )
 
     def get_model(self) -> Any:
         """Get the underlying trained model object."""
         return self._service.get_model()
 
-    def predict(self, df: pd.DataFrame, *, return_shap: bool = False) -> pd.DataFrame:
-        """Run prediction and return results as DataFrame."""
-        result = self._service.predict(df, return_shap=return_shap)
-        return result.predictions
+    def predict(self, df: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary:
+        """Run prediction and return results as PredictionSummary."""
+        return self._service.predict(df, return_shap=return_shap)
+
+    def save_model(self, path: str) -> str:
+        """Save the trained model to the given path. Returns the path."""
+        model = self._service.get_model()
+        if model is None:
+            msg = "No trained model. Run fit or tune first."
+            raise ValueError(msg)
+        return self._service._adapter.export_model(model, path)  # noqa: SLF001
 
     def save_config(self, path: str) -> None:
         """Save current full config to YAML file."""
@@ -106,29 +223,48 @@ class LizyWidget(anywidget.AnyWidget):
         with open(path, "w") as f:
             yaml.dump(full_config, f, default_flow_style=False)
 
-    def load_config(self, path: str) -> None:
+    def load_config(self, path: str) -> LizyWidget:
         """Load config from YAML file."""
         import yaml
 
         with open(path) as f:
             loaded: dict[str, Any] = yaml.safe_load(f)
 
+        self._apply_loaded_config(loaded)
+        return self
+
+    def _apply_loaded_config(self, loaded: dict[str, Any]) -> None:
+        """Apply a parsed config dict to widget state."""
+        loaded = dict(loaded)  # avoid mutating caller's dict
         data_section = loaded.pop("data", {})
         loaded.pop("features", {})  # consumed by service via build_config
         split_section = loaded.pop("split", {})
+        # task at top-level
+        loaded.pop("task", None)
 
         # Apply data section to service
-        if "target" in data_section and self._service._df is not None:
+        if "target" in data_section and self._service._df is not None:  # noqa: SLF001
             self._service.set_target(data_section["target"])
 
         # Apply CV from split section
         if split_section:
             strategy = split_section.get("method", split_section.get("strategy", "kfold"))
             n_splits = split_section.get("n_splits", 5)
-            group_col = split_section.get("group_col", split_section.get("group_column"))
-            self._service.update_cv(strategy, n_splits, group_col)
+            self._service.update_cv(
+                strategy,
+                n_splits,
+                group_column=split_section.get("group_col", split_section.get("group_column")),
+                time_column=data_section.get("time_col"),
+                random_state=split_section.get("random_state", 42),
+                shuffle=split_section.get("shuffle", True),
+                gap=split_section.get("gap", 0),
+                purge_gap=split_section.get("purge_gap", 0),
+                embargo=split_section.get("embargo", 0),
+                train_size_max=split_section.get("train_size_max"),
+                test_size_max=split_section.get("test_size_max"),
+            )
 
-        self.df_info = self._service._df_info
+        self.df_info = self._service.get_df_info()
 
         # Remaining keys go to config
         self.config = loaded
@@ -147,6 +283,19 @@ class LizyWidget(anywidget.AnyWidget):
         if handler is not None:
             handler(self, payload)
 
+    def _update_task_params(self, task: str) -> None:
+        """Patch model.params with task-dependent fields (objective/metric)."""
+        task_params = self._service.get_task_params(task)
+        if not task_params:
+            return
+        current = dict(self.config)
+        model_section = dict(current.get("model", {}))
+        model_params = dict(model_section.get("params", {}))
+        model_params.update(task_params)
+        model_section["params"] = model_params
+        current["model"] = model_section
+        self.config = current
+
     def _handle_set_target(self, payload: dict[str, Any]) -> None:
         target = payload.get("target", "")
         if not target:
@@ -155,8 +304,23 @@ class LizyWidget(anywidget.AnyWidget):
             df_info = self._service.set_target(target)
             self.df_info = df_info
             self.status = "data_loaded"
+            task = df_info.get("task")
+            if task:
+                self._update_task_params(task)
         except Exception as e:
             self.error = {"code": "TARGET_ERROR", "message": str(e)}
+
+    def _handle_set_task(self, payload: dict[str, Any]) -> None:
+        task = payload.get("task", "")
+        if not task:
+            return
+        try:
+            df_info = self._service.set_task(task)
+            self.df_info = df_info
+            if task:
+                self._update_task_params(task)
+        except Exception as e:
+            self.error = {"code": "TASK_ERROR", "message": str(e)}
 
     def _handle_update_column(self, payload: dict[str, Any]) -> None:
         try:
@@ -174,14 +338,25 @@ class LizyWidget(anywidget.AnyWidget):
             df_info = self._service.update_cv(
                 payload.get("strategy", "kfold"),
                 payload.get("n_splits", 5),
-                payload.get("group_column"),
+                group_column=payload.get("group_column"),
+                time_column=payload.get("time_column"),
+                random_state=payload.get("random_state", 42),
+                shuffle=payload.get("shuffle", True),
+                gap=payload.get("gap", 0),
+                purge_gap=payload.get("purge_gap", 0),
+                embargo=payload.get("embargo", 0),
+                train_size_max=payload.get("train_size_max"),
+                test_size_max=payload.get("test_size_max"),
             )
             self.df_info = df_info
         except Exception as e:
             self.error = {"code": "CV_ERROR", "message": str(e)}
 
     def _handle_update_config(self, payload: dict[str, Any]) -> None:
-        self.config = payload.get("config", {})
+        new_config = payload.get("config", {})
+        if not new_config:
+            return  # Ignore empty config updates
+        self.config = new_config
 
     def _handle_fit(self, _payload: dict[str, Any]) -> None:
         self._run_job("fit")
@@ -234,8 +409,60 @@ class LizyWidget(anywidget.AnyWidget):
                 "message": str(e),
             }
 
+    def _handle_import_yaml(self, payload: dict[str, Any]) -> None:
+        content = payload.get("content", "")
+        if not content:
+            return
+        try:
+            import yaml
+
+            loaded: dict[str, Any] = yaml.safe_load(content)
+            if not isinstance(loaded, dict):
+                self.error = {"code": "IMPORT_ERROR", "message": "Invalid YAML content"}
+                return
+            self._apply_loaded_config(loaded)
+        except Exception as e:
+            self.error = {"code": "IMPORT_ERROR", "message": str(e)}
+
+    def _handle_export_yaml(self, _payload: dict[str, Any]) -> None:
+        try:
+            import yaml
+
+            full_config = self._service.build_config(dict(self.config))
+            content = yaml.dump(full_config, default_flow_style=False)
+            self.send({"type": "yaml_export", "content": content})
+        except Exception as e:
+            self.error = {"code": "EXPORT_ERROR", "message": str(e)}
+
+    def _handle_raw_config(self, _payload: dict[str, Any]) -> None:
+        try:
+            import yaml
+
+            full_config = self._service.build_config(dict(self.config))
+            content = yaml.dump(full_config, default_flow_style=False)
+            self.send({"type": "raw_config", "content": content})
+        except Exception as e:
+            self.error = {"code": "EXPORT_ERROR", "message": str(e)}
+
+    def _handle_apply_best_params(self, payload: dict[str, Any]) -> None:
+        params = payload.get("params", {})
+        if not params:
+            return
+        current = dict(self.config)
+        model_section = dict(current.get("model", {}))
+        model_params = dict(model_section.get("params", {}))
+        model_params.update(params)
+        model_section["params"] = model_params
+        current["model"] = model_section
+        self.config = current
+
+    def _handle_request_inference_plot(self, payload: dict[str, Any]) -> None:
+        # Same logic as request_plot — BLUEPRINT §3.6
+        self._handle_request_plot(payload)
+
     _action_handlers: dict[str, Any] = {
         "set_target": _handle_set_target,
+        "set_task": _handle_set_task,
         "update_column": _handle_update_column,
         "update_cv": _handle_update_cv,
         "update_config": _handle_update_config,
@@ -244,6 +471,11 @@ class LizyWidget(anywidget.AnyWidget):
         "cancel": _handle_cancel,
         "request_plot": _handle_request_plot,
         "run_inference": _handle_run_inference,
+        "apply_best_params": _handle_apply_best_params,
+        "request_inference_plot": _handle_request_inference_plot,
+        "import_yaml": _handle_import_yaml,
+        "export_yaml": _handle_export_yaml,
+        "raw_config": _handle_raw_config,
     }
 
     # ── Job execution ─────────────────────────────────────────
@@ -262,6 +494,17 @@ class LizyWidget(anywidget.AnyWidget):
         self.error = {}
 
         full_config = self._service.build_config(dict(self.config))
+
+        # Pre-execution validation (BLUEPRINT §9-3)
+        errors = self._service.validate_config(full_config)
+        if errors:
+            self.error = {
+                "code": "VALIDATION_ERROR",
+                "message": errors[0]["message"],
+                "details": errors,
+            }
+            self.status = "failed"
+            return
 
         thread = threading.Thread(
             target=self._job_worker,
@@ -283,16 +526,25 @@ class LizyWidget(anywidget.AnyWidget):
         timer = threading.Thread(target=tick_elapsed, daemon=True)
         timer.start()
 
+        def on_progress(current: int, total: int, message: str) -> None:
+            if self._cancel_flag.is_set():
+                raise InterruptedError("Job cancelled by user")
+            self.progress = {"current": current, "total": total, "message": message}
+            self.elapsed_sec = round(time.monotonic() - start, 1)
+
         try:
             if job_type == "fit":
-                summary = self._service.fit(config)
+                summary = self._service.fit(config, on_progress=on_progress)
+                normalized = self._normalize_metrics(self._service.get_evaluate_table())
+                fold_details = self._service.get_split_summary()
                 self.fit_summary = {
-                    "metrics": summary.metrics,
+                    "metrics": normalized if normalized else summary.metrics,
                     "fold_count": summary.fold_count,
+                    "fold_details": fold_details,
                     "params": summary.params,
                 }
             elif job_type == "tune":
-                summary_t = self._service.tune(config)
+                summary_t = self._service.tune(config, on_progress=on_progress)
                 self.tune_summary = {
                     "best_params": summary_t.best_params,
                     "best_score": summary_t.best_score,
@@ -300,10 +552,25 @@ class LizyWidget(anywidget.AnyWidget):
                     "metric_name": summary_t.metric_name,
                     "direction": summary_t.direction,
                 }
+                # After tune, model is fitted — populate fit_summary too
+                normalized = self._normalize_metrics(self._service.get_evaluate_table())
+                fold_details = self._service.get_split_summary()
+                if normalized:
+                    self.fit_summary = {
+                        "metrics": normalized,
+                        "fold_count": len(fold_details),
+                        "fold_details": fold_details,
+                        "params": [],
+                    }
 
             self.available_plots = self._service.get_available_plots()
             self.elapsed_sec = round(time.monotonic() - start, 1)
             self.status = "completed"
+
+        except InterruptedError:
+            self.elapsed_sec = round(time.monotonic() - start, 1)
+            self.error = {"code": "CANCELLED", "message": "Job cancelled by user"}
+            self.status = "failed"
 
         except Exception as e:
             self.elapsed_sec = round(time.monotonic() - start, 1)
@@ -318,13 +585,73 @@ class LizyWidget(anywidget.AnyWidget):
             timer_stop.set()
             timer.join(timeout=2.0)
 
-    # ── Serialization helpers ─────────────────────────────────
+    # ── Config helpers ─────────────────────────────────────────
 
-    def _serialize_fit_summary(self, summary: Any) -> str:
-        return json.dumps(
-            {
-                "metrics": summary.metrics,
-                "fold_count": summary.fold_count,
-                "params": summary.params,
-            }
-        )
+    @staticmethod
+    def _extract_defaults(schema: dict[str, Any]) -> dict[str, Any]:
+        """Walk a JSON Schema and extract all default values into a config dict."""
+
+        def _resolve(node: dict[str, Any], root: dict[str, Any]) -> dict[str, Any]:
+            if "$ref" in node:
+                parts = node["$ref"].lstrip("#/").split("/")
+                ref_node: Any = root
+                for p in parts:
+                    ref_node = ref_node.get(p, {})
+                merged = dict(ref_node)
+                merged.update({k: v for k, v in node.items() if k != "$ref"})
+                return merged
+            if "allOf" in node and len(node["allOf"]) == 1 and "$ref" in node["allOf"][0]:
+                resolved = _resolve(node["allOf"][0], root)
+                resolved.update({k: v for k, v in node.items() if k != "allOf"})
+                return resolved
+            return node
+
+        def _walk(node: dict[str, Any], root: dict[str, Any]) -> Any:
+            node = _resolve(node, root)
+            if node.get("type") == "object" and "properties" in node:
+                obj: dict[str, Any] = {}
+                for key, prop in node["properties"].items():
+                    prop = _resolve(prop, root)
+                    if "default" in prop:
+                        obj[key] = prop["default"]
+                    elif prop.get("type") == "object" and "properties" in prop:
+                        child = _walk(prop, root)
+                        if child:
+                            obj[key] = child
+                return obj
+            if "default" in node:
+                return node["default"]
+            return {}
+
+        result = _walk(schema, schema)
+        return result if isinstance(result, dict) else {}
+
+    @staticmethod
+    def _normalize_metrics(eval_records: list[dict[str, Any]]) -> dict[str, Any]:
+        """Convert evaluate_table records to {metric: {is, oos, oos_std}} for ScoreTable.
+
+        evaluate_table() returns records with 'index' (metric name), 'if_mean', 'oof',
+        and 'fold_0'...'fold_N-1' columns.
+        """
+        result: dict[str, Any] = {}
+        if not eval_records:
+            return result
+        for record in eval_records:
+            metric_name = str(record.get("index", record.get("metric", "")))
+            if not metric_name:
+                continue
+            entry: dict[str, Any] = {}
+            if "if_mean" in record:
+                entry["is"] = record["if_mean"]
+            if "oof" in record:
+                entry["oos"] = record["oof"]
+            # Compute OOS Std from per-fold columns
+            fold_values = [
+                v
+                for k, v in record.items()
+                if k.startswith("fold_") and isinstance(v, (int, float))
+            ]
+            if len(fold_values) > 1:
+                entry["oos_std"] = statistics.stdev(fold_values)
+            result[metric_name] = entry
+        return result

@@ -138,6 +138,34 @@ class TestCVDefaults:
         info = svc.load_data(df, target="y")
         assert info["cv"]["strategy"] == "kfold"
 
+    def test_set_target_sets_auto_task_and_strategy(self) -> None:
+        df = pd.DataFrame({"y": [0, 1] * 50, "x": range(100)})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df)
+        info = svc.set_target("y")
+        assert info["task"] == "binary"
+        assert info["auto_task"] == "binary"
+        assert info["cv"]["strategy"] == "stratified_kfold"
+
+    def test_set_task_updates_strategy_to_stratified_for_classification(self) -> None:
+        n = 100
+        df = pd.DataFrame({"y": range(n), "x": range(n)})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        info = svc.set_task("multiclass")
+        assert info["task"] == "multiclass"
+        assert info["cv"]["strategy"] == "stratified_kfold"
+
+    def test_set_task_resets_cv_fields_to_task_defaults(self) -> None:
+        df = pd.DataFrame({"y": [0, 1] * 50, "x": range(100), "g": ["a", "b"] * 50})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        svc.update_cv("group_kfold", 3, group_column="g")
+        info = svc.set_task("regression")
+        assert info["cv"]["strategy"] == "kfold"
+        assert info["cv"]["n_splits"] == 3
+        assert info["cv"]["group_column"] is None
+
 
 # ── Feature summary ──────────────────────────────────────────
 
@@ -182,10 +210,26 @@ class TestDataManagement:
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
-        info = svc.update_cv("group_kfold", 3, "x")
+        info = svc.update_cv("group_kfold", 3, group_column="x")
         assert info["cv"]["strategy"] == "group_kfold"
         assert info["cv"]["n_splits"] == 3
         assert info["cv"]["group_column"] == "x"
+
+    def test_update_cv_time_series_fields(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        info = svc.update_cv(
+            "purged_time_series",
+            5,
+            time_column="x",
+            purge_gap=3,
+            embargo=2,
+        )
+        assert info["cv"]["strategy"] == "purged_time_series"
+        assert info["cv"]["time_column"] == "x"
+        assert info["cv"]["purge_gap"] == 3
+        assert info["cv"]["embargo"] == 2
 
     def test_shape_info(self) -> None:
         df = pd.DataFrame({"x": range(50), "y": range(50)})
@@ -211,6 +255,93 @@ class TestDataManagement:
         svc.load_data(df, target="y")
         config = svc.build_config({"model": {"name": "lgbm"}})
         assert config["data"]["target"] == "y"
-        assert config["data"]["task"] == "binary"
+        assert "task" not in config.get("data", {})
+        assert config["task"] == "binary"
         assert config["split"]["method"] == "stratified_kfold"
+        assert config["split"]["random_state"] == 42
         assert "model" in config
+
+    def test_build_config_group_kfold(self) -> None:
+        df = pd.DataFrame({"x": range(50), "g": ["a", "b"] * 25, "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        svc.update_cv("group_kfold", 5, group_column="g")
+        config = svc.build_config({})
+        assert config["data"]["group_col"] == "g"
+        assert config["split"]["method"] == "group_kfold"
+
+    def test_build_config_time_series(self) -> None:
+        df = pd.DataFrame({"x": range(50), "t": range(50), "y": range(50)})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        svc.update_cv(
+            "time_series",
+            5,
+            time_column="t",
+            gap=2,
+            train_size_max=30,
+        )
+        config = svc.build_config({})
+        assert config["data"]["time_col"] == "t"
+        assert config["split"]["gap"] == 2
+        assert config["split"]["train_size_max"] == 30
+        assert config["task"] == "regression"
+
+    def test_build_config_preserves_config_version(self) -> None:
+        df = pd.DataFrame({"num": range(100), "y": [0, 1] * 50})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        config = svc.build_config({"config_version": 1, "model": {"name": "lgbm"}})
+        assert config["config_version"] == 1
+        assert config["task"] == "binary"
+
+
+class TestReturnValueIndependence:
+    """Verify each mutating method returns an independent copy of df_info."""
+
+    def test_load_data_returns_independent_copy(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        info = svc.load_data(df)
+        info["shape"] = [0, 0]
+        assert svc._df_info["shape"] == [50, 2]
+
+    def test_set_target_returns_independent_copy(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df)
+        info = svc.set_target("y")
+        info["target"] = "tampered"
+        assert svc._df_info["target"] == "y"
+
+    def test_set_task_returns_independent_copy(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        info = svc.set_task("regression")
+        info["task"] = "tampered"
+        assert svc._df_info["task"] == "regression"
+
+    def test_update_column_returns_independent_copy(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        info = svc.update_column("x", excluded=True, col_type="numeric")
+        info["columns"].clear()
+        assert len(svc._df_info["columns"]) > 0
+
+    def test_update_cv_returns_independent_copy(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        info = svc.update_cv("group_kfold", 3, group_column="x")
+        info["cv"]["strategy"] = "tampered"
+        assert svc._df_info["cv"]["strategy"] == "group_kfold"
+
+    def test_get_df_info_returns_independent_copy(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        info = svc.get_df_info()
+        info["target"] = "tampered"
+        assert svc._df_info["target"] == "y"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -84,22 +85,20 @@ class LizyMLAdapter:
         return ConfigSchema(json_schema=LizyMLConfig.model_json_schema())
 
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
-        from lizyml.config.schema import LizyMLConfig
-        from pydantic import ValidationError
+        from lizyml.config.loader import load_config
 
         try:
-            LizyMLConfig(**config)
+            load_config(config)
             return []
-        except ValidationError as e:
-            return [
-                {"field": ".".join(str(loc) for loc in err["loc"]), "message": err["msg"]}
-                for err in e.errors()
-            ]
+        except Exception as e:
+            return [{"field": "", "message": str(e)}]
 
     def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any:
         from lizyml.core.model import Model
 
-        return Model(config, data=dataframe)
+        model = Model(config, data=dataframe)
+        model._widget_config = config  # type: ignore[attr-defined]  # noqa: SLF001
+        return model
 
     def fit(
         self,
@@ -165,8 +164,8 @@ class LizyMLAdapter:
             "roc-curve": model.roc_curve_plot,
             "calibration": model.calibration_plot,
             "probability-histogram": model.probability_histogram_plot,
-            "importance": lambda: model.importance_plot(kind="split"),
-            "tuning": model.tuning_plot,
+            "feature-importance": lambda: model.importance_plot(kind="split"),
+            "optimization-history": model.tuning_plot,
         }
         method = plot_methods.get(plot_type)
         if method is None:
@@ -176,9 +175,19 @@ class LizyMLAdapter:
         return PlotData(plotly_json=fig.to_json())
 
     def available_plots(self, model: Any) -> list[str]:
-        task: str = model._config.task  # noqa: SLF001
-        has_calibration = model.fit_result.calibrator is not None
-        has_tuning = hasattr(model, "_tuning_result") and model._tuning_result is not None  # noqa: SLF001
+        # Extract task safely: try _cfg (LizyML internal), then widget fallback
+        task: str = ""
+        try:
+            task = model._cfg.task  # noqa: SLF001
+        except AttributeError:
+            cfg = getattr(model, "_widget_config", {})
+            task = cfg.get("task", "")
+
+        has_calibration = False
+        with contextlib.suppress(Exception):
+            has_calibration = model.fit_result.calibrator is not None
+
+        has_tuning = getattr(model, "_tuning_result", None) is not None
 
         plots = ["learning-curve", "oof-distribution"]
         if task == "regression":
@@ -190,13 +199,14 @@ class LizyMLAdapter:
                 plots.append("probability-histogram")
         if task == "multiclass":
             plots.append("roc-curve")
-        plots.append("importance")
+        plots.append("feature-importance")
         if has_tuning:
-            plots.append("tuning")
+            plots.append("optimization-history")
         return plots
 
     def export_model(self, model: Any, path: str) -> str:
-        raise NotImplementedError("export_model not yet implemented")
+        model.save(path)
+        return path
 
     def load_model(self, path: str) -> Any:
         raise NotImplementedError("load_model not yet implemented")

@@ -82,20 +82,35 @@ class TestConfigSchema:
             assert schema.json_schema == {"type": "object", "properties": {}}
 
     def test_validate_config_valid(self) -> None:
-        mock_config_cls = MagicMock()
-        mock_config_cls.return_value = MagicMock()  # no error
+        mock_load_config = MagicMock()
+        mock_loader = MagicMock(load_config=mock_load_config)
         with patch.dict(
             "sys.modules",
             {
                 "lizyml": MagicMock(),
                 "lizyml.config": MagicMock(),
-                "lizyml.config.schema": MagicMock(LizyMLConfig=mock_config_cls),
-                "pydantic": MagicMock(),
+                "lizyml.config.loader": mock_loader,
             },
         ):
             adapter = LizyMLAdapter()
             errors = adapter.validate_config({"model": {"name": "lgbm"}})
             assert errors == []
+
+    def test_validate_config_invalid(self) -> None:
+        mock_load_config = MagicMock(side_effect=ValueError("config_version is required"))
+        mock_loader = MagicMock(load_config=mock_load_config)
+        with patch.dict(
+            "sys.modules",
+            {
+                "lizyml": MagicMock(),
+                "lizyml.config": MagicMock(),
+                "lizyml.config.loader": mock_loader,
+            },
+        ):
+            adapter = LizyMLAdapter()
+            errors = adapter.validate_config({})
+            assert len(errors) == 1
+            assert "config_version" in errors[0]["message"]
 
 
 # ── Fit ──────────────────────────────────────────────────────
@@ -209,7 +224,7 @@ class TestAvailablePlots:
     def test_regression_plots(self) -> None:
         adapter = LizyMLAdapter()
         mock_model = MagicMock()
-        mock_model._config.task = "regression"
+        mock_model._cfg.task = "regression"
         mock_model.fit_result.calibrator = None
         del mock_model._tuning_result
 
@@ -217,12 +232,12 @@ class TestAvailablePlots:
         assert "residuals" in plots
         assert "roc-curve" not in plots
         assert "learning-curve" in plots
-        assert "importance" in plots
+        assert "feature-importance" in plots
 
     def test_binary_with_calibration(self) -> None:
         adapter = LizyMLAdapter()
         mock_model = MagicMock()
-        mock_model._config.task = "binary"
+        mock_model._cfg.task = "binary"
         mock_model.fit_result.calibrator = MagicMock()
         del mock_model._tuning_result
 
@@ -234,7 +249,7 @@ class TestAvailablePlots:
     def test_binary_without_calibration(self) -> None:
         adapter = LizyMLAdapter()
         mock_model = MagicMock()
-        mock_model._config.task = "binary"
+        mock_model._cfg.task = "binary"
         mock_model.fit_result.calibrator = None
         del mock_model._tuning_result
 
@@ -245,12 +260,24 @@ class TestAvailablePlots:
     def test_tuning_plot_when_tuned(self) -> None:
         adapter = LizyMLAdapter()
         mock_model = MagicMock()
-        mock_model._config.task = "binary"
+        mock_model._cfg.task = "binary"
         mock_model.fit_result.calibrator = None
         mock_model._tuning_result = MagicMock()
 
         plots = adapter.available_plots(mock_model)
-        assert "tuning" in plots
+        assert "optimization-history" in plots
+
+    def test_available_plots_fallback_when_no_cfg(self) -> None:
+        """Regression: no _cfg attribute should not raise."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock(spec=[])
+        mock_model._widget_config = {"task": "binary"}
+        mock_model.fit_result = MagicMock()
+        mock_model.fit_result.calibrator = None
+
+        plots = adapter.available_plots(mock_model)
+        assert "roc-curve" in plots
+        assert "learning-curve" in plots
 
 
 # ── Evaluate / Split / Importance ────────────────────────────
@@ -288,10 +315,12 @@ class TestResultDelegation:
 
 
 class TestStubs:
-    def test_export_model_not_implemented(self) -> None:
+    def test_export_model(self) -> None:
         adapter = LizyMLAdapter()
-        with pytest.raises(NotImplementedError):
-            adapter.export_model(MagicMock(), "/tmp/model.pkl")
+        mock_model = MagicMock()
+        result = adapter.export_model(mock_model, "/tmp/model.pkl")
+        mock_model.save.assert_called_once_with("/tmp/model.pkl")
+        assert result == "/tmp/model.pkl"
 
     def test_load_model_not_implemented(self) -> None:
         adapter = LizyMLAdapter()
