@@ -265,7 +265,11 @@ function ModelSection({
       {/* name: read-only const */}
       <div class="lzw-form-row">
         <label class="lzw-label">Model Type</label>
-        <span class="lzw-tag lzw-tag--muted">{value.name ?? "lgbm"}</span>
+        {value.name ? (
+          <span class="lzw-tag lzw-tag--muted">{value.name}</span>
+        ) : (
+          <span class="lzw-tag lzw-tag--warning">model.name missing</span>
+        )}
       </div>
 
       {/* auto_num_leaves toggle */}

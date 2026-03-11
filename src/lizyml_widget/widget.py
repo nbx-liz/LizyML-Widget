@@ -71,6 +71,9 @@ class LizyWidget(anywidget.AnyWidget):
         config = self._extract_defaults(schema.json_schema)
         # Ensure config_version is always present (required by LizyML, may lack schema default)
         config.setdefault("config_version", 1)
+        # Ensure model.name is always present (oneOf/discriminator schema may not extract it)
+        config.setdefault("model", {})
+        config["model"].setdefault("name", "lgbm")
         # Pre-populate model.params with LightGBM defaults (BLUEPRINT §5.3)
         model_section = dict(config.get("model", {}))
         auto_num_leaves = model_section.get("auto_num_leaves", True)
@@ -457,8 +460,27 @@ class LizyWidget(anywidget.AnyWidget):
         self.config = current
 
     def _handle_request_inference_plot(self, payload: dict[str, Any]) -> None:
-        # Same logic as request_plot — BLUEPRINT §3.6
-        self._handle_request_plot(payload)
+        plot_type = payload.get("plot_type", "")
+        if not plot_type:
+            return
+        # Inference plots use prediction data, not fit model
+        inference_data = self.inference_result.get("data", [])
+        if not inference_data:
+            self._handle_request_plot(payload)
+            return
+        try:
+            predictions = pd.DataFrame(inference_data)
+            plot_data = self._service.get_inference_plot(predictions, plot_type)
+            self.send(
+                {
+                    "type": "plot_data",
+                    "plot_type": plot_type,
+                    "plotly_json": plot_data.plotly_json,
+                }
+            )
+        except Exception:
+            # Fall back to fit model plot if inference plot fails
+            self._handle_request_plot(payload)
 
     _action_handlers: dict[str, Any] = {
         "set_target": _handle_set_target,
@@ -482,6 +504,20 @@ class LizyWidget(anywidget.AnyWidget):
 
     def _run_job(self, job_type: str) -> None:
         if self.status == "running":
+            return
+
+        # Pre-execution data/target checks (BLUEPRINT §6.1)
+        if self._service._df is None:
+            self.error = {"code": "NO_DATA", "message": "No data loaded. Call load(df) first."}
+            self.status = "failed"
+            return
+
+        if not self._service._df_info.get("target"):
+            self.error = {
+                "code": "NO_TARGET",
+                "message": "No target selected. Call load(df, target=...) or set_target(col).",
+            }
+            self.status = "failed"
             return
 
         self._cancel_flag.clear()
@@ -574,8 +610,14 @@ class LizyWidget(anywidget.AnyWidget):
 
         except Exception as e:
             self.elapsed_sec = round(time.monotonic() - start, 1)
+            # Distinguish adapter/backend errors from internal widget errors
+            try:
+                mod = getattr(type(e), "__module__", "") or ""
+                code = "BACKEND_ERROR" if "lizyml" in mod.lower() else "INTERNAL_ERROR"
+            except Exception:
+                code = "INTERNAL_ERROR"
             self.error = {
-                "code": "BACKEND_ERROR",
+                "code": code,
                 "message": str(e),
                 "traceback": traceback.format_exc(),
             }

@@ -304,3 +304,47 @@ class TestDfInfoChangeDetection:
         content = yaml.dump({"data": {"target": "y"}, "split": {"method": "kfold", "n_splits": 3}})
         n = self._count_changes(w, {"type": "import_yaml", "payload": {"content": content}})
         assert n >= 1
+
+
+class TestModelNameRegression:
+    """Regression tests for model.name in initial config (A-2026-03-12)."""
+
+    def test_load_ensures_model_name(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+        assert w.config.get("model", {}).get("name") == "lgbm"
+
+    def test_load_with_empty_schema_still_has_model_name(self) -> None:
+        """Even with a schema that returns empty defaults, model.name is set."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+        model = w.config.get("model", {})
+        assert model.get("name") == "lgbm"
+        assert "params" in model
+
+
+class TestErrorCodes:
+    """Test BLUEPRINT §6.1 error codes (NO_DATA, NO_TARGET)."""
+
+    def test_fit_no_data_returns_no_data_error(self) -> None:
+        w = _make_widget()
+        # Trigger fit without loading data
+        w.action = {"type": "fit", "payload": {}}
+        assert w.error.get("code") == "NO_DATA"
+        assert w.status == "failed"
+
+    def test_fit_no_target_returns_no_target_error(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df)  # no target
+        w.action = {"type": "fit", "payload": {}}
+        assert w.error.get("code") == "NO_TARGET"
+        assert w.status == "failed"
+
+    def test_tune_no_data_returns_no_data_error(self) -> None:
+        w = _make_widget()
+        w.action = {"type": "tune", "payload": {}}
+        assert w.error.get("code") == "NO_DATA"
+        assert w.status == "failed"

@@ -22,6 +22,7 @@ interface ResultsTabProps {
   plotLoading: Record<string, boolean>;
   onRequestPlot: (plotType: string) => void;
   sendAction: (type: string, payload?: Record<string, any>) => void;
+  onSwitchToFit?: () => void;
 }
 
 export function ResultsTab({
@@ -39,6 +40,7 @@ export function ResultsTab({
   plotLoading,
   onRequestPlot,
   sendAction,
+  onSwitchToFit,
 }: ResultsTabProps) {
   // Idle — no results yet
   if (status === "idle" || status === "data_loaded") {
@@ -131,7 +133,10 @@ export function ResultsTab({
                 <div style="margin-top: 8px;">
                   <button
                     class="lzw-btn"
-                    onClick={() => sendAction("apply_best_params", { params: tuneSummary.best_params })}
+                    onClick={() => {
+                      sendAction("apply_best_params", { params: tuneSummary.best_params });
+                      onSwitchToFit?.();
+                    }}
                     type="button"
                   >
                     Apply to Fit ▸

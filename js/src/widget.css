@@ -131,6 +131,11 @@
   color: var(--jp-ui-font-color2, #666);
 }
 
+.lzw-tag--warning {
+  background: #fff3cd;
+  color: #856404;
+}
+
 /* ── Accordion ───────────────────────────────────────────── */
 .lzw-accordion {
   margin-bottom: 8px;

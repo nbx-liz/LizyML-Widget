@@ -91,7 +91,20 @@ class LizyMLAdapter:
             load_config(config)
             return []
         except Exception as e:
-            return [{"field": "", "message": str(e)}]
+            # Extract structured validation details when available (Pydantic)
+            errors: list[dict[str, Any]] = []
+            if hasattr(e, "errors") and callable(e.errors):
+                for err in e.errors():
+                    errors.append(
+                        {
+                            "field": ".".join(str(loc) for loc in err.get("loc", [])),
+                            "message": err.get("msg", str(e)),
+                            "type": err.get("type", ""),
+                        }
+                    )
+            if not errors:
+                errors.append({"field": "", "message": str(e)})
+            return errors
 
     def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any:
         from lizyml.core.model import Model
@@ -203,6 +216,52 @@ class LizyMLAdapter:
         if has_tuning:
             plots.append("optimization-history")
         return plots
+
+    def plot_inference(self, predictions: pd.DataFrame, plot_type: str) -> PlotData:
+        """Generate Plotly plots from inference results (not part of Protocol)."""
+        try:
+            import plotly.graph_objects as go  # type: ignore[import-untyped]
+        except ImportError as e:
+            msg = "plotly is required for inference plots"
+            raise ImportError(msg) from e
+
+        if plot_type == "prediction-distribution":
+            fig = go.Figure()
+            fig.add_trace(go.Histogram(x=predictions["pred"], name="Predictions"))
+            fig.update_layout(
+                title="Prediction Distribution",
+                xaxis_title="Predicted Value",
+                yaxis_title="Count",
+            )
+            return PlotData(plotly_json=fig.to_json())
+
+        if plot_type == "shap-summary":
+            # SHAP columns are prefixed with "shap_"
+            shap_cols = [c for c in predictions.columns if c.startswith("shap_")]
+            if not shap_cols:
+                msg = "No SHAP values available. Run inference with return_shap=True."
+                raise ValueError(msg)
+            mean_abs_shap = predictions[shap_cols].abs().mean().sort_values(ascending=True)
+            feature_names = [c.replace("shap_", "", 1) for c in mean_abs_shap.index]
+            fig = go.Figure()
+            fig.add_trace(
+                go.Bar(
+                    x=mean_abs_shap.values,
+                    y=feature_names,
+                    orientation="h",
+                    name="Mean |SHAP|",
+                )
+            )
+            fig.update_layout(
+                title="SHAP Summary",
+                xaxis_title="Mean |SHAP value|",
+                yaxis_title="Feature",
+                height=max(300, len(shap_cols) * 25),
+            )
+            return PlotData(plotly_json=fig.to_json())
+
+        msg = f"Unknown inference plot type: {plot_type}"
+        raise ValueError(msg)
 
     def export_model(self, model: Any, path: str) -> str:
         model.save(path)

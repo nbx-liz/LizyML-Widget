@@ -345,3 +345,28 @@ class TestReturnValueIndependence:
         info = svc.get_df_info()
         info["target"] = "tampered"
         assert svc._df_info["target"] == "y"
+
+
+class TestModelNameBackfill:
+    """Regression tests for model.name missing (A-2026-03-12)."""
+
+    def test_build_config_backfills_model_name_when_missing(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        config = svc.build_config({"model": {"params": {"n_estimators": 100}}})
+        assert config["model"]["name"] == "lgbm"
+
+    def test_build_config_preserves_existing_model_name(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        config = svc.build_config({"model": {"name": "lgbm", "params": {}}})
+        assert config["model"]["name"] == "lgbm"
+
+    def test_build_config_adds_model_when_absent(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        config = svc.build_config({})
+        assert config["model"]["name"] == "lgbm"

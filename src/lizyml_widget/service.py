@@ -260,6 +260,8 @@ class WidgetService:
         result.setdefault("config_version", 1)
         if "model" not in result:
             result["model"] = {"name": "lgbm", "params": self.initial_model_params(info["task"])}
+        elif not result["model"].get("name"):
+            result["model"]["name"] = "lgbm"
 
         # Enforce auto_num_leaves exclusivity (BLUEPRINT §5.3)
         model = result.get("model", {})
@@ -319,6 +321,14 @@ class WidgetService:
             msg = "No trained model"
             raise ValueError(msg)
         return self._adapter.plot(self._model, plot_type)
+
+    def get_inference_plot(self, predictions: pd.DataFrame, plot_type: str) -> PlotData:
+        """Generate an inference plot (prediction-distribution or shap-summary)."""
+        plot_fn = getattr(self._adapter, "plot_inference", None)
+        if plot_fn is None:
+            msg = "Inference plots not supported by this adapter"
+            raise TypeError(msg)
+        return plot_fn(predictions, plot_type)  # type: ignore[no-any-return]
 
     def get_available_plots(self) -> list[str]:
         if self._model is None:

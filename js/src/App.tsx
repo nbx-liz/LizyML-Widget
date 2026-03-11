@@ -116,6 +116,7 @@ export function App({ model }: AppProps) {
             plotLoading={plotLoading}
             onRequestPlot={requestPlot}
             sendAction={sendAction}
+            onSwitchToFit={() => setActiveTab("Model")}
           />
         )}
       </div>

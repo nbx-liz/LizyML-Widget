@@ -6,15 +6,32 @@ build-backend = "hatchling.build"
 name = "lizyml-widget"
 version = "0.1.0"
 description = "Jupyter Notebook / Google Colab / VS Code Notebooks widget for LizyML"
-readme = {text = "", content-type = "text/markdown"}
+readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Jupyter",
+    "Framework :: Jupyter :: JupyterLab",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
 dependencies = [
     "anywidget>=0.9",
     "traitlets>=5.0",
     "pandas>=1.5",
     "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/lizyml/lizyml-widget"
+Repository = "https://github.com/lizyml/lizyml-widget"
 
 [project.optional-dependencies]
 lizyml = ["lizyml[plots,tuning,calibration,explain]"]
