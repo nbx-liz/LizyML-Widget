@@ -91,33 +91,49 @@ class TestConfigSchema:
     def test_validate_config_valid(self) -> None:
         mock_load_config = MagicMock()
         mock_loader = MagicMock(load_config=mock_load_config)
-        with patch.dict(
-            "sys.modules",
-            {
-                "lizyml": MagicMock(),
-                "lizyml.config": MagicMock(),
-                "lizyml.config.loader": mock_loader,
-            },
-        ):
-            adapter = LizyMLAdapter()
-            errors = adapter.validate_config({"model": {"name": "lgbm"}})
-            assert errors == []
+        mock_config_cls = MagicMock()
+        mock_config_cls.model_json_schema.return_value = {"properties": {}}
+        old_cache = LizyMLAdapter._schema_cache
+        LizyMLAdapter._schema_cache = None
+        try:
+            with patch.dict(
+                "sys.modules",
+                {
+                    "lizyml": MagicMock(),
+                    "lizyml.config": MagicMock(),
+                    "lizyml.config.loader": mock_loader,
+                    "lizyml.config.schema": MagicMock(LizyMLConfig=mock_config_cls),
+                },
+            ):
+                adapter = LizyMLAdapter()
+                errors = adapter.validate_config({"model": {"name": "lgbm"}})
+                assert errors == []
+        finally:
+            LizyMLAdapter._schema_cache = old_cache
 
     def test_validate_config_invalid(self) -> None:
         mock_load_config = MagicMock(side_effect=ValueError("config_version is required"))
         mock_loader = MagicMock(load_config=mock_load_config)
-        with patch.dict(
-            "sys.modules",
-            {
-                "lizyml": MagicMock(),
-                "lizyml.config": MagicMock(),
-                "lizyml.config.loader": mock_loader,
-            },
-        ):
-            adapter = LizyMLAdapter()
-            errors = adapter.validate_config({})
-            assert len(errors) == 1
-            assert "config_version" in errors[0]["message"]
+        mock_config_cls = MagicMock()
+        mock_config_cls.model_json_schema.return_value = {"properties": {}}
+        old_cache = LizyMLAdapter._schema_cache
+        LizyMLAdapter._schema_cache = None
+        try:
+            with patch.dict(
+                "sys.modules",
+                {
+                    "lizyml": MagicMock(),
+                    "lizyml.config": MagicMock(),
+                    "lizyml.config.loader": mock_loader,
+                    "lizyml.config.schema": MagicMock(LizyMLConfig=mock_config_cls),
+                },
+            ):
+                adapter = LizyMLAdapter()
+                errors = adapter.validate_config({})
+                assert len(errors) == 1
+                assert "config_version" in errors[0]["message"]
+        finally:
+            LizyMLAdapter._schema_cache = old_cache
 
     def test_validate_config_catches_legacy_mode_format(self) -> None:
         """R2 defense: legacy 'mode' format should be caught before backend validation."""
@@ -748,6 +764,71 @@ class TestApplyConfigPatch:
         assert config["model"]["params"]["a"] == 1
 
 
+class TestApplyTaskDefaults:
+    """Phase 26: apply_task_defaults applies task-specific params via adapter."""
+
+    def test_binary_defaults(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {"model": {"name": "lgbm", "params": {"n_estimators": 100}}}
+        result = adapter.apply_task_defaults(config, task="binary")
+        assert result["model"]["params"]["objective"] == "binary"
+        assert result["model"]["params"]["metric"] == ["auc", "binary_logloss"]
+        assert result["model"]["params"]["n_estimators"] == 100
+
+    def test_regression_defaults(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {"model": {"name": "lgbm", "params": {}}}
+        result = adapter.apply_task_defaults(config, task="regression")
+        assert result["model"]["params"]["objective"] == "huber"
+
+    def test_multiclass_defaults(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {"model": {"name": "lgbm", "params": {}}}
+        result = adapter.apply_task_defaults(config, task="multiclass")
+        assert result["model"]["params"]["objective"] == "multiclass"
+        assert "auc_mu" in result["model"]["params"]["metric"]
+
+    def test_unknown_task_returns_copy(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {"model": {"name": "lgbm", "params": {"lr": 0.1}}}
+        result = adapter.apply_task_defaults(config, task="unknown")
+        assert result["model"]["params"]["lr"] == 0.1
+
+    def test_does_not_mutate_input(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {"model": {"name": "lgbm", "params": {"n_estimators": 100}}}
+        adapter.apply_task_defaults(config, task="binary")
+        assert "objective" not in config["model"]["params"]
+
+
+class TestApplyConfigPatchCanonicalInvariant:
+    """Phase 26: apply_config_patch re-completes required fields after unset."""
+
+    def test_unset_model_name_re_completed(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {"config_version": 1, "model": {"name": "lgbm", "params": {}}}
+        ops = [ConfigPatchOp(op="unset", path="model.name")]
+        result = adapter.apply_config_patch(config, ops)
+        assert result["model"]["name"] == "lgbm"
+
+    def test_unset_config_version_re_completed(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {"config_version": 1, "model": {"name": "lgbm", "params": {}}}
+        ops = [ConfigPatchOp(op="unset", path="config_version")]
+        result = adapter.apply_config_patch(config, ops)
+        assert result["config_version"] == 1
+
+    def test_unset_entire_model_re_completed(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {"config_version": 1, "model": {"name": "lgbm", "params": {}}}
+        ops = [ConfigPatchOp(op="unset", path="model")]
+        result = adapter.apply_config_patch(config, ops)
+        assert result["model"]["name"] == "lgbm"
+        # Params should be re-initialized from defaults, not silently dropped
+        assert "params" in result["model"]
+        assert result["model"]["params"].get("n_estimators") is not None
+
+
 class TestPrepareRunConfig:
     def test_fit_basic(self) -> None:
         adapter = LizyMLAdapter()
@@ -952,3 +1033,259 @@ class TestValidationDiagnostics:
         assert len(errors) == 1
         assert errors[0]["message"] == "bad config"
         assert errors[0]["type"] == "unknown"
+
+
+class TestInnerValidFieldStripping:
+    """inner_valid normalization must strip fields not allowed by the method."""
+
+    def test_time_holdout_strips_random_state_and_stratify(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {
+            "training": {
+                "early_stopping": {
+                    "inner_valid": {
+                        "method": "time_holdout",
+                        "ratio": 0.1,
+                        "random_state": 42,
+                        "stratify": False,
+                    }
+                }
+            },
+        }
+        result = adapter.canonicalize_config(config)
+        iv = result["training"]["early_stopping"]["inner_valid"]
+        assert iv == {"method": "time_holdout", "ratio": 0.1}
+
+    def test_group_holdout_strips_stratify(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {
+            "training": {
+                "early_stopping": {
+                    "inner_valid": {
+                        "method": "group_holdout",
+                        "ratio": 0.1,
+                        "random_state": 42,
+                        "stratify": False,
+                    }
+                }
+            },
+        }
+        result = adapter.canonicalize_config(config)
+        iv = result["training"]["early_stopping"]["inner_valid"]
+        assert iv == {"method": "group_holdout", "ratio": 0.1, "random_state": 42}
+
+    def test_holdout_preserves_all_fields(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {
+            "training": {
+                "early_stopping": {
+                    "inner_valid": {
+                        "method": "holdout",
+                        "ratio": 0.1,
+                        "random_state": 42,
+                        "stratify": True,
+                    }
+                }
+            },
+        }
+        result = adapter.canonicalize_config(config)
+        iv = result["training"]["early_stopping"]["inner_valid"]
+        assert iv == {
+            "method": "holdout",
+            "ratio": 0.1,
+            "random_state": 42,
+            "stratify": True,
+        }
+
+    def test_prepare_run_config_strips_inner_valid_extras(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {
+            "model": {"name": "lgbm", "params": {}},
+            "training": {
+                "early_stopping": {
+                    "inner_valid": {
+                        "method": "time_holdout",
+                        "ratio": 0.1,
+                        "random_state": 42,
+                        "stratify": False,
+                    }
+                }
+            },
+            "data": {"target": "y"},
+            "features": {"categorical": [], "exclude": []},
+            "split": {"method": "kfold", "n_splits": 5},
+            "task": "regression",
+            "config_version": 1,
+        }
+        result = adapter.prepare_run_config(config, job_type="fit")
+        iv = result["training"]["early_stopping"]["inner_valid"]
+        assert "random_state" not in iv
+        assert "stratify" not in iv
+
+    def test_validate_config_normalizes_inner_valid(self) -> None:
+        """validate_config should normalize inner_valid before LizyML validation."""
+        adapter = LizyMLAdapter()
+        config = {
+            "model": {"name": "lgbm", "params": {"n_estimators": 100}},
+            "task": "regression",
+            "config_version": 1,
+            "data": {"target": "y"},
+            "features": {"categorical": [], "exclude": []},
+            "split": {"method": "kfold", "n_splits": 5},
+            "training": {
+                "seed": 42,
+                "early_stopping": {
+                    "enabled": True,
+                    "inner_valid": {
+                        "method": "time_holdout",
+                        "ratio": 0.1,
+                        "random_state": 42,
+                        "stratify": False,
+                    },
+                    "rounds": 150,
+                },
+            },
+        }
+        # Raw load_config would reject extra fields
+        from lizyml.config.loader import load_config
+
+        with pytest.raises(Exception, match="CONFIG_INVALID"):
+            load_config(config)
+
+        # But validate_config normalizes first, so it passes
+        errors = adapter.validate_config(config)
+        assert errors == []
+
+    def test_unknown_method_nulled_out(self) -> None:
+        """Unknown inner_valid method should be set to None."""
+        adapter = LizyMLAdapter()
+        config = {
+            "training": {
+                "early_stopping": {
+                    "inner_valid": {
+                        "method": "unknown_method",
+                        "ratio": 0.1,
+                        "extra_field": "should_be_dropped",
+                    }
+                }
+            },
+        }
+        result = adapter.canonicalize_config(config)
+        assert result["training"]["early_stopping"]["inner_valid"] is None
+
+
+class TestStripForBackend:
+    """strip_for_backend removes non-schema fields at all nesting levels."""
+
+    def test_strips_extra_top_level(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {"config_version": 1, "task": "binary", "extra": "bad"}
+        result = adapter.strip_for_backend(config)
+        assert "extra" not in result
+        assert result["config_version"] == 1
+
+    def test_strips_extra_in_model(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {
+            "model": {
+                "name": "lgbm",
+                "params": {"n_estimators": 100},
+                "widget_only_field": True,
+            }
+        }
+        result = adapter.strip_for_backend(config)
+        assert "widget_only_field" not in result["model"]
+        assert result["model"]["name"] == "lgbm"
+        assert result["model"]["params"]["n_estimators"] == 100
+
+    def test_strips_extra_in_training(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {
+            "training": {"seed": 42, "ui_state": "running"},
+        }
+        result = adapter.strip_for_backend(config)
+        assert "ui_state" not in result["training"]
+        assert result["training"]["seed"] == 42
+
+    def test_strips_extra_in_data(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {
+            "data": {"target": "y", "widget_managed": True},
+        }
+        result = adapter.strip_for_backend(config)
+        assert "widget_managed" not in result["data"]
+        assert result["data"]["target"] == "y"
+
+    def test_strips_extra_in_features(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {
+            "features": {"exclude": [], "categorical": [], "js_extra": True},
+        }
+        result = adapter.strip_for_backend(config)
+        assert "js_extra" not in result["features"]
+
+    def test_preserves_model_params_additionalProperties(self) -> None:
+        """model.params has additionalProperties=true, so custom keys survive."""
+        adapter = LizyMLAdapter()
+        config = {
+            "model": {
+                "name": "lgbm",
+                "params": {"n_estimators": 100, "custom_lgbm_param": 42},
+            }
+        }
+        result = adapter.strip_for_backend(config)
+        assert result["model"]["params"]["custom_lgbm_param"] == 42
+
+    def test_multiple_levels_stripped_at_once(self) -> None:
+        adapter = LizyMLAdapter()
+        config = {
+            "config_version": 1,
+            "task": "binary",
+            "top_extra": "x",
+            "data": {"target": "y", "data_extra": "x"},
+            "model": {"name": "lgbm", "params": {}, "model_extra": "x"},
+            "training": {"seed": 42, "training_extra": "x"},
+        }
+        result = adapter.strip_for_backend(config)
+        assert "top_extra" not in result
+        assert "data_extra" not in result["data"]
+        assert "model_extra" not in result["model"]
+        assert "training_extra" not in result["training"]
+
+    def test_prepare_run_config_strips_extra_fields(self) -> None:
+        """Integration: prepare_run_config output has no extra fields."""
+        adapter = LizyMLAdapter()
+        config = {
+            "config_version": 1,
+            "task": "binary",
+            "ui_state": "running",
+            "data": {"target": "y"},
+            "features": {"exclude": [], "categorical": []},
+            "split": {"method": "kfold", "n_splits": 5},
+            "model": {"name": "lgbm", "params": {}, "js_flag": True},
+            "training": {"seed": 42, "widget_extra": True},
+        }
+        result = adapter.prepare_run_config(config, job_type="fit")
+        assert "ui_state" not in result
+        assert "js_flag" not in result.get("model", {})
+        assert "widget_extra" not in result.get("training", {})
+
+    def test_validate_config_ignores_extra_fields(self) -> None:
+        """Integration: validate_config passes even with extra fields."""
+        adapter = LizyMLAdapter()
+        config = {
+            "config_version": 1,
+            "task": "binary",
+            "extra_field": "from_js",
+            "data": {"target": "y"},
+            "features": {"exclude": [], "categorical": []},
+            "split": {"method": "kfold", "n_splits": 5},
+            "model": {
+                "name": "lgbm",
+                "params": {"objective": "binary", "metric": ["auc"]},
+                "widget_flag": True,
+            },
+            "training": {"seed": 42},
+        }
+        errors = adapter.validate_config(config)
+        assert errors == []

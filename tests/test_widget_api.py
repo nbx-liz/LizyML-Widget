@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
 from lizyml_widget.adapter import LizyMLAdapter
-from lizyml_widget.types import BackendInfo, FitSummary, TuningSummary
+from lizyml_widget.types import BackendInfo, FitSummary, PlotData, PredictionSummary, TuningSummary
 
 
 def _make_widget() -> Any:
@@ -47,7 +47,7 @@ class TestLoadData:
 
     def test_load_sets_status(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         assert w.status == "data_loaded"
         assert w.df_info["target"] == "y"
@@ -55,7 +55,7 @@ class TestLoadData:
 
     def test_load_without_target(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": range(50)})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": range(50)})
         w.load(df)
         assert w.status == "data_loaded"
         assert w.df_info["target"] is None
@@ -64,7 +64,7 @@ class TestLoadData:
         w = _make_widget()
         w.fit_summary = {"some": "data"}
         w.tune_summary = {"some": "data"}
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df)
         assert w.fit_summary == {}
         assert w.tune_summary == {}
@@ -164,13 +164,13 @@ class TestNormalizeMetrics:
 class TestConfigVersion:
     def test_load_includes_config_version(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         assert w.config.get("config_version") == 1
 
     def test_config_version_preserved_after_patch(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         w.action = {
             "type": "patch_config",
@@ -191,14 +191,14 @@ class TestInference:
 class TestActionDispatch:
     def test_set_target_action(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df)
         w.action = {"type": "set_target", "payload": {"target": "y"}}
         assert w.df_info["target"] == "y"
 
     def test_update_column_action(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         w.action = {
             "type": "update_column",
@@ -209,7 +209,7 @@ class TestActionDispatch:
 
     def test_set_task_action_updates_cv_strategy(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(100), "y": range(100)})
+        df = pd.DataFrame({"x": [i % 10 for i in range(100)], "y": range(100)})
         w.load(df, target="y")
         assert w.df_info["cv"]["strategy"] == "kfold"
 
@@ -219,7 +219,7 @@ class TestActionDispatch:
 
     def test_update_cv_action(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         w.action = {
             "type": "update_cv",
@@ -230,7 +230,7 @@ class TestActionDispatch:
 
     def test_patch_config_action(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         w.action = {
             "type": "patch_config",
@@ -284,14 +284,14 @@ class TestDfInfoChangeDetection:
 
     def test_set_target_fires_observe(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df)
         n = self._count_changes(w, {"type": "set_target", "payload": {"target": "y"}})
         assert n >= 1
 
     def test_set_task_fires_observe(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         n = self._count_changes(w, {"type": "set_task", "payload": {"task": "regression"}})
         assert n >= 1
@@ -312,7 +312,7 @@ class TestDfInfoChangeDetection:
 
     def test_update_cv_fires_observe(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         n = self._count_changes(
             w,
@@ -324,7 +324,7 @@ class TestDfInfoChangeDetection:
         import yaml
 
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df)
         content = yaml.dump({"data": {"target": "y"}, "split": {"method": "kfold", "n_splits": 3}})
         n = self._count_changes(w, {"type": "import_yaml", "payload": {"content": content}})
@@ -336,14 +336,14 @@ class TestModelNameRegression:
 
     def test_load_ensures_model_name(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         assert w.config.get("model", {}).get("name") == "lgbm"
 
     def test_load_with_empty_schema_still_has_model_name(self) -> None:
         """Even with a schema that returns empty defaults, model.name is set."""
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         model = w.config.get("model", {})
         assert model.get("name") == "lgbm"
@@ -362,7 +362,7 @@ class TestErrorCodes:
 
     def test_fit_no_target_returns_no_target_error(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df)  # no target
         w.action = {"type": "fit", "payload": {}}
         assert w.error.get("code") == "NO_TARGET"
@@ -381,7 +381,7 @@ class TestTuneDefaults:
     def test_tune_complements_missing_tuning_config(self) -> None:
         """R1: tune() with no tuning config should auto-populate defaults."""
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         # Config has no tuning section
         assert w.config.get("tuning") is None or w.config.get("tuning") == {}
@@ -405,7 +405,7 @@ class TestApplyBestParamsSnapshot:
         import copy
 
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
 
         # Simulate a tune snapshot with specific training config
@@ -445,7 +445,7 @@ class TestApplyBestParamsSnapshot:
         import copy
 
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
 
         snapshot = {
@@ -485,7 +485,7 @@ class TestBackendContract:
 
     def test_backend_contract_set_on_load(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         assert w.backend_contract["schema_version"] == 1
         assert "ui_schema" in w.backend_contract
@@ -494,7 +494,7 @@ class TestBackendContract:
 
     def test_backend_contract_ui_schema_has_sections(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         sections = w.backend_contract["ui_schema"]["sections"]
         assert len(sections) == 4
@@ -502,7 +502,7 @@ class TestBackendContract:
 
     def test_patch_config_set(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         w.action = {
             "type": "patch_config",
@@ -514,7 +514,7 @@ class TestBackendContract:
 
     def test_patch_config_unset(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         # First set, then unset
         w.action = {
@@ -525,7 +525,7 @@ class TestBackendContract:
 
     def test_patch_config_empty_ops_ignored(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         original = dict(w.config)
         w.action = {
@@ -541,7 +541,7 @@ class TestContractViolationPayloads:
     def test_missing_model_name_auto_corrected(self) -> None:
         """build_config should auto-correct missing model.name."""
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         # Unset model.name via patch
         w.action = {
@@ -558,7 +558,7 @@ class TestCanonicalConfigUnification:
 
     def test_set_config_canonicalizes(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         w.set_config({"model": {"params": {"n_estimators": 500}}})
         cfg = w.get_config()
@@ -568,21 +568,21 @@ class TestCanonicalConfigUnification:
 
     def test_set_config_preserves_config_version(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         w.set_config({"config_version": 5, "model": {"name": "lgbm"}})
         assert w.get_config()["config_version"] == 5
 
     def test_set_config_auto_num_leaves_exclusivity(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         w.set_config({"model": {"auto_num_leaves": True, "params": {"num_leaves": 256}}})
         assert "num_leaves" not in w.get_config()["model"]["params"]
 
     def test_import_yaml_canonicalizes(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
         yaml_content = "model:\n  params:\n    n_estimators: 999\n"
         w.action = {"type": "import_yaml", "payload": {"content": yaml_content}}
@@ -593,10 +593,475 @@ class TestCanonicalConfigUnification:
 
     def test_set_config_inner_valid_legacy_normalized(self) -> None:
         w = _make_widget()
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
-        w.set_config({
-            "training": {"early_stopping": {"inner_valid": "holdout"}},
-        })
+        w.set_config(
+            {
+                "training": {"early_stopping": {"inner_valid": "holdout"}},
+            }
+        )
         iv = w.get_config()["training"]["early_stopping"]["inner_valid"]
         assert iv == {"method": "holdout"}
+
+    def test_patch_config_unset_model_name_re_completed(self) -> None:
+        """26-1: unset model.name should be re-completed to canonical value."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.action = {
+            "type": "patch_config",
+            "payload": {"ops": [{"op": "unset", "path": "model.name"}]},
+        }
+        assert w.config["model"]["name"] == "lgbm"
+
+    def test_patch_config_unset_config_version_re_completed(self) -> None:
+        """26-1: unset config_version should be re-completed."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.action = {
+            "type": "patch_config",
+            "payload": {"ops": [{"op": "unset", "path": "config_version"}]},
+        }
+        assert w.config["config_version"] == 1
+
+    def test_load_config_path_round_trip(self, tmp_path: Any) -> None:
+        """26-5: load_config(path) produces canonical config."""
+        import yaml
+
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        path = str(tmp_path / "test_config.yaml")
+        with open(path, "w") as f:
+            yaml.dump(
+                {
+                    "model": {"params": {"n_estimators": 777}},
+                    "data": {"target": "y"},
+                    "split": {"method": "kfold", "n_splits": 3},
+                },
+                f,
+            )
+
+        w.load_config(path)
+        cfg = w.get_config()
+        assert cfg["model"]["name"] == "lgbm"
+        assert cfg["model"]["params"]["n_estimators"] == 777
+        assert cfg["config_version"] == 1
+        # data/split/task should NOT be in widget config (service-managed)
+        assert "data" not in cfg
+        assert "split" not in cfg
+
+    def test_save_config_canonical_output(self, tmp_path: Any) -> None:
+        """26-5: save_config() exports canonical full config."""
+        import yaml
+
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        path = str(tmp_path / "test_save.yaml")
+        w.save_config(path)
+        with open(path) as f:
+            saved: dict[str, Any] = yaml.safe_load(f)
+
+        assert saved["model"]["name"] == "lgbm"
+        assert saved["config_version"] == 1
+        assert saved["data"]["target"] == "y"
+        assert "task" in saved
+
+    def test_export_yaml_canonical_output(self) -> None:
+        """26-5: export_yaml action sends canonical full config."""
+        import yaml
+
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+
+        w.action = {"type": "export_yaml", "payload": {}}
+
+        assert len(sent) == 1
+        content = yaml.safe_load(sent[0]["content"])
+        assert content["model"]["name"] == "lgbm"
+        assert content["config_version"] == 1
+
+
+class TestSetTarget:
+    """Cover set_target() public API (widget.py lines 81-86)."""
+
+    def test_set_target_updates_df_info(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df)
+        w.set_target("y")
+        assert w.df_info["target"] == "y"
+        assert w.status == "data_loaded"
+
+    def test_set_target_returns_self(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df)
+        result = w.set_target("y")
+        assert result is w
+
+
+class TestProperties:
+    """Cover widget properties (widget.py lines 133-156)."""
+
+    def test_task_property(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        assert w.task in ("binary", "regression", "multiclass", None)
+
+    def test_task_property_none_without_target(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df)
+        assert w.task is None
+
+    def test_cv_method_property(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        assert isinstance(w.cv_method, str)
+
+    def test_cv_n_splits_property(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        assert isinstance(w.cv_n_splits, int)
+        assert w.cv_n_splits > 0
+
+    def test_df_shape_property(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        shape = w.df_shape
+        assert shape == [50, 2]
+
+    def test_df_columns_property(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"a": range(50), "b": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+        cols = w.df_columns
+        assert isinstance(cols, list)
+        assert len(cols) > 0
+        names = [c["name"] for c in cols]
+        # Target column may be excluded from feature columns list
+        assert "a" in names or "b" in names
+
+
+class TestPredictAndSaveModel:
+    """Cover predict() and save_model() (widget.py lines 202-208)."""
+
+    def test_predict_delegates_to_service(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        expected = PredictionSummary(
+            predictions=pd.DataFrame({"pred": [0, 1]}),
+            warnings=[],
+        )
+        w._service.predict = MagicMock(return_value=expected)
+        result = w.predict(df)
+        assert result is expected
+        w._service.predict.assert_called_once_with(df, return_shap=False)
+
+    def test_predict_with_shap(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        expected = PredictionSummary(
+            predictions=pd.DataFrame({"pred": [0, 1]}),
+            warnings=[],
+        )
+        w._service.predict = MagicMock(return_value=expected)
+        w.predict(df, return_shap=True)
+        w._service.predict.assert_called_once_with(df, return_shap=True)
+
+    def test_save_model_delegates_to_service(self) -> None:
+        w = _make_widget()
+        w._service.save_model = MagicMock(return_value="/tmp/model.pkl")
+        result = w.save_model("/tmp/model.pkl")
+        assert result == "/tmp/model.pkl"
+        w._service.save_model.assert_called_once_with("/tmp/model.pkl")
+
+
+class TestActionHandlerEdgeCases:
+    """Cover edge cases in action handlers."""
+
+    def test_set_target_empty_target_ignored(self) -> None:
+        """widget.py line 251: empty target returns early."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df)
+        w.action = {"type": "set_target", "payload": {"target": ""}}
+        assert w.df_info.get("target") is None
+
+    def test_set_task_empty_task_ignored(self) -> None:
+        """widget.py line 265: empty task returns early."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        original_task = w.df_info.get("task")
+        w.action = {"type": "set_task", "payload": {"task": ""}}
+        assert w.df_info.get("task") == original_task
+
+    def test_request_plot_empty_type_ignored(self) -> None:
+        """widget.py line 323: empty plot_type returns early."""
+        w = _make_widget()
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+        w.action = {"type": "request_plot", "payload": {"plot_type": ""}}
+        assert len(sent) == 0
+
+    def test_run_inference_no_data_sets_error(self) -> None:
+        """widget.py lines 344-345: no inference data loaded."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.action = {"type": "run_inference", "payload": {}}
+        assert w.error["code"] == "INFERENCE_ERROR"
+
+    def test_run_inference_with_data_success(self) -> None:
+        """widget.py lines 347-355: inference with loaded data."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.load_inference(df)
+
+        expected = PredictionSummary(
+            predictions=pd.DataFrame({"pred": [0] * 50}),
+            warnings=["test_warning"],
+        )
+        w._service.predict = MagicMock(return_value=expected)
+        w.action = {"type": "run_inference", "payload": {}}
+        assert w.inference_result["status"] == "completed"
+        assert w.inference_result["rows"] == 50
+        assert w.inference_result["warnings"] == ["test_warning"]
+
+    def test_run_inference_error_sets_failed(self) -> None:
+        """widget.py lines 356-360: inference failure."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.load_inference(df)
+
+        w._service.predict = MagicMock(side_effect=RuntimeError("model not fitted"))
+        w.action = {"type": "run_inference", "payload": {}}
+        assert w.inference_result["status"] == "failed"
+        assert "model not fitted" in w.inference_result["message"]
+
+    def test_import_yaml_invalid_type_sets_error(self) -> None:
+        """widget.py lines 370-372: YAML content is not a dict."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.action = {"type": "import_yaml", "payload": {"content": "- list_item"}}
+        assert w.error["code"] == "IMPORT_ERROR"
+
+    def test_import_yaml_empty_content_ignored(self) -> None:
+        """widget.py lines 364-365: empty content returns early."""
+        w = _make_widget()
+        w.action = {"type": "import_yaml", "payload": {"content": ""}}
+        assert w.error == {}
+
+    def test_import_yaml_parse_error(self) -> None:
+        """widget.py lines 374-375: invalid YAML raises exception."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.action = {"type": "import_yaml", "payload": {"content": "{{bad: yaml: ::"}}
+        assert w.error["code"] == "IMPORT_ERROR"
+
+    def test_export_yaml_error(self) -> None:
+        """widget.py lines 384-385: export failure sets error."""
+        w = _make_widget()
+        w._service.build_config = MagicMock(side_effect=RuntimeError("build error"))
+        w.action = {"type": "export_yaml", "payload": {}}
+        assert w.error["code"] == "EXPORT_ERROR"
+
+    def test_raw_config_action(self) -> None:
+        """widget.py lines 388-393: raw_config sends msg:custom."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+        w.action = {"type": "raw_config", "payload": {}}
+        assert len(sent) == 1
+        assert sent[0]["type"] == "raw_config"
+        assert "content" in sent[0]
+
+    def test_raw_config_error(self) -> None:
+        """widget.py lines 394-395: raw_config error."""
+        w = _make_widget()
+        w._service.build_config = MagicMock(side_effect=RuntimeError("err"))
+        w.action = {"type": "raw_config", "payload": {}}
+        assert w.error["code"] == "EXPORT_ERROR"
+
+    def test_apply_best_params_empty_ignored(self) -> None:
+        """widget.py line 400: empty params returns early."""
+        w = _make_widget()
+        w.set_config({"model": {"name": "lgbm", "params": {"lr": 0.1}}})
+        original = dict(w.config)
+        w.action = {"type": "apply_best_params", "payload": {"params": {}}}
+        assert w.config["model"]["params"]["lr"] == original["model"]["params"]["lr"]
+
+
+class TestRequestInferencePlot:
+    """Cover _handle_request_inference_plot (widget.py lines 418-439)."""
+
+    def test_empty_plot_type_ignored(self) -> None:
+        """widget.py line 421: empty plot_type returns early."""
+        w = _make_widget()
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+        w.action = {"type": "request_inference_plot", "payload": {"plot_type": ""}}
+        assert len(sent) == 0
+
+    def test_inference_plot_with_data_success(self) -> None:
+        """widget.py lines 427-436: inference plot with data."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        # Set inference_result with data
+        w.inference_result = {
+            "status": "completed",
+            "rows": 2,
+            "data": [{"pred": 0}, {"pred": 1}],
+            "warnings": [],
+        }
+
+        plot_data = PlotData(plotly_json='{"data": [], "layout": {}}')
+        w._service.get_inference_plot = MagicMock(return_value=plot_data)
+
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+        w.action = {"type": "request_inference_plot", "payload": {"plot_type": "scatter"}}
+        assert len(sent) == 1
+        assert sent[0]["type"] == "plot_data"
+        assert sent[0]["plot_type"] == "scatter"
+
+    def test_inference_plot_fallback_on_error(self) -> None:
+        """widget.py lines 437-439: falls back to fit plot on inference plot error."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w.inference_result = {
+            "status": "completed",
+            "rows": 2,
+            "data": [{"pred": 0}, {"pred": 1}],
+            "warnings": [],
+        }
+
+        w._service.get_inference_plot = MagicMock(side_effect=RuntimeError("no plot"))
+        # Fallback calls _handle_request_plot which calls get_plot
+        plot_data = PlotData(plotly_json='{"data": []}')
+        w._service.get_plot = MagicMock(return_value=plot_data)
+
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+        w.action = {"type": "request_inference_plot", "payload": {"plot_type": "roc"}}
+        assert len(sent) == 1
+        assert sent[0]["type"] == "plot_data"
+
+    def test_no_inference_data_falls_back_to_fit_plot(self) -> None:
+        """widget.py lines 424-426: no inference data delegates to request_plot."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        plot_data = PlotData(plotly_json='{"data": []}')
+        w._service.get_plot = MagicMock(return_value=plot_data)
+
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+        w.action = {"type": "request_inference_plot", "payload": {"plot_type": "roc"}}
+        assert len(sent) == 1
+
+
+class TestRunJobGuard:
+    """Cover _run_job guard conditions (widget.py lines 461-477)."""
+
+    def test_run_job_already_running_ignored(self) -> None:
+        """widget.py line 463: already running returns early."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.status = "running"
+        # Trigger fit action — should be ignored
+        w.action = {"type": "fit", "payload": {}}
+        # Status should remain running, no error set
+        assert w.status == "running"
+        assert w.error == {}
+
+
+class TestRequestPlotSuccess:
+    """Cover _handle_request_plot success path (widget.py lines 325-332)."""
+
+    def test_request_plot_sends_plotly_json(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        plot_data = PlotData(plotly_json='{"data": [], "layout": {}}')
+        w._service.get_plot = MagicMock(return_value=plot_data)
+
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+        w.action = {"type": "request_plot", "payload": {"plot_type": "feature_importance"}}
+        assert len(sent) == 1
+        assert sent[0]["type"] == "plot_data"
+        assert sent[0]["plot_type"] == "feature_importance"
+        assert sent[0]["plotly_json"] == '{"data": [], "layout": {}}'
+
+    def test_request_plot_error_sends_plot_error(self) -> None:
+        """widget.py lines 333-340: plot error path."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w._service.get_plot = MagicMock(side_effect=RuntimeError("no model"))
+
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+        w.action = {"type": "request_plot", "payload": {"plot_type": "roc"}}
+        assert len(sent) == 1
+        assert sent[0]["type"] == "plot_error"
+        assert "no model" in sent[0]["message"]
+
+
+class TestUpdateColumnError:
+    """Cover _handle_update_column error path (widget.py lines 282-283)."""
+
+    def test_update_column_error_sets_error(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        # Missing required 'name' key triggers KeyError
+        w.action = {"type": "update_column", "payload": {}}
+        assert w.error["code"] == "COLUMN_ERROR"
+
+
+class TestUpdateCvError:
+    """Cover _handle_update_cv error path (widget.py lines 301-302)."""
+
+    def test_update_cv_error_sets_error(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        # Invalid strategy triggers error in service
+        w._service.update_cv = MagicMock(side_effect=ValueError("bad strategy"))
+        w.action = {"type": "update_cv", "payload": {"strategy": "bad", "n_splits": 3}}
+        assert w.error["code"] == "CV_ERROR"

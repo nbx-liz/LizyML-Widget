@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import threading
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol
 
@@ -51,6 +52,8 @@ class BackendAdapter(Protocol):
     def canonicalize_config(
         self, config: dict[str, Any], *, task: str | None = None
     ) -> dict[str, Any]: ...
+
+    def apply_task_defaults(self, config: dict[str, Any], *, task: str) -> dict[str, Any]: ...
 
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...
 
@@ -330,44 +333,209 @@ class LizyMLAdapter:
             elif op.op == "unset":
                 self._unset_nested(result, parts)
             elif op.op == "merge":
-                target = self._get_nested(result, parts)
-                if isinstance(target, dict) and isinstance(op.value, dict):
-                    target.update(op.value)
+                existing = self._get_nested(result, parts)
+                if isinstance(existing, dict) and isinstance(op.value, dict):
+                    self._set_nested(result, parts, {**existing, **op.value})
                 else:
                     self._set_nested(result, parts, op.value)
 
-        # Enforce auto_num_leaves exclusivity
-        model = result.get("model", {})
+        # ── Final canonical pass (single, after all ops) ──────
+        # 1. Re-complete required fields
+        result.setdefault("config_version", 1)
+        if "model" not in result:
+            defaults = self.initialize_config()
+            result["model"] = defaults.get("model", {"name": "lgbm"})
+
+        # Re-read model from result to avoid stale local references
+        cur_model = result["model"]
+        cur_model.setdefault("name", "lgbm")
+
+        # 2. Enforce auto_num_leaves exclusivity
+        result["model"] = self._enforce_auto_num_leaves(cur_model)
+
+        # 3. Normalize inner_valid
+        result = self._normalize_inner_valid_pure(result)
+        return result
+
+    def apply_task_defaults(self, config: dict[str, Any], *, task: str) -> dict[str, Any]:
+        """Apply task-dependent default params to config.
+
+        Returns a new config with task-specific objective/metric applied
+        via patch operations. Backend-specific knowledge stays here.
+        """
+        defaults = self._LGBM_PARAMS_BY_TASK.get(task, {})
+        if not defaults:
+            return copy.deepcopy(config)
+
+        ops = [
+            ConfigPatchOp(op="set", path=f"model.params.{k}", value=v) for k, v in defaults.items()
+        ]
+        return self.apply_config_patch(config, ops, task=task)
+
+    @staticmethod
+    def _enforce_auto_num_leaves(model: dict[str, Any]) -> dict[str, Any]:
+        """Return a new model dict with auto_num_leaves exclusivity enforced."""
         auto_nl = model.get("auto_num_leaves", True)
         params = dict(model.get("params", {}))
         if auto_nl:
             params.pop("num_leaves", None)
         elif "num_leaves" not in params:
             params["num_leaves"] = 256
-        if "model" in result:
-            result["model"] = {**model, "params": params}
-
-        self._normalize_inner_valid(result)
-        return result
+        return {**model, "params": params}
 
     # ── inner_valid normalization ─────────────────────────────
 
     _INNER_VALID_ALIASES: set[str] = {"holdout", "group_holdout", "time_holdout"}
 
+    # Allowed fields per inner_valid method (LizyML Pydantic schema, extra='forbid')
+    _INNER_VALID_FIELDS: dict[str, set[str]] = {
+        "holdout": {"method", "ratio", "random_state", "stratify"},
+        "group_holdout": {"method", "ratio", "random_state"},
+        "time_holdout": {"method", "ratio"},
+    }
+
     @classmethod
-    def _normalize_inner_valid(cls, config: dict[str, Any]) -> None:
-        """Normalize inner_valid to canonical object/null in-place."""
-        es = config.get("training", {}).get("early_stopping")
-        if not isinstance(es, dict):
-            return
-        iv = es.get("inner_valid")
-        if iv is None or isinstance(iv, dict):
-            return
+    def _normalize_iv_value(cls, iv: Any) -> Any:
+        """Return a normalized inner_valid value (pure, no mutation)."""
+        if iv is None:
+            return None
         if isinstance(iv, str):
-            if iv in cls._INNER_VALID_ALIASES:
-                es["inner_valid"] = {"method": iv}
-            else:
-                es["inner_valid"] = None
+            return {"method": iv} if iv in cls._INNER_VALID_ALIASES else None
+        if isinstance(iv, dict):
+            method = iv.get("method")
+            allowed = cls._INNER_VALID_FIELDS.get(method or "")
+            if allowed:
+                return {k: v for k, v in iv.items() if k in allowed}
+            if method is not None:
+                return None
+        return iv
+
+    @classmethod
+    def _normalize_inner_valid_pure(cls, config: dict[str, Any]) -> dict[str, Any]:
+        """Return a new config with inner_valid normalized (no mutation).
+
+        - Converts legacy string format ("holdout") to dict {"method": "holdout"}.
+        - Strips fields not allowed by the selected method's schema to prevent
+          Pydantic 'Extra inputs are not permitted' validation errors.
+        """
+        training = config.get("training")
+        if not isinstance(training, dict):
+            return config
+        es = training.get("early_stopping")
+        if not isinstance(es, dict):
+            return config
+        iv = es.get("inner_valid")
+        new_iv = cls._normalize_iv_value(iv)
+        if new_iv is iv:
+            return config
+        return {
+            **config,
+            "training": {
+                **training,
+                "early_stopping": {**es, "inner_valid": new_iv},
+            },
+        }
+
+    # ── Schema-based config sanitizer ────────────────────────
+
+    _schema_cache: dict[str, Any] | None = None
+    _schema_lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def _get_schema(cls) -> dict[str, Any]:
+        """Lazily load and cache the LizyML JSON schema (thread-safe)."""
+        if cls._schema_cache is not None:
+            return cls._schema_cache
+        with cls._schema_lock:
+            if cls._schema_cache is None:
+                from lizyml.config.schema import LizyMLConfig
+
+                cls._schema_cache = LizyMLConfig.model_json_schema()
+        return cls._schema_cache
+
+    @classmethod
+    def _resolve_ref(cls, ref: str, defs: dict[str, Any]) -> dict[str, Any]:
+        """Resolve a $ref pointer like '#/$defs/FooConfig'."""
+        name = ref.rsplit("/", 1)[-1]
+        result: dict[str, Any] = defs.get(name, {})
+        return result
+
+    @classmethod
+    def _resolve_sub_schema(
+        cls, prop_schema: dict[str, Any], defs: dict[str, Any], value: Any
+    ) -> dict[str, Any] | None:
+        """Resolve a property schema to a concrete object schema, handling
+        $ref, oneOf, anyOf, and discriminated unions."""
+        if "$ref" in prop_schema:
+            return cls._resolve_ref(prop_schema["$ref"], defs)
+
+        # oneOf with discriminator (e.g., model, split, inner_valid)
+        if "oneOf" in prop_schema and isinstance(value, dict):
+            discriminator = prop_schema.get("discriminator", {})
+            prop_name = discriminator.get("propertyName")
+            mapping = discriminator.get("mapping", {})
+            if prop_name and prop_name in value:
+                ref = mapping.get(value[prop_name])
+                if ref:
+                    return cls._resolve_ref(ref, defs)
+            # Fallback: try each oneOf variant
+            for variant in prop_schema["oneOf"]:
+                resolved = cls._resolve_sub_schema(variant, defs, value)
+                if resolved and "properties" in resolved:
+                    return resolved
+
+        # anyOf (nullable types, union types)
+        if "anyOf" in prop_schema and isinstance(value, dict):
+            for variant in prop_schema["anyOf"]:
+                resolved = cls._resolve_sub_schema(variant, defs, value)
+                if resolved and "properties" in resolved:
+                    return resolved
+
+        # Direct object with properties
+        if prop_schema.get("type") == "object" and "properties" in prop_schema:
+            return prop_schema
+
+        return None
+
+    @classmethod
+    def _strip_to_schema(
+        cls,
+        config: dict[str, Any],
+        obj_schema: dict[str, Any],
+        defs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Recursively strip fields not in the schema.
+
+        Only removes keys when the schema has additionalProperties=false.
+        Recurses into nested objects to strip at all levels.
+        """
+        props = obj_schema.get("properties", {})
+        additional = obj_schema.get("additionalProperties", True)
+
+        result: dict[str, Any] = {}
+        for key, value in config.items():
+            # If additionalProperties is false, skip unknown keys
+            if not additional and key not in props:
+                continue
+
+            if isinstance(value, dict) and key in props:
+                sub = cls._resolve_sub_schema(props[key], defs, value)
+                if sub and "properties" in sub:
+                    value = cls._strip_to_schema(value, sub, defs)
+
+            result[key] = value
+        return result
+
+    @classmethod
+    def strip_for_backend(cls, config: dict[str, Any]) -> dict[str, Any]:
+        """Strip fields not recognized by LizyML schema.
+
+        Uses the Pydantic JSON schema to whitelist allowed fields at each
+        nesting level. Prevents 'Extra inputs are not permitted' errors.
+        """
+        schema = cls._get_schema()
+        defs = schema.get("$defs", {})
+        return cls._strip_to_schema(config, schema, defs)
 
     # ── Canonicalize config ───────────────────────────────────
 
@@ -386,16 +554,9 @@ class LizyMLAdapter:
             result.pop(key, None)
 
         # Enforce auto_num_leaves exclusivity
-        model = result.get("model", {})
-        auto_nl = model.get("auto_num_leaves", True)
-        params = dict(model.get("params", {}))
-        if auto_nl:
-            params.pop("num_leaves", None)
-        elif "num_leaves" not in params:
-            params["num_leaves"] = 256
-        result["model"] = {**model, "params": params}
+        result["model"] = self._enforce_auto_num_leaves(result.get("model", {}))
 
-        self._normalize_inner_valid(result)
+        result = self._normalize_inner_valid_pure(result)
         return result
 
     @staticmethod
@@ -426,13 +587,7 @@ class LizyMLAdapter:
             result["model"] = model
 
         # Enforce auto_num_leaves exclusivity
-        auto_nl = model.get("auto_num_leaves", True)
-        params = dict(model.get("params", {}))
-        if auto_nl:
-            params.pop("num_leaves", None)
-        elif "num_leaves" not in params:
-            params["num_leaves"] = 256
-        result["model"] = {**model, "params": params}
+        result["model"] = self._enforce_auto_num_leaves(model)
 
         # Tune defaults
         if job_type == "tune":
@@ -443,8 +598,8 @@ class LizyMLAdapter:
                 optuna.setdefault("params", {}).setdefault("n_trials", 50)
                 optuna.setdefault("space", {})
 
-        self._normalize_inner_valid(result)
-        return result
+        result = self._normalize_inner_valid_pure(result)
+        return self.strip_for_backend(result)
 
     # ── Config patch helpers ──────────────────────────────────
 
@@ -556,8 +711,13 @@ class LizyMLAdapter:
         if space_errors:
             return space_errors
 
+        # Normalize and strip non-schema fields before validation
+        normalized = copy.deepcopy(config)
+        normalized = self._normalize_inner_valid_pure(normalized)
+        normalized = self.strip_for_backend(normalized)
+
         try:
-            load_config(config)
+            load_config(normalized)
             return []
         except Exception as e:
             # Extract structured validation details when available (Pydantic)

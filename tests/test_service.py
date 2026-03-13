@@ -26,6 +26,7 @@ def _mock_adapter() -> Any:
     adapter.prepare_run_config.side_effect = real_adapter.prepare_run_config
     adapter.get_backend_contract.side_effect = real_adapter.get_backend_contract
     adapter.canonicalize_config.side_effect = real_adapter.canonicalize_config
+    adapter.apply_task_defaults.side_effect = real_adapter.apply_task_defaults
     return adapter
 
 
@@ -53,7 +54,7 @@ class TestDetectTask:
 
     def test_multiclass_numeric_low_unique(self) -> None:
         n = 100
-        df = pd.DataFrame({"y": list(range(5)) * 20, "x": range(n)})
+        df = pd.DataFrame({"y": list(range(5)) * 20, "x": [i % 10 for i in range(n)]})
         svc = WidgetService(adapter=_mock_adapter())
         info = svc.load_data(df, target="y")
         # 5 unique with threshold = max(20, 100*0.05) = 20 → 5 <= 20 → multiclass
@@ -61,7 +62,7 @@ class TestDetectTask:
 
     def test_regression_numeric_high_unique(self) -> None:
         n = 100
-        df = pd.DataFrame({"y": range(n), "x": range(n)})
+        df = pd.DataFrame({"y": range(n), "x": [i % 10 for i in range(n)]})
         svc = WidgetService(adapter=_mock_adapter())
         info = svc.load_data(df, target="y")
         # 100 unique with threshold = max(20, 100*0.05) = 20 → 100 > 20 → regression
@@ -69,7 +70,7 @@ class TestDetectTask:
 
     def test_regression_float_target(self) -> None:
         n = 200
-        df = pd.DataFrame({"y": [i * 0.1 for i in range(n)], "x": range(n)})
+        df = pd.DataFrame({"y": [i * 0.1 for i in range(n)], "x": [i % 10 for i in range(n)]})
         svc = WidgetService(adapter=_mock_adapter())
         info = svc.load_data(df, target="y")
         assert info["task"] == "regression"
@@ -90,7 +91,7 @@ class TestAutoConfigureColumns:
 
     def test_exclude_constant_column(self) -> None:
         n = 100
-        df = pd.DataFrame({"const": [42] * n, "x": range(n), "y": [0, 1] * 50})
+        df = pd.DataFrame({"const": [42] * n, "x": [i % 10 for i in range(n)], "y": [0, 1] * 50})
         svc = WidgetService(adapter=_mock_adapter())
         info = svc.load_data(df, target="y")
         const_col = next(c for c in info["columns"] if c["name"] == "const")
@@ -136,20 +137,20 @@ class TestAutoConfigureColumns:
 
 class TestCVDefaults:
     def test_binary_uses_stratified(self) -> None:
-        df = pd.DataFrame({"y": [0, 1] * 50, "x": range(100)})
+        df = pd.DataFrame({"y": [0, 1] * 50, "x": [i % 10 for i in range(100)]})
         svc = WidgetService(adapter=_mock_adapter())
         info = svc.load_data(df, target="y")
         assert info["cv"]["strategy"] == "stratified_kfold"
 
     def test_regression_uses_kfold(self) -> None:
         n = 200
-        df = pd.DataFrame({"y": range(n), "x": range(n)})
+        df = pd.DataFrame({"y": range(n), "x": [i % 10 for i in range(n)]})
         svc = WidgetService(adapter=_mock_adapter())
         info = svc.load_data(df, target="y")
         assert info["cv"]["strategy"] == "kfold"
 
     def test_set_target_sets_auto_task_and_strategy(self) -> None:
-        df = pd.DataFrame({"y": [0, 1] * 50, "x": range(100)})
+        df = pd.DataFrame({"y": [0, 1] * 50, "x": [i % 10 for i in range(100)]})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df)
         info = svc.set_target("y")
@@ -159,7 +160,7 @@ class TestCVDefaults:
 
     def test_set_task_updates_strategy_to_stratified_for_classification(self) -> None:
         n = 100
-        df = pd.DataFrame({"y": range(n), "x": range(n)})
+        df = pd.DataFrame({"y": range(n), "x": [i % 10 for i in range(n)]})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         info = svc.set_task("multiclass")
@@ -167,7 +168,13 @@ class TestCVDefaults:
         assert info["cv"]["strategy"] == "stratified_kfold"
 
     def test_set_task_resets_cv_fields_to_task_defaults(self) -> None:
-        df = pd.DataFrame({"y": [0, 1] * 50, "x": range(100), "g": ["a", "b"] * 50})
+        df = pd.DataFrame(
+            {
+                "y": [0, 1] * 50,
+                "x": [i % 10 for i in range(100)],
+                "g": ["a", "b"] * 50,
+            }
+        )
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         svc.update_cv("group_kfold", 3, group_column="g")
@@ -209,7 +216,7 @@ class TestFeatureSummary:
 
 class TestDataManagement:
     def test_update_column(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         info = svc.update_column("x", excluded=True, col_type="numeric")
@@ -217,7 +224,7 @@ class TestDataManagement:
         assert x_col["excluded"] is True
 
     def test_update_cv(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         info = svc.update_cv("group_kfold", 3, group_column="x")
@@ -226,7 +233,7 @@ class TestDataManagement:
         assert info["cv"]["group_column"] == "x"
 
     def test_update_cv_time_series_fields(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         info = svc.update_cv(
@@ -242,13 +249,13 @@ class TestDataManagement:
         assert info["cv"]["embargo"] == 2
 
     def test_shape_info(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": range(50)})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": range(50)})
         svc = WidgetService(adapter=_mock_adapter())
         info = svc.load_data(df)
         assert info["shape"] == [50, 2]
 
     def test_load_data_without_target(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": range(50)})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": range(50)})
         svc = WidgetService(adapter=_mock_adapter())
         info = svc.load_data(df)
         assert info["target"] is None
@@ -272,7 +279,13 @@ class TestDataManagement:
         assert "model" in config
 
     def test_build_config_group_kfold(self) -> None:
-        df = pd.DataFrame({"x": range(50), "g": ["a", "b"] * 25, "y": [0, 1] * 25})
+        df = pd.DataFrame(
+            {
+                "x": [i % 10 for i in range(50)],
+                "g": ["a", "b"] * 25,
+                "y": [0, 1] * 25,
+            }
+        )
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         svc.update_cv("group_kfold", 5, group_column="g")
@@ -281,7 +294,7 @@ class TestDataManagement:
         assert config["split"]["method"] == "group_kfold"
 
     def test_build_config_time_series(self) -> None:
-        df = pd.DataFrame({"x": range(50), "t": range(50), "y": range(50)})
+        df = pd.DataFrame({"x": [1, 2, 3] * 17 + [1], "t": range(52), "y": range(52)})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         svc.update_cv(
@@ -298,7 +311,7 @@ class TestDataManagement:
         assert config["task"] == "regression"
 
     def test_build_config_preserves_config_version(self) -> None:
-        df = pd.DataFrame({"num": range(100), "y": [0, 1] * 50})
+        df = pd.DataFrame({"num": [1, 2, 3] * 34, "y": [0, 1] * 51})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         config = svc.build_config({"config_version": 1, "model": {"name": "lgbm"}})
@@ -310,14 +323,14 @@ class TestReturnValueIndependence:
     """Verify each mutating method returns an independent copy of df_info."""
 
     def test_load_data_returns_independent_copy(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         info = svc.load_data(df)
         info["shape"] = [0, 0]
         assert svc._df_info["shape"] == [50, 2]
 
     def test_set_target_returns_independent_copy(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df)
         info = svc.set_target("y")
@@ -325,7 +338,7 @@ class TestReturnValueIndependence:
         assert svc._df_info["target"] == "y"
 
     def test_set_task_returns_independent_copy(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         info = svc.set_task("regression")
@@ -333,7 +346,7 @@ class TestReturnValueIndependence:
         assert svc._df_info["task"] == "regression"
 
     def test_update_column_returns_independent_copy(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         info = svc.update_column("x", excluded=True, col_type="numeric")
@@ -341,7 +354,7 @@ class TestReturnValueIndependence:
         assert len(svc._df_info["columns"]) > 0
 
     def test_update_cv_returns_independent_copy(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         info = svc.update_cv("group_kfold", 3, group_column="x")
@@ -349,7 +362,7 @@ class TestReturnValueIndependence:
         assert svc._df_info["cv"]["strategy"] == "group_kfold"
 
     def test_get_df_info_returns_independent_copy(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         info = svc.get_df_info()
@@ -361,21 +374,21 @@ class TestModelNameBackfill:
     """Regression tests for model.name missing (A-2026-03-12)."""
 
     def test_build_config_backfills_model_name_when_missing(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [1, 2, 3] * 17 + [1], "y": [0, 1] * 26})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         config = svc.build_config({"model": {"params": {"n_estimators": 100}}})
         assert config["model"]["name"] == "lgbm"
 
     def test_build_config_preserves_existing_model_name(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [1, 2, 3] * 17 + [1], "y": [0, 1] * 26})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         config = svc.build_config({"model": {"name": "lgbm", "params": {}}})
         assert config["model"]["name"] == "lgbm"
 
     def test_build_config_adds_model_when_absent(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [1, 2, 3] * 17 + [1], "y": [0, 1] * 26})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         config = svc.build_config({})
@@ -386,7 +399,7 @@ class TestServiceOwnedConfigLifecycle:
     """Config initialization and run preparation delegated to Adapter."""
 
     def test_initialize_config_populates_defaults(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
 
@@ -416,7 +429,7 @@ class TestServiceOwnedConfigLifecycle:
         assert result["model"]["params"]["learning_rate"] == 0.01
 
     def test_prepare_run_config_complements_tune_defaults(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [1, 2, 3] * 17 + [1], "y": [0, 1] * 26})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
 
@@ -426,7 +439,7 @@ class TestServiceOwnedConfigLifecycle:
         assert config["tuning"]["optuna"]["space"] == {}
 
     def test_apply_loaded_config_updates_service_state(self) -> None:
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df)
 
@@ -454,7 +467,7 @@ class TestCanonicalizeConfigDelegation:
     def test_canonicalize_config_produces_canonical(self) -> None:
         adapter = _mock_adapter()
         svc = WidgetService(adapter)
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         svc.load_data(df)
         result = svc.canonicalize_config({"model": {"params": {"n_estimators": 500}}})
         assert result["model"]["name"] == "lgbm"
@@ -464,7 +477,7 @@ class TestCanonicalizeConfigDelegation:
         """build_config should not enforce auto_num_leaves (adapter responsibility)."""
         adapter = _mock_adapter()
         svc = WidgetService(adapter)
-        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        df = pd.DataFrame({"x": [1, 2, 3] * 17 + [1], "y": [0, 1] * 26})
         svc.load_data(df)
         svc.set_target("y")
         # build_config just merges df_info; auto_num_leaves is adapter's job
@@ -474,3 +487,98 @@ class TestCanonicalizeConfigDelegation:
         result = svc.build_config(user_cfg)
         # build_config should pass through as-is (adapter handles exclusivity later)
         assert result["model"]["params"]["num_leaves"] == 256
+
+    def test_apply_task_params_delegates_to_adapter(self) -> None:
+        """26-4: apply_task_params delegates to adapter.apply_task_defaults."""
+        adapter = _mock_adapter()
+        svc = WidgetService(adapter)
+        config = {"model": {"name": "lgbm", "params": {"n_estimators": 100}}}
+        result = svc.apply_task_params(config, "binary")
+        assert result["model"]["params"]["objective"] == "binary"
+        assert result["model"]["params"]["n_estimators"] == 100
+
+    def test_service_has_no_backend_specific_constants(self) -> None:
+        """26-4: Service source must not contain backend-specific constants."""
+        import inspect
+
+        from lizyml_widget import service
+
+        source = inspect.getsource(service)
+        # These backend-specific strings should not appear as literals in service
+        assert '"lgbm"' not in source
+        assert '"objective"' not in source
+        assert '"metric"' not in source
+
+
+class TestFloatIdDetection:
+    """Float columns with all-unique values should NOT be excluded as IDs."""
+
+    def test_float_column_not_excluded_as_id(self) -> None:
+        import numpy as np
+
+        np.random.seed(42)
+        n = 100
+        df = pd.DataFrame(
+            {
+                "feat_float": np.random.randn(n),
+                "y": [0, 1] * 50,
+            }
+        )
+        svc = WidgetService(adapter=_mock_adapter())
+        info = svc.load_data(df, target="y")
+        feat = next(c for c in info["columns"] if c["name"] == "feat_float")
+        assert feat["excluded"] is False
+        assert feat["exclude_reason"] is None
+
+    def test_int_column_with_all_unique_still_excluded(self) -> None:
+        n = 100
+        df = pd.DataFrame({"id": range(n), "y": [0, 1] * 50})
+        svc = WidgetService(adapter=_mock_adapter())
+        info = svc.load_data(df, target="y")
+        id_col = next(c for c in info["columns"] if c["name"] == "id")
+        assert id_col["excluded"] is True
+        assert id_col["exclude_reason"] == "id"
+
+    def test_string_column_with_all_unique_still_excluded(self) -> None:
+        n = 100
+        df = pd.DataFrame(
+            {
+                "uuid": [f"id-{i}" for i in range(n)],
+                "y": [0, 1] * 50,
+            }
+        )
+        svc = WidgetService(adapter=_mock_adapter())
+        info = svc.load_data(df, target="y")
+        uuid_col = next(c for c in info["columns"] if c["name"] == "uuid")
+        assert uuid_col["excluded"] is True
+        assert uuid_col["exclude_reason"] == "id"
+
+    def test_multiple_float_features_not_excluded(self) -> None:
+        import numpy as np
+
+        np.random.seed(42)
+        n = 200
+        df = pd.DataFrame(
+            {
+                "feat1": np.random.randn(n),
+                "feat2": np.random.randn(n),
+                "y": [0, 1] * 100,
+            }
+        )
+        svc = WidgetService(adapter=_mock_adapter())
+        info = svc.load_data(df, target="y")
+        active = [c for c in info["columns"] if not c["excluded"]]
+        assert len(active) == 2
+
+
+class TestZeroFeatureGuard:
+    """build_config should raise ValueError when all features are excluded."""
+
+    def test_all_excluded_raises(self) -> None:
+        n = 100
+        df = pd.DataFrame({"id": range(n), "y": [0, 1] * 50})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        # All non-target columns are excluded as IDs
+        with pytest.raises(ValueError, match="No features available"):
+            svc.build_config({"model": {"name": "lgbm"}})

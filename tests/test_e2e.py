@@ -39,7 +39,7 @@ def _make_widget_with_adapter() -> tuple[Any, MagicMock]:
 
 
 def _sample_df() -> pd.DataFrame:
-    return pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+    return pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
 
 
 class TestFitE2E:

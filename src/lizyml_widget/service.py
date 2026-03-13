@@ -122,14 +122,22 @@ class WidgetService:
 
     def update_column(self, name: str, *, excluded: bool, col_type: str) -> dict[str, Any]:
         """Update a single column's settings."""
-        for c in self._df_info["columns"]:
-            if c["name"] == name:
-                c["excluded"] = excluded
-                c["col_type"] = col_type
-                if not excluded:
-                    c["exclude_reason"] = None
-                break
-        self._df_info["feature_summary"] = self._calc_feature_summary(self._df_info["columns"])
+        new_columns = [
+            {
+                **c,
+                "excluded": excluded,
+                "col_type": col_type,
+                "exclude_reason": None if not excluded else c.get("exclude_reason"),
+            }
+            if c["name"] == name
+            else c
+            for c in self._df_info["columns"]
+        ]
+        self._df_info = {
+            **self._df_info,
+            "columns": new_columns,
+            "feature_summary": self._calc_feature_summary(new_columns),
+        }
         return copy.deepcopy(self._df_info)
 
     def update_cv(
@@ -186,21 +194,8 @@ class WidgetService:
         return self._adapter.canonicalize_config(config, task=self._df_info.get("task"))
 
     def apply_task_params(self, config: dict[str, Any], task: str) -> dict[str, Any]:
-        """Re-initialize config with new task to apply task-dependent defaults."""
-        new_config = self._adapter.initialize_config(task=task)
-        # Extract task-dependent params from initialized config
-        new_params = new_config.get("model", {}).get("params", {})
-        task_keys = {"objective", "metric"}
-        task_params = {k: v for k, v in new_params.items() if k in task_keys}
-
-        if not task_params:
-            return copy.deepcopy(config)
-
-        ops = [
-            ConfigPatchOp(op="set", path=f"model.params.{k}", value=v)
-            for k, v in task_params.items()
-        ]
-        return self._adapter.apply_config_patch(config, ops, task=task)
+        """Apply task-dependent defaults via adapter (no backend-specific keys here)."""
+        return self._adapter.apply_task_defaults(config, task=task)
 
     # ── Config ───────────────────────────────────────────────
 
@@ -211,6 +206,10 @@ class WidgetService:
         """Merge df_info settings with user config for the adapter."""
         info = self._df_info
         active_cols = [c for c in info["columns"] if not c.get("excluded", False)]
+
+        if not active_cols:
+            msg = "No features available. Un-exclude at least one column."
+            raise ValueError(msg)
 
         data_section: dict[str, Any] = {
             "target": info["target"],
@@ -261,9 +260,15 @@ class WidgetService:
         # Remove task from data section if it leaked from user_config
         result.get("data", {}).pop("task", None)
 
-        # Ensure required top-level fields are present (BLUEPRINT §5.3)
-        result.setdefault("config_version", 1)
-        result.setdefault("model", {}).setdefault("name", "lgbm")
+        # Ensure required top-level fields via adapter canonicalization
+        # (no backend-specific model name hardcoded here)
+        defaults = self._adapter.initialize_config(task=info.get("task"))
+        result.setdefault("config_version", defaults.get("config_version", 1))
+        model_name = defaults.get("model", {}).get("name")
+        if not model_name:
+            msg = "Adapter's initialize_config() must return a non-empty model.name"
+            raise ValueError(msg)
+        result.setdefault("model", {}).setdefault("name", model_name)
 
         return result
 
@@ -447,8 +452,9 @@ class WidgetService:
         exclude_reason: str | None = None
         col_type = "numeric"
 
-        # ID detection
-        if unique == n_rows:
+        # ID detection — only for integer/string columns, not floats
+        is_float = dtype.startswith("float") or dtype.startswith("Float")
+        if unique == n_rows and not is_float:
             excluded = True
             exclude_reason = "id"
         # Constant detection

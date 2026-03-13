@@ -32,6 +32,7 @@
 | 23 | 入力コントロール統一の追補 | 数値幅固定・セグメント/チップ化・Inner Valid表示を統一して操作一貫性を高める | ✅ 完了 |
 | 24 | Widget / Service 疎結合化 | config 初期化・実行準備を Service に集約し、Widget から private 境界越えを除去する | ✅ 完了 |
 | 25 | Backend Contract 駆動の完全疎結合化 | backend 固有 UI/Config 知識を Adapter contract へ集約し、UI を generic renderer 化する | 📝 設計完了（未実装） |
+| 26 | Canonical Config 経路統一 + `inner_valid` 契約整合化 | config canonicalization の単一路線化、Validation 診断改善、Phase 25 残課題の追補 | ⚠️ 部分実装（追補要） |
 
 各フェーズ末尾に **完了条件** を定義する。フェーズは順番に実施する（前フェーズの成果物が後フェーズの前提）。
 
@@ -1663,15 +1664,30 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
 
 **目標:** UI / Python API / YAML import の config 導線を単一 canonicalization path に統一し、`inner_valid` の schema 不整合で起きている `VALIDATION_ERROR` を解消する。
 
+**実装状況メモ（2026-03-13 監査追記）:**
+
+- `26-2` と `26-3` は概ね実装済みで、`inner_valid` の object/null 正規化と `error.details` の path/type 出力は確認済み。
+- 一方で `26-1` は未完了で、現在の `patch_config` 経路は `unset` 後に `config_version` / `model.name` を再補完せず、`config` traitlet が non-canonical snapshot になりうる。
+- `26-4` も未完了で、Tune の empty search space 判定は `backend_contract.capabilities` に寄せられたが、Service に `lgbm` / `objective` / `metric` 固定ロジックが残る。
+- `26-5` のテスト追加は進んでいるが、`patch_config` による required field 欠落と public `load_config(path)` 経路は回帰テストが不足している。
+- したがって Phase 26 全体の判定は **部分実装（追補要）** とし、下記の不足項目を埋めた時点で完了扱いに更新する。
+
 #### 26-1. 外部 Config 入力の canonicalization を統一
 
 - `src/lizyml_widget/widget.py` / `src/lizyml_widget/service.py` / `src/lizyml_widget/adapter.py`
   - `set_config()` / `load_config()` / `import_yaml` が UI `patch_config` と同じ canonicalization hook を通るよう整理する
   - `config` traitlet には常に canonical config snapshot だけを保持する
   - partial dict / partial YAML 入力でも `config_version` / `model.name` / backend-required default を同一規則で補完する
+  - `patch_config` の `set` / `unset` / `merge` のいずれでも、Widget が traitlet へ反映する前に required field / backend default / legacy alias 正規化が再適用されるようにする
+  - `build_config()` / `prepare_run_config()` での後追い補完に依存せず、**`config` snapshot 自体** が canonical であることを保証する
+- 現在の不足
+  - `Widget._handle_patch_config()` → `WidgetService.apply_config_patch()` → `Adapter.apply_config_patch()` の現経路は patch 適用 + 一部正規化に留まり、`model.name` / `config_version` を `unset` すると `get_config()` が non-canonical を返す
+  - `set_config()` / `load_config()` / `import_yaml` は canonical 化される一方、UI patch のみ別経路のため「単一 canonicalization path」がまだ達成できていない
 - 受け入れ条件
   - `w.set_config({"model": {"params": {}}}).get_config()` が canonical shape を返す
   - `load_config()` / YAML import / UI patch 後の `get_config()` が同じ規則で整形される
+  - `patch_config({"ops": [{"op": "unset", "path": "model.name"}]})` 後でも `get_config()["model"]["name"]` が canonical 値を維持する
+  - `patch_config({"ops": [{"op": "unset", "path": "config_version"}]})` 後でも `get_config()["config_version"]` が欠落しない
 
 #### 26-2. `training.early_stopping.inner_valid` の契約を backend schema と一致させる
 
@@ -1699,9 +1715,14 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
   - Tune 実行条件を `backend_contract.capabilities` 起点へ寄せ、frontend 独自判定を削減する
   - backend-specific section/field special case を減らし、generic renderer 化を進める
   - Service に残る `lgbm` / `objective` / `metric` / `auto_num_leaves` 固定ロジックを Adapter へ戻す
+- 現在の不足
+  - Tune の empty search space 許可可否は frontend 側で `backend_contract.capabilities` を参照するようになったが、Service には `objective` / `metric` の task 依存差し替えと `"lgbm"` の backfill が残っている
+  - これらの補完は backend 固有 knowledge であり、WidgetService が「Data タブ由来 state の保持と結合作業に専念する」という責務境界をまだ完全には満たしていない
+  - frontend 側も `model` / `training` / `evaluation` などの custom rendering が残るため、Phase 26 では少なくとも backend contract と重複する special case をこれ以上増やさないことを条件にする
 - 受け入れ条件
   - empty search space 許可可否が `backend_contract.capabilities` だけで決まる
   - Service が backend 固有 constant を保持しない
+  - `src/lizyml_widget/service.py` から backend 名や backend 固有 parameter key 依存の固定ロジックが除去される
 
 #### 26-5. 回帰テストを追加
 
@@ -1710,13 +1731,20 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
   - `inner_valid` の UI 相当入力と canonical object 出力を検証する
   - `error.details` に nested field path が入ることを検証する
   - `backend_contract.capabilities` による Tune 実行条件を検証する
+- 追加で明文化する不足テスト
+  - public `load_config(path)` と message-based `import_yaml` の両方が canonical snapshot を返すことを分けて検証する
+  - `patch_config` の `unset` により `model.name` / `config_version` が欠落しないことを検証する
+  - `save_config()` / `export_yaml` / `raw_config` が canonical object/null を出力することを検証する
 - 受け入れ条件
   - 現在の validation failure を CI で再現・検知できる
   - Phase 25 の残課題が再導入されても自動テストで気づける
+  - `patch_config` で canonical invariant が破れた場合に CI が必ず落ちる
+  - file path API と Notebook custom message API の両方で同一 canonicalization 規約を検知できる
 
 **完了条件:**
 
-- UI / Python API / YAML import の config 経路が単一 canonicalization path に統一される
+- UI / Python API / YAML import に加えて `patch_config` の `set` / `unset` / `merge` 後も `config` traitlet が canonical snapshot を維持する
 - `inner_valid` の schema 不整合による `VALIDATION_ERROR` が解消される
 - Validation error details に根因 path/type が含まれる
-- Phase 25 の完了条件を CI で継続検証できる
+- Service から backend 固有 constant が除去される
+- Phase 25 の完了条件と Phase 26 の canonical invariant を CI で継続検証できる

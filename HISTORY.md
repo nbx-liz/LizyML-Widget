@@ -378,6 +378,29 @@
 
 ---
 
+### A-2026-03-13: Phase 26 実装監査記録（部分実装 / canonical snapshot 不変条件の追補）
+
+- **日付**: 2026-03-13
+- **種別**: Audit Finding（要件監査の記録）
+- **背景**:
+  - Phase 26 の実装状況を監査し、P-012 で定義した受け入れ条件が current working tree でどこまで満たされているかを確認した。
+  - `inner_valid` 契約整合化と Validation 診断改善は概ね完了していた一方、canonical config の不変条件と Service 疎結合化には残課題があることを確認した。
+- **確認した問題点**:
+  - `patch_config` の `unset` 後に `config_version` / `model.name` が再補完されず、`config` traitlet が non-canonical snapshot を保持しうる。
+  - `set_config()` / `load_config()` / `import_yaml` は canonical 化されるが、UI patch だけ別の保証水準になっており、「単一 canonicalization path」が未達。
+  - Service には `lgbm` / `objective` / `metric` 固定ロジックが残っており、backend 固有 knowledge を Adapter へ集約する Phase 26-4 の完了条件に未達。
+  - 回帰テストは増えているが、public `load_config(path)` と `patch_config unset` canonical invariant、`save_config()` / `export_yaml` / `raw_config` の canonical 出力が CI で十分に固定化されていない。
+- **影響範囲**:
+  - Config Tab の patch 適用後 snapshot の信頼性
+  - Python API / Notebook UI / YAML I/O の canonical config 一貫性
+  - Service / Adapter の責務境界
+  - CI による Phase 26 完了判定の信頼性
+- **対応先**:
+  - PLAN.md Phase 26 監査追記
+  - `26-1` / `26-4` / `26-5` の不足項目明文化
+
+---
+
 ### A-2026-03-12: Fit 実行失敗（`model.name` 欠落）監査記録
 
 - **日付**: 2026-03-12
