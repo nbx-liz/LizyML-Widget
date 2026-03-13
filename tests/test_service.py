@@ -8,14 +8,24 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
+from lizyml_widget.adapter import LizyMLAdapter
 from lizyml_widget.service import WidgetService
-from lizyml_widget.types import BackendInfo, ConfigSchema
+from lizyml_widget.types import BackendInfo, ConfigPatchOp
 
 
 def _mock_adapter() -> Any:
+    """Create a mock adapter that delegates config lifecycle to LizyMLAdapter."""
+    real_adapter = LizyMLAdapter()
     adapter = MagicMock()
     adapter.info = BackendInfo(name="mock", version="0.0.0")
-    adapter.get_config_schema.return_value = ConfigSchema(json_schema={})
+    adapter.get_config_schema.return_value = {}
+
+    # Delegate config lifecycle methods to real adapter
+    adapter.initialize_config.side_effect = real_adapter.initialize_config
+    adapter.apply_config_patch.side_effect = real_adapter.apply_config_patch
+    adapter.prepare_run_config.side_effect = real_adapter.prepare_run_config
+    adapter.get_backend_contract.side_effect = real_adapter.get_backend_contract
+    adapter.canonicalize_config.side_effect = real_adapter.canonicalize_config
     return adapter
 
 
@@ -370,3 +380,97 @@ class TestModelNameBackfill:
         svc.load_data(df, target="y")
         config = svc.build_config({})
         assert config["model"]["name"] == "lgbm"
+
+
+class TestServiceOwnedConfigLifecycle:
+    """Config initialization and run preparation delegated to Adapter."""
+
+    def test_initialize_config_populates_defaults(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+
+        config = svc.initialize_config()
+
+        assert config["config_version"] == 1
+        assert config["model"]["name"] == "lgbm"
+        assert config["model"]["params"]["objective"] == "binary"
+
+    def test_apply_task_params_returns_updated_copy(self) -> None:
+        svc = WidgetService(adapter=_mock_adapter())
+        config = {"model": {"name": "lgbm", "params": {"n_estimators": 100}}}
+
+        updated = svc.apply_task_params(config, "binary")
+
+        assert updated["model"]["params"]["objective"] == "binary"
+        assert updated["model"]["params"]["metric"] == ["auc", "binary_logloss"]
+        assert "objective" not in config["model"]["params"]
+
+    def test_apply_config_patch_delegates_to_adapter(self) -> None:
+        svc = WidgetService(adapter=_mock_adapter())
+        config = {"model": {"params": {"learning_rate": 0.001}}}
+        ops = [ConfigPatchOp(op="set", path="model.params.learning_rate", value=0.01)]
+
+        result = svc.apply_config_patch(config, ops)
+
+        assert result["model"]["params"]["learning_rate"] == 0.01
+
+    def test_prepare_run_config_complements_tune_defaults(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+
+        config = svc.prepare_run_config({"model": {"name": "lgbm"}}, job_type="tune")
+
+        assert config["tuning"]["optuna"]["params"]["n_trials"] == 50
+        assert config["tuning"]["optuna"]["space"] == {}
+
+    def test_apply_loaded_config_updates_service_state(self) -> None:
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df)
+
+        remaining = svc.apply_loaded_config(
+            {
+                "data": {"target": "y", "time_col": "x"},
+                "split": {"method": "time_series", "n_splits": 3, "gap": 2},
+                "model": {"name": "lgbm"},
+            }
+        )
+
+        info = svc.get_df_info()
+        assert info["target"] == "y"
+        assert info["cv"]["strategy"] == "time_series"
+        assert info["cv"]["time_column"] == "x"
+        assert info["cv"]["gap"] == 2
+        # apply_loaded_config now returns canonicalized config with all defaults
+        assert remaining["model"]["name"] == "lgbm"
+        assert "config_version" in remaining
+
+
+class TestCanonicalizeConfigDelegation:
+    """Phase 26: Service.canonicalize_config delegates to adapter."""
+
+    def test_canonicalize_config_produces_canonical(self) -> None:
+        adapter = _mock_adapter()
+        svc = WidgetService(adapter)
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc.load_data(df)
+        result = svc.canonicalize_config({"model": {"params": {"n_estimators": 500}}})
+        assert result["model"]["name"] == "lgbm"
+        assert result["model"]["params"]["n_estimators"] == 500
+
+    def test_build_config_no_auto_num_leaves_logic(self) -> None:
+        """build_config should not enforce auto_num_leaves (adapter responsibility)."""
+        adapter = _mock_adapter()
+        svc = WidgetService(adapter)
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc.load_data(df)
+        svc.set_target("y")
+        # build_config just merges df_info; auto_num_leaves is adapter's job
+        user_cfg: dict[str, Any] = {
+            "model": {"name": "lgbm", "auto_num_leaves": True, "params": {"num_leaves": 256}},
+        }
+        result = svc.build_config(user_cfg)
+        # build_config should pass through as-is (adapter handles exclusivity later)
+        assert result["model"]["params"]["num_leaves"] == 256

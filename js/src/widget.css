@@ -5,15 +5,21 @@
   box-sizing: border-box;
   width: 100%;
   min-height: 620px;
-  height: 620px;
   resize: vertical;
   border: 1px solid var(--jp-border-color1, #e0e0e0);
   border-radius: 6px;
-  overflow: hidden;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   background: var(--jp-layout-color0, #fff);
   color: var(--jp-ui-font-color1, #333);
+}
+
+.lzw-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 .lzw-root *,
@@ -214,25 +220,70 @@
   font-size: 12px;
 }
 
-.lzw-table--columns {
-  table-layout: fixed;
-  min-width: 560px;
+/* ── Column Settings Grid ──────────────────────────────── */
+.lzw-columns-grid {
+  display: grid;
+  grid-template-columns: minmax(14rem, 2.4fr) minmax(4.5rem, 0.8fr) minmax(4.5rem, 0.8fr) minmax(12rem, 1.8fr);
+  font-size: 12px;
+  min-width: 100%;
 }
 
-.lzw-col--name {
-  width: 46%;
+.lzw-columns-grid__header {
+  display: contents;
 }
 
-.lzw-col--uniq {
-  width: 90px;
+.lzw-columns-grid__header > div {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 2px solid var(--jp-border-color1, #e0e0e0);
+  font-weight: 600;
+  color: var(--jp-ui-font-color2, #666);
 }
 
-.lzw-col--exclude {
-  width: 72px;
+.lzw-columns-grid__row {
+  display: contents;
 }
 
-.lzw-col--type {
-  width: 180px;
+.lzw-columns-grid__row > div {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--jp-border-color2, #f0f0f0);
+  display: flex;
+  align-items: center;
+}
+
+.lzw-columns-grid__row.lzw-row--excluded > div {
+  opacity: 0.5;
+}
+
+/* ── Search Space Grid ────────────────────────────────── */
+.lzw-search-space-grid {
+  display: grid;
+  grid-template-columns: minmax(14rem, 2.6fr) minmax(9rem, 1.2fr) minmax(16rem, 2.2fr);
+  font-size: 12px;
+  min-width: 100%;
+}
+
+.lzw-search-space-grid__header {
+  display: contents;
+}
+
+.lzw-search-space-grid__header > div {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 2px solid var(--jp-border-color1, #e0e0e0);
+  font-weight: 600;
+  color: var(--jp-ui-font-color2, #666);
+}
+
+.lzw-search-space-grid__row {
+  display: contents;
+}
+
+.lzw-search-space-grid__row > div {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--jp-border-color2, #f0f0f0);
+  display: flex;
+  align-items: center;
 }
 
 .lzw-table th {
@@ -465,6 +516,96 @@
   width: 100%;
 }
 
+/* ── Numeric Stepper ─────────────────────────────────────── */
+.lzw-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.lzw-stepper__btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: var(--jp-layout-color1, #f5f5f5);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--jp-ui-font-color1, #333);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.lzw-stepper__btn:hover {
+  background: var(--jp-layout-color2, #eee);
+}
+
+.lzw-stepper__input {
+  width: 75px;
+  border: none;
+  border-left: 1px solid var(--jp-border-color1, #e0e0e0);
+  border-right: 1px solid var(--jp-border-color1, #e0e0e0);
+  text-align: center;
+  font-size: 12px;
+  padding: 2px 4px;
+  background: var(--jp-layout-color0, #fff);
+  color: var(--jp-ui-font-color1, #333);
+  -moz-appearance: textfield;
+}
+
+.lzw-stepper__input::-webkit-outer-spin-button,
+.lzw-stepper__input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* ── Segment buttons ─────────────────────────────────────── */
+.lzw-segment {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.lzw-segment__btn {
+  padding: 2px 8px;
+  border: none;
+  border-right: 1px solid var(--jp-border-color1, #e0e0e0);
+  background: var(--jp-layout-color0, #fff);
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--jp-ui-font-color2, #666);
+  white-space: nowrap;
+}
+
+.lzw-segment__btn:last-child {
+  border-right: none;
+}
+
+.lzw-segment__btn--active {
+  background: var(--jp-brand-color1, #2196f3);
+  color: #fff;
+}
+
+.lzw-segment__btn:hover:not(.lzw-segment__btn--active) {
+  background: var(--jp-layout-color2, #eee);
+}
+
+.lzw-segment--wrap {
+  gap: 4px;
+}
+
+.lzw-segment--wrap .lzw-segment__btn {
+  border-radius: 4px;
+  border-right: 1px solid var(--jp-border-color1, #e0e0e0);
+}
+
 /* ── Search Space ────────────────────────────────────────── */
 .lzw-search-space__range {
   display: flex;
@@ -584,6 +725,35 @@
   gap: 4px;
   font-size: 12px;
   cursor: pointer;
+}
+
+/* ── Chip buttons (multi-select toggle) ──────────────────── */
+.lzw-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.lzw-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border-radius: 12px;
+  background: var(--jp-layout-color0, #fff);
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--jp-ui-font-color2, #666);
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.lzw-chip--active {
+  background: var(--jp-brand-color1, #2196f3);
+  color: #fff;
+  border-color: var(--jp-brand-color1, #2196f3);
+}
+
+.lzw-chip:hover:not(.lzw-chip--active) {
+  background: var(--jp-layout-color2, #eee);
 }
 
 /* ── Tag Input ───────────────────────────────────────────── */

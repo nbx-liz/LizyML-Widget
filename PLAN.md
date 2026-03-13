@@ -20,6 +20,18 @@
 | 11 | 仕様同期 + 残 plot 実装 | 監査で発見した乖離の解消 | ✅ 完了 |
 | 12 | UI ユーザビリティ改善 | マウス操作性向上・Calibration バグ修正・SearchSpace Choice 拡充 | ✅ 完了 |
 | 13 | 2026-03-12 要件監査 乖離解消 | BLUEPRINT/実装の乖離是正 + エラーコード整備 | ✅ 完了 |
+| 14 | Tune 実行失敗の根治 | Tune を Python API / Widget UI で安定完了させる | ✅ 完了 |
+| 15 | Widget ウィンドウ調整の実効化 | Notebook 上の高さ調整を実際の表示領域拡張に反映させる | ✅ 完了 |
+| 16 | Tune Mode UX 改善 | Search Space の Mode 選択をセグメントボタン化して操作コストを下げる | ✅ 完了 |
+| 17 | Numeric Input UX 改善 | 数値入力を大型 `- / +` ステッパーへ統一し操作性を向上する | ✅ 完了 |
+| 18 | Table Grid UX 改善 | Column Settings / Search Space を CSS Grid + minmax() に置換し列幅を自動調整する | ✅ 完了 |
+| 19 | Apply to Fit 同期強化 | Tune 実行時設定を Fit 画面へフル同期し再現性を担保する | ✅ 完了 |
+| 20 | Tune Metric UX 改善 | Tune Settings の metric セグメントから Default を削除し選択を明確化する | ✅ 完了 |
+| 21 | Data 選択 UX 改善 | Task / CV Strategy をチップ選択へ統一して操作負荷を下げる | ✅ 完了 |
+| 22 | Config 契約確定 + 検証強化 | UI→LizyML の Config 受け渡し仕様を確定し、仕様逸脱を自動検知できるテストを整備する | ✅ 完了 |
+| 23 | 入力コントロール統一の追補 | 数値幅固定・セグメント/チップ化・Inner Valid表示を統一して操作一貫性を高める | ✅ 完了 |
+| 24 | Widget / Service 疎結合化 | config 初期化・実行準備を Service に集約し、Widget から private 境界越えを除去する | ✅ 完了 |
+| 25 | Backend Contract 駆動の完全疎結合化 | backend 固有 UI/Config 知識を Adapter contract へ集約し、UI を generic renderer 化する | 📝 設計完了（未実装） |
 
 各フェーズ末尾に **完了条件** を定義する。フェーズは順番に実施する（前フェーズの成果物が後フェーズの前提）。
 
@@ -159,13 +171,13 @@
   - DataFrame 情報表示（行数 × 列数）
   - Target / Task セクション
     - Target: df_info.columns からドロップダウン生成。変更時に `set_target` action 送信
-    - Task: 自動判定結果の表示。ドロップダウンで変更可能
+    - Task: 自動判定結果の表示（当時はドロップダウン。Phase 21 でチップ選択へ更新）
   - Column Settings テーブル（`js/src/components/ColumnTable.tsx`）
     - Column / Uniq / Excl チェックボックス / Type ドロップダウン
     - バッジ表示（[ID], [Const]）
     - 変更時に `update_column` action 送信
   - Cross Validation セクション
-    - Strategy ドロップダウン / Folds 数値入力 / Group column（条件付き表示）
+    - Strategy 選択 UI / Folds 数値入力 / Group column（条件付き表示）（当時はドロップダウン。Phase 21 でチップ選択へ更新）
     - 変更時に `update_cv` action 送信
   - Feature Summary（リアルタイム集計表示）
 - `js/src/components/Accordion.tsx`
@@ -627,7 +639,7 @@ Phase 11 は Phase 10 の残作業 + 監査乖離の解消。Phase 12 と Phase 
 - ✅ `adapter.py:183-188` — `model._cfg.task` を優先し `_widget_config` フォールバック付き
 - ✅ `contextlib.suppress` で calibration / tuning 判定を防御的に実装
 
-#### 10-3. Tune Search Space 契約整合（UI値→LizyML型） ✅
+#### 10-3. Tune Search Space 契約整合（UI値→LizyML型） ⚠️ Phase 14 で再対応
 
 - ✅ `SearchSpace.tsx:55` — `NON_TUNABLE` セットで `name` を除外、object 型もフィルタ
 - ✅ `ConfigTab.tsx:127-130` — Range/Choice が 1 つ以上ないと Tune ボタン disabled
@@ -806,7 +818,7 @@ Phase 11 は Phase 10 の残作業 + 監査乖離の解消。Phase 12 と Phase 
 
 - `js/src/tabs/ConfigTab.tsx` Tune Settings 内:
   - `tuning.optuna.params.metric` フィールドを追加（LizyML スキーマ確認後）
-  - task 別 METRIC_OPTIONS + `null`（デフォルト）のセレクトを表示
+  - task 別 METRIC_OPTIONS + `null`（デフォルト）の選択 UI を表示（当時はセレクト実装。Phase 20 でセグメントへ更新）
 
 #### 12-6. 数値入力フィールドの step 設定
 
@@ -848,7 +860,7 @@ Phase 11 は Phase 10 の残作業 + 監査乖離の解消。Phase 12 と Phase 
 - Widget 下端ドラッグで高さが拡大できる
 - Fit / Tune サブタブバーと実行ボタンがスクロール後も表示される
 - SearchSpace の objective / metric を Choice モードに変更できる
-- Tune Settings に Optuna 最適化 metric のセレクトがある
+- Tune Settings に Optuna 最適化 metric の選択 UI がある（Phase 20 でセグメント化予定）
 - 全数値入力フィールドに正しい step が設定されている
 - Evaluation metrics がチェックボックスグループで表示される
 - Calibration トグルが正常に ON / OFF できる
@@ -918,3 +930,793 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
 - BLUEPRINT §5.1 のタブ有効条件が実装と一致
 - BLUEPRINT §5.4 の plot 表示条件が `adapter.py` と一致
 - `NO_DATA` / `NO_TARGET` エラーが専用コードで返却され、テストでカバーされている
+
+---
+
+### Phase 14: Tune 実行失敗の根治（2026-03-12 深掘り調査） ✅
+
+**目標:** Tune を「Python API / Widget UI どちらの導線でも」安定して完了させ、`status="completed"` まで到達できる状態に戻す。
+
+**深掘り調査で確定した再現パターン（2026-03-12）:**
+
+- R1: `w.load(...).set_target(...); w.tune()`（`tuning` 未設定）
+  - 失敗: `[CONFIG_INVALID] No tuning configuration found...`
+- R2: UI の Search Space で Range/Choice を 1件設定して Tune 実行
+  - 失敗: `[CONFIG_INVALID] Unknown search space type '' ...`
+  - 原因: `tuning.optuna.space` が `mode=range/choice` 形式で保存されるが、LizyML は `type=float/int/categorical` を要求
+- R3: 有効な `tuning` を与えて Tune 本体は成功
+  - その後失敗: `[MODEL_NOT_FIT] Model has not been fitted. Call fit() first.`
+  - 原因: Tune 後に `evaluate_table()` / `split_summary()` を呼び、Fit 済みを前提にしている
+- R4: Tune-only 実行後の `available_plots`
+  - `learning-curve` 等の Fit 依存プロットが列挙されるが、実際に取得すると `MODEL_NOT_FIT`
+
+#### 14-0. 変更ゲート判定（実装前）
+
+- `tune()` 実行時の設定補完方針（`tuning` 未設定時の扱い）は Python API のデータフロー変更に該当するため、先に HISTORY.md に Proposal を追加する
+  - 候補: P-004「Tune 起動時の `tuning` デフォルト補完」
+- Proposal 承認後に実装へ進む
+
+#### 14-1. Tune 起動時の `tuning` デフォルト補完（R1 対応）
+
+- `src/lizyml_widget/widget.py`
+  - `_run_job("tune")` 実行時、`full_config["tuning"]` が `None` / 欠落なら最小有効構成を補完
+    - 例: `{"optuna": {"params": {"n_trials": 50}, "space": {}}}`
+  - 補完後の config を `validate_config()` に通す
+- `notebooks/tutorial.ipynb`
+  - Tune セルの前に、`tuning` 明示設定が不要であること（または必要な場合の最小設定）を注記
+- 受け入れ条件
+  - `w.load(df).set_target("y"); w.tune()` で `CONFIG_INVALID(No tuning configuration...)` が発生しない
+
+#### 14-2. Search Space 契約変換の修正（R2 対応）
+
+- `js/src/components/SearchSpace.tsx`
+  - `mode` は UI 内部状態として保持しつつ、`onChange` で Python 側に渡す値は LizyML 契約へ変換する
+    - Range（float）→ `{"type":"float","low":...,"high":...,"log":...}`
+    - Range（integer）→ `{"type":"int","low":...,"high":...,"log":...}`
+    - Choice → `{"type":"categorical","choices":[...]}`
+    - Fixed → `space` から key を削除
+  - Choice が空配列の場合は保存しない（または UI 側でエラー表示）
+- `src/lizyml_widget/adapter.py`（防御）
+  - `validate_config()` に `tuning.optuna.space` の追加検証を実装し、`type/low/high/choices` 欠落を `VALIDATION_ERROR` として早期返却
+  - 旧形式（`mode`）を検出したら明示的エラーメッセージを返す
+- 受け入れ条件
+  - Tune 実行で `Unknown search space type ''` が発生しない
+  - 不正 Search Space は backend 実行前に `VALIDATION_ERROR` で止まる
+
+#### 14-3. Tune 後の Fit 前提処理を撤去（R3 対応）
+
+- `src/lizyml_widget/widget.py`
+  - `job_type == "tune"` 分岐での `evaluate_table()` / `split_summary()` 呼び出しをガードする
+  - Fit 未実行（`MODEL_NOT_FIT`）時は `fit_summary` を空のまま維持し、Tune 成功を失敗にしない
+- `src/lizyml_widget/adapter.py`
+  - 必要に応じて `is_fitted(model)` 相当の判定ヘルパーを追加し、Widget 側で利用
+- 受け入れ条件
+  - Tune 本体成功時に `status="completed"` になる
+  - Tune-only 実行で `MODEL_NOT_FIT` が `status="failed"` の原因にならない
+
+#### 14-4. `available_plots` の Fit/Tune 状態整合（R4 対応）
+
+- `src/lizyml_widget/adapter.py`
+  - Fit 依存プロット（`learning-curve`, `oof-distribution`, `roc-curve`, `residuals`, `feature-importance`, calibration系）は `model` が Fit 済みのときのみ追加
+  - Tune-only の場合は `optimization-history` のみ（+将来必要な Tune 専用プロット）を返す
+- `js/src/tabs/ResultsTab.tsx`
+  - 返却された `available_plots` のみを選択可能にする（既存挙動の確認と不足があれば補強）
+- 受け入れ条件
+  - Tune-only 実行後に Fit 依存プロットを要求してエラーにならない
+
+#### 14-5. Tune Settings `metric` のスキーマ追従（互換性修正）
+
+- `js/src/tabs/ConfigTab.tsx`
+  - `tuning.optuna.params.metric` は schema に存在する場合のみ表示・保存
+  - `metric` 非対応 backend（例: lizyml 0.1.2）では UI 項目を非表示にする
+- BLUEPRINT.md
+  - 既存記載「LizyML スキーマでサポートされている場合のみ表示」を満たす実装条件を明文化
+- 受け入れ条件
+  - `metric` 非対応スキーマで Tune Settings を開いても `VALIDATION_ERROR` が増えない
+
+#### 14-6. 回帰テストの増強（実バックエンド中心）
+
+- `tests/test_widget_api.py`
+  - `tune()` 呼び出し時の `tuning` 補完テスト
+  - Tune 本体成功後に `status="completed"` を維持するテスト（`fit_summary` 空許容）
+- `tests/test_adapter.py`
+  - `available_plots()` が Tune-only で Fit 依存プロットを返さないこと
+  - Search Space 追加検証（不正形式を `VALIDATION_ERROR` として返す）
+- `tests/test_e2e.py`（実 backend または準実 backend）
+  - Tune 最小構成（`space={}`）で completed
+  - UI 相当 Search Space（Range/Choice）で completed
+
+#### 14-7. ドキュメント同期
+
+- `PLAN.md`（本フェーズ）
+  - 10-3 を「契約整合未完了（再オープン）」として注記し、Phase 14 を正本にする
+- `HISTORY.md`
+  - Proposal / Decision / Migration を追記（14-0 の結果）
+- `BLUEPRINT.md`
+  - Tune ボタン有効条件と `space={}` 利用方針の矛盾を解消する
+    - 方針候補A: Range/Choice 0件でも Tune 実行可（backend default space）
+    - 方針候補B: Range/Choice 1件必須（`space={}` default運用を仕様から除外）
+  - Decision は HISTORY に合わせて反映する
+
+**完了条件:**
+
+- Python API: `w.tune()` がデフォルト構成で `completed` まで到達する
+- UI: Search Space を 1件以上設定した Tune が `completed` になる
+- Tune-only 実行で `MODEL_NOT_FIT` により失敗しない
+- `available_plots` が実行状態（fit/tune）と矛盾しない
+- 追加した回帰テストで R1〜R4 を継続検知できる
+
+---
+
+### Phase 15: Widget ウィンドウ調整不具合の解消（2026-03-12 調査）✅
+
+**目標:** Notebook（Jupyter / VS Code / Colab）上で Widget 下端リサイズが実表示領域に反映され、Model タブの作業領域が実際に拡張される状態にする。
+
+**調査で確定した原因（2026-03-12）:**
+
+- C1: `js/src/index.tsx` と `js/src/App.tsx` の双方で `.lzw-root` が適用され、`lzw-root` コンテナが二重化している
+  - `index.tsx`: `el.classList.add("lzw-root")`
+  - `App.tsx`: `<div class="lzw-root">`
+  - 結果: 外側リサイズと内側表示領域が分離し、下部に空白が残る
+- C2: `js/src/widget.css` の `.lzw-root` が依然として `height: 620px; overflow: hidden;` で固定されており、Phase 12-1 の計画値（`min-height + resize + overflow:auto`）と不一致
+- C3: Phase 11-4（`index.tsx` への `lzw-root` 付与）と Phase 12-1（高さリサイズ方針）の整合が未完了のまま完了扱いとなり、回帰検知が漏れている
+
+#### 15-1. レイアウト責務の一本化（root クラス二重適用の解消）
+
+- `js/src/index.tsx` と `js/src/App.tsx` のどちらか一方のみを `.lzw-root` の所有者に統一する
+- 推奨方針: anywidget host 要素（`el`）を `.lzw-root` とし、`App.tsx` 側は `lzw-app` など別クラスへ分離
+- 受け入れ条件
+  - Notebook 上で `.lzw-root` が 1 コンテナのみ
+  - 二重 border / 二重スクロール領域が発生しない
+
+#### 15-2. 高さリサイズ CSS 契約の再実装
+
+- `js/src/widget.css` の `.lzw-root` を BLUEPRINT §5.1 と Phase 12-1 の意図に一致させる
+  - 固定 `height: 620px` を廃止
+  - `min-height: 620px` を下限として保持
+  - `resize: vertical` + `overflow: auto` で下端ドラッグを有効化
+- `.lzw-content` を含む内部 flex レイアウトに `min-height: 0` を適用し、親高さ変更時にスクロール領域が追従するようにする
+- 受け入れ条件
+  - 高さ拡張後、Model タブの見える行数が増える（空白だけ増えない）
+  - Fit/Tune サブタブ sticky が高さ変更後も維持される
+
+#### 15-3. Notebook 実行環境別の確認と最小再現手順の固定化
+
+- `notebooks/tutorial.ipynb` に「リサイズ確認セル」を追加し、手動確認手順を明文化する
+  - 手順例: Model タブで下端をドラッグ → 設定フォーム可視領域が増えることを確認
+- 確認対象を明示する
+  - JupyterLab（Linux/macOS）
+  - VS Code Notebooks（Windows を優先）
+- 受け入れ条件
+  - 上記 2 環境で同一手順により再現しない（調整が実効する）
+
+#### 15-4. 回帰防止テストの追加（静的契約 + UI 振る舞い）
+
+- `tests/` にフロントエンド契約の静的テストを追加する
+  - `App.tsx` と `index.tsx` の `.lzw-root` 重複を検知
+  - `widget.css` に固定 `height: 620px` が再導入された場合に失敗
+- 可能なら notebook 実行の E2E チェック（Phase 10-7）に「リサイズ後の表示領域拡張」を追加する
+- 受け入れ条件
+  - CI でレイアウト契約の退行を自動検知できる
+
+#### 15-5. ドキュメント整合（完了定義の是正）
+
+- `PLAN.md`
+  - Phase 12-1 を「完了済み」前提で残さず、Phase 15 で再オープンした理由を明記（本節）
+- `BLUEPRINT.md`
+  - §7.3（anywidget エントリ）と §7.5（CSS スコープ）の例を、root クラス単一運用ルールに合わせる
+- 受け入れ条件
+  - BLUEPRINT / PLAN / 実装の `lzw-root` 責務が一致する
+
+**完了条件:**
+
+- Notebook 上で Widget 下端ドラッグにより、実作業領域（フォーム可視領域）が増加する
+- `.lzw-root` の二重適用が解消され、二重スクロール/空白領域問題が再現しない
+- Windows（VS Code Notebooks）で同現象が再発しないことを確認できる
+- 回帰防止テストが追加され、固定高さと root 二重化の再発を CI で検知できる
+
+---
+
+### Phase 16: Tune Mode セグメントボタン化（2026-03-12 仕様更新）✅
+
+**目標:** Search Space の Mode（Fixed / Range / Choice）をプルダウンからセグメントボタンに置き換え、Tune 設定の操作速度と視認性を改善する。
+
+#### 16-1. SearchSpaceRow の Mode UI をセグメント化
+
+- `js/src/components/SearchSpace.tsx`
+  - 現在の Mode `<select>` を廃止し、行内セグメントボタン（2 or 3 分割）に置換
+  - パラメータ型ごとの許可モードのみ表示（例: 数値は Fixed/Range、boolean は Fixed/Choice）
+  - クリック 1 回でモード切替（Fixed → Range / Choice）
+- 受け入れ条件
+  - Mode 切替にドロップダウン操作が不要
+  - 現在モードが視覚的に常時判別できる
+
+#### 16-2. スタイル・レイアウト調整
+
+- `js/src/widget.css`
+  - Search Space 表の Mode 列向けに `.lzw-segment` 系スタイルを追加
+  - 既存テーブル幅で折り返しや崩れが出ないよう調整（Notebook 横幅で確認）
+  - active / hover / disabled 状態を定義
+- 受け入れ条件
+  - Data/Model/Results の既存スタイルと競合しない
+  - 狭いセル幅でも Mode UI が崩れない
+
+#### 16-3. アクセシビリティとキーボード操作
+
+- セグメント各ボタンに `type="button"` と適切な `aria-pressed` を付与
+- フォーカスリングを視認可能にし、Tab 操作で全モードに到達可能にする
+- 受け入れ条件
+  - マウスなしでも Mode 切替できる
+  - active 状態がスクリーンリーダー属性で判別できる
+
+#### 16-4. 回帰テストと仕様同期
+
+- `tests/` に Search Space Mode UI の回帰テストを追加
+  - Mode 切替で `tuning.optuna.space` 変換結果（`type=float/int/categorical`）が維持されること
+  - Fixed へ戻したとき key が `space` から除去されること
+- `BLUEPRINT.md` の §5.3（Tune サブタブ）と実装を一致させる
+- 受け入れ条件
+  - 既存 Tune フロー（実行成功・検証）を壊さない
+  - CI で Mode UI 変更の退行を検知できる
+
+**完了条件:**
+
+- Search Space の Mode 列がセグメントボタンになっている
+- 1 クリックで Mode が切り替わり、Config 入力欄が即時追従する
+- Tune 実行前後で `tuning.optuna.space` 契約（`type` ベース）が維持される
+- キーボード操作と回帰テストで再発防止できる
+
+---
+
+### Phase 17: 数値入力の大型ステッパー化（2026-03-12 仕様更新）✅
+
+**目標:** `number` / `integer` フィールドのブラウザ標準スピナー依存をやめ、押しやすい大型 `- / +` ステッパー（直接入力併用）へ統一する。
+
+#### 17-1. 共通 NumericStepper コンポーネント導入
+
+- `js/src/components/` に共通の数値入力コンポーネント（仮: `NumericStepper`）を追加
+  - 左右に大型 `-` / `+` ボタンを配置
+  - 中央に直接入力可能な数値フィールドを維持
+  - `step`, `min`, `max` を既存仕様に合わせて反映
+- 受け入れ条件
+  - 小さい上下スピナー操作なしで数値を増減できる
+  - 直接入力とボタン操作の両方が使える
+
+#### 17-2. Fit / Tune / Data の数値入力を置換
+
+- `js/src/tabs/ConfigTab.tsx`
+  - TypedParamsEditor, Training, Tune Settings, Log Output の数値項目を `NumericStepper` に置換
+- `js/src/components/SearchSpace.tsx`
+  - Fixed モード数値入力と Range の `low` / `high` を `NumericStepper` 化（Tune Search Space を含む）
+- `js/src/tabs/DataTab.tsx` / `js/src/components/ColumnTable.tsx`（該当箇所）
+  - CV Folds / Gap / Purge Gap / Embargo / random_state など数値項目を置換
+- 受け入れ条件
+  - 主要数値項目がすべて大型 `- / +` ステッパーで操作できる
+  - 既存の `step` 挙動（Phase 12-6）を維持する
+
+#### 17-3. スタイルとアクセシビリティ
+
+- `js/src/widget.css`
+  - `.lzw-stepper` 系スタイルを追加（ヒットエリア拡大、active/disabled/focus）
+  - 数値入力欄の `min-width` を拡張（例: `8ch`）し、桁数の多い値でも欠けないようにする
+  - ブラウザ標準 number spinner を非表示化
+- キーボード操作（Tab / ArrowUp / ArrowDown）とスクリーンリーダー属性を確認
+- 受け入れ条件
+  - マウス操作で押しにくさが解消される
+  - 数値欄の桁欠けが発生しない
+  - キーボード操作性と視認性を損なわない
+
+#### 17-4. 回帰テストとドキュメント同期
+
+- `tests/` に数値入力コンポーネントの回帰テストを追加
+  - `+/-` クリックで `step` どおりに増減
+  - `min/max` 境界を超えない
+  - 直接入力時の値検証が従来と同等
+- `BLUEPRINT.md` §5.2 / §5.3 の数値入力仕様と一致を確認
+- 受け入れ条件
+  - Tune / Fit / Data の既存機能回帰がない
+  - CI で数値入力 UI の退行を検知できる
+
+**完了条件:**
+
+- 数値入力 UI がブラウザ標準スピナーから大型 `- / +` ステッパーへ置換されている
+- Data / Fit / Tune / Search Space の数値項目で一貫した操作体験を提供できる
+- `step` / `min` / `max` 契約を維持したまま操作性が向上している
+- 数値入力欄の表示幅が十分で、値が見切れない
+- 回帰テストで増減ロジックと境界条件を継続検知できる
+
+---
+
+### Phase 18: CSS Grid + `minmax()` で列幅自動調整 ✅
+
+**目標:** Column Settings / Search Space を `<table>` 依存から CSS Grid へ置換し、`minmax()` による列幅の完全自動調整を実現する。
+
+#### 18-1. Column Settings の Grid 置換
+
+- `js/src/components/ColumnTable.tsx`
+  - `<table>` / `<tr>` / `<td>` 構造を Grid 行コンポーネントへ置換
+  - ヘッダー行・データ行で同一 `grid-template-columns` を共有する
+- `js/src/widget.css`
+  - `.lzw-columns-grid` に `grid-template-columns: minmax(14rem, 2.4fr) minmax(4.5rem, 0.8fr) minmax(4.5rem, 0.8fr) minmax(12rem, 1.8fr)` を適用
+  - セル内コントロールは `width: 100%` を基本とする
+- 受け入れ条件
+  - Column / Uniq / Excl / Type の列幅が内容に応じて自然に伸縮する
+  - 既存アクション（`update_column`）と列意味が不変
+
+#### 18-2. Search Space の Grid 置換
+
+- `js/src/components/SearchSpace.tsx`
+  - Search Space の行表示を Grid 化（Param / Mode / Config）
+  - Mode 切替と `tuning.optuna.space` 変換ロジックは既存のまま維持
+- `js/src/widget.css`
+  - `.lzw-search-space-grid` に `grid-template-columns: minmax(14rem, 2.6fr) minmax(9rem, 1.2fr) minmax(16rem, 2.2fr)` を適用
+  - Config 列コントロールを `width: 100%` で収める
+- 受け入れ条件
+  - Search Space の列が過不足なく自動調整される
+  - Range / Choice / Fixed 切替の挙動が回帰しない
+
+#### 18-3. 狭幅フォールバックと確認
+
+- Notebook（JupyterLab / VS Code Notebooks）で横幅の異なるセルを確認
+- `.lzw-table-wrap` / `.lzw-search-space` の `overflow-x: auto` を維持し、狭幅時は横スクロールへ退避
+- 必要に応じて CSS 契約テスト（Grid テンプレート破壊の検知）を追加
+- 受け入れ条件
+  - 広い画面で間延びが解消される
+  - 狭い画面でレイアウト崩れなく操作できる
+
+**完了条件:**
+
+- Column Settings / Search Space が CSS Grid + `minmax()` で安定動作する
+- 列幅調整が手動チューニング不要で、内容ベースに自動追従する
+- Notebook 環境差分でも可読性と操作性が維持される
+
+---
+
+### Phase 19: Apply to Fit の Tune 設定フル同期 ✅
+
+**目標:** Tune 完了後の [Apply to Fit ▸] 実行時に、Fit 画面の全パラメータを Tune 実行時設定と一致させる。
+
+#### 19-1. Tune 実行時 config スナップショット保持
+
+- `src/lizyml_widget/widget.py` / `src/lizyml_widget/service.py`
+  - Tune 実行開始時の有効 config（build 後）を内部状態として保持
+  - 後続の Apply to Fit で参照できる形にする
+- 受け入れ条件
+  - Tune 完了後に「どの設定で Tune したか」を復元可能
+
+#### 19-2. `apply_best_params` の適用順序を更新
+
+- `apply_best_params` action の処理を以下に統一:
+  1. Tune 実行時 config スナップショットを復元
+  2. `best_params` を `model.params` に上書き
+  3. Model タブ Fit サブタブへ切り替え
+- 旧仕様（`model.params` への単純マージ）を本仕様で置換
+- 受け入れ条件
+  - Apply to Fit 後、Fit 画面の全項目（model/training/evaluation/calibration/output_dir 等）が Tune 実行時設定と一致する
+
+#### 19-3. UI 同期と回帰テスト
+
+- `js/src/tabs/ResultsTab.tsx` / `js/src/App.tsx` / `js/src/tabs/ConfigTab.tsx`
+  - Apply to Fit 実行後、Fit サブタブに遷移し、復元済み config を即時表示する
+- `tests/test_widget_api.py` / `tests/test_e2e.py`
+  - 「Tune 実行 → Apply to Fit」で Fit 画面設定が Tune 実行時と一致する回帰テストを追加
+  - `best_params` が `model.params` に反映されることを検証
+- 受け入れ条件
+  - 既存の Tune 完了導線を壊さず、Apply to Fit の再現性が保証される
+
+**完了条件:**
+
+- [Apply to Fit ▸] 実行後、Fit 画面が Tune 実行時設定と一致する
+- `best_params` が `model.params` に適用された状態で再学習を開始できる
+- テストで同期退行（部分マージへの後退）を検知できる
+
+---
+
+### Phase 20: Tune Settings `metric` のセグメントボタン化（2026-03-13 仕様更新）✅
+
+**目標:** Tune Settings の `metric` 選択 UI をセグメントボタン化し、`Default` 選択肢を廃止して選択意図を明確化する。
+
+#### 20-1. Tune Settings の `metric` 入力 UI 置換
+
+- `js/src/tabs/ConfigTab.tsx`
+  - `tuning.optuna.params.metric` の `<select>` を廃止
+  - `METRIC_OPTIONS[task]` のみを単一選択セグメントボタンに置換（`Default` なし）
+  - 初期選択は `METRIC_OPTIONS[task][0]` を採用し、選択値を `tuning.optuna.params.metric` に保存
+- 受け入れ条件
+  - 1 クリックで metric が切り替わる
+  - 選択中の metric が常時強調表示される
+
+#### 20-2. スキーマ互換条件の維持
+
+- `js/src/tabs/ConfigTab.tsx`
+  - 既存仕様どおり、backend schema が `tuning.optuna.params.metric` をサポートする場合のみ表示
+  - 非サポート時は UI を非表示とし、保存 payload に `metric` を含めない
+- `js/src/components/SearchSpace.tsx` / `js/src/tabs/ConfigTab.tsx`
+  - `tuning.optuna.space.metric` は `model.params.metric` 探索用の Search Space エントリとして扱う（Tune Settings の `params.metric` とは別概念）
+  - Search Space で `metric` を Choice にした場合、`type="categorical"` + `choices` 形式で保存されることを維持
+- 受け入れ条件
+  - `metric` 非対応 backend（例: lizyml 0.1.2）でバリデーションエラーを増やさない
+  - 既存の Tune 実行導線（`n_trials` / `space`）が不変
+  - Search Space `metric` が trial ごとに LightGBM `model.params.metric` へ反映される
+
+#### 20-3. スタイル・アクセシビリティ・回帰確認
+
+- `js/src/widget.css`
+  - Tune Settings 用セグメントスタイル（ヒットエリア、active/focus/disabled）を追加
+- `tests/`（必要に応じて）
+  - metric 切替時に保存値が即時反映されること
+  - 初期表示が `METRIC_OPTIONS[task][0]` であること
+- 受け入れ条件
+  - マウス・キーボード双方で操作できる
+  - 既存の Search Space Mode セグメント UI と操作感が揃う
+
+**完了条件:**
+
+- Tune Settings の `metric` がセグメントボタンで表示される
+- `Default` 選択肢が存在せず、`METRIC_OPTIONS[task]` から直接選択できる
+- schema 非対応時の非表示条件を維持したまま UX が改善される
+- Search Space で探索した `metric` が `best_params.metric` として解釈できる
+
+---
+
+### Phase 21: Data タブの Task / CV Strategy チップ選択化（2026-03-13 仕様更新）✅
+
+**目標:** Data タブで頻繁に切り替える `Task` と `CV Strategy` をチップ選択に統一し、選択速度と現在値の視認性を向上する。
+
+#### 21-1. Task 選択 UI のチップ化
+
+- `js/src/tabs/DataTab.tsx`
+  - Task 入力をドロップダウンから単一選択チップへ置換
+  - 候補は `binary` / `multiclass` / `regression`
+  - 自動判定値は初期 active チップとして表示し、`⚡auto` 表示を維持
+- 受け入れ条件
+  - 1 クリックで Task を切り替えられる
+  - 自動判定値と手動変更値が視覚的に区別できる
+
+#### 21-2. CV Strategy 選択 UI のチップ化
+
+- `js/src/tabs/DataTab.tsx`
+  - CV Strategy 入力をドロップダウンから単一選択チップへ置換
+  - 候補は `split.method` の許可値（`kfold` / `stratified_kfold` / `group_kfold` / `time_series` / `purged_time_series` / `group_time_series`）
+  - Strategy 依存表示（group/time 系追加項目）は既存ロジックを維持
+- 受け入れ条件
+  - Strategy 変更で条件付きフィールド表示が即時更新される
+  - 既存の `update_cv` payload 契約が不変
+
+#### 21-3. スタイル・回帰テスト
+
+- `js/src/widget.css`
+  - Data タブ用チップ群の折返し・active/focus/disabled スタイルを追加
+- `tests/`（必要に応じて）
+  - Task/Strategy のチップ選択で `action` payload が正しく送信されることを検証
+- 受け入れ条件
+  - 狭幅 Notebook でもチップが操作可能
+  - キーボード操作（Tab/Enter/Space）で切替できる
+
+**完了条件:**
+
+- Data タブの Task / CV Strategy がチップ選択 UI になっている
+- 選択変更時のデータフロー（`set_task` / `update_cv`）が既存契約と一致する
+- 可読性と操作速度がドロップダウン方式より改善される
+
+---
+
+### Phase 22: Config 受け渡し契約の確定 + 仕様逸脱検知テスト拡充（計画）
+
+**目標:** UI（Preact）と LizyML backend 間で受け渡す Config 契約を詳細に確定し、契約外フォーマットを自動で検知して Tune/Fit 失敗を未然に防ぐ。
+
+#### 22-1. Config 契約の棚卸しと正規化ポイントの明示
+
+- `BLUEPRINT.md` / 現行コード / LizyML schema を突き合わせ、受け渡し対象キーを「責務別」に棚卸しする
+  - Data/Features/Split（Data タブ責務）
+  - Model/Training/Evaluation/Calibration（Fit タブ責務）
+  - Tuning/Optuna params/space（Tune タブ責務）
+- UI 値（Fixed/Range/Choice）から LizyML 受理形式（`type=float/int/categorical`）への変換契約を明記する
+- Python 側で補完する既定値（例: `tuning.optuna.params.n_trials`）の適用条件を契約化する
+- 受け入れ条件
+  - 「どのレイヤーで、どの形に変換・補完するか」が一意に説明できる
+  - Tune/Fit 実行前に満たすべき最小構成が明文化される
+
+#### 22-2. 仕様ドキュメントの詳細化（契約テーブル化）
+
+- `BLUEPRINT.md` に Config 契約セクションを追加/拡張し、以下を表形式で確定する
+  - path（例: `tuning.optuna.space.<param>`）
+  - 型/許容値/必須条件
+  - 生成元（UI入力 / Python API / 自動補完）
+  - 変換責務（UI / WidgetService / Adapter）
+  - 契約違反時の期待エラーコード（`VALIDATION_ERROR` / `BACKEND_ERROR` など）
+- 契約更新が変更ゲート対象に該当する場合は `HISTORY.md` Proposal を先行して記録する運用を明記
+- 受け入れ条件
+  - 受け渡し仕様を読めば、実装せずに payload 正誤判定が可能
+  - 既存仕様（P-004/P-005/P-007/P-020）との矛盾がない
+
+#### 22-3. 契約バリデーション強化（実装計画）
+
+- `src/lizyml_widget/adapter.py` / `src/lizyml_widget/service.py` の前処理で契約外入力を早期検知する
+  - 旧形式（`mode=range/choice`）の明示的拒否
+  - 不正 `type` 値（`range` / `choice` 等）の明示的拒否
+  - 必須フィールド欠落時のエラーメッセージ統一
+- 受け入れ条件
+  - backend 実行前に契約違反を検知できる
+  - ユーザーが修正可能なエラーメッセージ（path付き）を返せる
+
+#### 22-4. テスト拡充（仕様逸脱の自動検知）
+
+- `tests/test_frontend_contract.py`
+  - Search Space の Mode 切替が `type=float/int/categorical` を保存すること
+  - Tune 実行ボタン有効条件と `space` 契約の整合
+- `tests/test_widget_api.py`
+  - `update_config` 経由で契約外 payload を与えた際の `VALIDATION_ERROR` 検証
+  - 既定値補完（`tuning` 欠落時）と契約維持の回帰テスト
+- `tests/test_adapter.py`
+  - 契約違反ケースをテーブル駆動で追加（legacy mode / invalid type / 欠落項目）
+  - 契約準拠ケース（float/int/categorical）が通ることを保証
+- `tests/test_e2e.py`
+  - UI相当 payload で Fit/Tune 完了まで通る正常系
+  - 契約違反 payload で失敗コード・メッセージが期待どおりの異常系
+- 受け入れ条件
+  - 契約破壊（UI変更・backend更新）を CI で即時検知できる
+  - 「失敗を再現してから調査」ではなく「テストで事前検知」へ移行できる
+
+#### 22-5. 回帰運用と完了判定
+
+- CI で契約検証テストを必須ゲートとして扱う
+- ドキュメント変更時は契約テスト同時更新をルール化する
+- 完了条件
+  - Config 契約が BLUEPRINT に固定化され、参照先が一意である
+  - 契約逸脱ケースの主要パターンが自動テストで網羅されている
+  - UI/Widget/Adapter のどこで壊れてもテストで原因層を特定できる
+
+---
+
+### Phase 23: 入力コントロール統一の追補（2026-03-13 仕様更新）📝
+
+**目標:** Data/Model/Tune の入力操作を「セグメント（単一選択）」「チップ（複数選択）」「数値幅固定 75px」に統一し、UI 一貫性と視認性を高める。
+
+#### 23-1. 数値入力幅を `75px` へ統一
+
+- `js/src/widget.css` / `js/src/components/NumericStepper.tsx`
+  - `lzw-stepper` の入力欄を `75px` 固定幅に更新
+  - Fit / Data / Tune / Search Space の全 `NumericStepper` で同一幅を適用
+- 受け入れ条件
+  - 主要数値項目で横幅が統一される
+  - 桁数の異なる値でも視認性が維持される
+
+#### 23-2. Data タブの単一選択 UI をセグメントで統一
+
+- `js/src/tabs/DataTab.tsx`
+  - Task をセグメントボタン化（`binary` / `multiclass` / `regression`）
+  - Cross Validation Strategy をセグメントボタン化（既存候補を維持）
+  - Column Settings の Type（Numeric/Categorical）をセグメントボタン化
+- 受け入れ条件
+  - Task / Strategy / Type の単一選択がすべてセグメントで操作できる
+  - `set_task` / `update_cv` / `update_column` の payload 契約が不変
+
+#### 23-3. Model タブの複数選択 UI をチップで統一
+
+- `js/src/tabs/ConfigTab.tsx`
+  - Model `metric` をチップボタン（複数選択）に変更
+  - Evaluation `metrics` をチップボタン（複数選択）に変更
+  - Training `inner_valid` は UI の先頭選択肢を `Default` 表示に統一（保存値は `null`）
+- 受け入れ条件
+  - metric 系の複数選択 UI がチップボタンに統一される
+  - `inner_valid` の初期状態が `Default` として明示される
+
+#### 23-4. Tune Search Space `metric` をチップ複数選択化
+
+- `js/src/components/SearchSpace.tsx`
+  - `metric`（Choice モード）の候補選択 UI をチップボタン（複数選択）へ変更
+  - `config.choices` への保存形式（string 配列）と `type="categorical"` 契約を維持
+- 受け入れ条件
+  - Search Space `metric` がチップUIで複数選択できる
+  - `tuning.optuna.space.metric` 契約と Tune 実行結果が回帰しない
+
+#### 23-5. テストと回帰検知
+
+- `tests/test_frontend_contract.py` / `tests/test_widget_api.py` / `tests/test_e2e.py`
+  - 単一選択（Task/Strategy/Type）がセグメント化されても payload 契約が不変であること
+  - 複数選択（Model/Evaluation/SearchSpace metric）がチップ化されても保存値が配列で一致すること
+  - `inner_valid=Default` 表示時に `null` 保存となること
+  - NumericStepper 幅 `75px` のスタイル契約テスト（CSS 回帰検知）
+- 受け入れ条件
+  - UI 変更がデータフローを壊さないことをテストで担保できる
+  - Notebook 環境差でも表示崩れ・操作退行を検知できる
+
+**完了条件:**
+
+- 数値入力幅が `75px` に統一される
+- Data タブの単一選択（Task / Type / Strategy）がセグメント化される
+- Model/Tune の複数選択 metric UI がチップボタンに統一される
+- `inner_valid` の Default 表示と `null` 保存契約が一致する
+
+---
+
+### Phase 24: Widget / Service 疎結合化（2026-03-13 仕様更新）📝
+
+**目標:** Widget を traitlets / Action / スレッド管理に限定し、config 初期化・実行準備・保存委譲を `WidgetService` に集約して境界を明確化する。
+
+#### 24-1. Widget の backend 直結を解消
+
+- `src/lizyml_widget/widget.py`
+  - `LizyWidget.__init__` に `adapter: BackendAdapter | None = None` を追加
+  - `adapter` 未指定時のみ `LizyMLAdapter` を既定採用する
+- 受け入れ条件
+  - `LizyWidget()` の既存呼び出し互換を維持する
+  - テストや将来 backend で adapter 注入ができる
+
+#### 24-2. config 初期化 / task 補完 / Tune 補完を Service へ集約
+
+- `src/lizyml_widget/service.py`
+  - schema default 展開 + `model.name` / `model.params` 既定値補完を Service の公開メソッドへ移す
+  - task 変更時の `objective` / `metric` 補完を Service の公開メソッドへ移す
+  - Fit/Tune 実行前の full config 構築と Tune `tuning` 補完を Service の公開メソッドへ移す
+- 受け入れ条件
+  - Widget が config 補完ロジックを持たない
+  - UI / Python API / YAML import の導線で同一の補完規則が使われる
+
+#### 24-3. private 境界越えを除去
+
+- `src/lizyml_widget/widget.py` / `src/lizyml_widget/service.py`
+  - `has_data()` / `has_target()` / `save_model()` / config 読込適用 API を Service に追加
+  - Widget から `_service._df` / `_service._df_info` / `_service._adapter` 参照を除去する
+- 受け入れ条件
+  - `widget.py` に Service private 属性参照が残らない
+  - Save / Load Config / Fit / Tune の既存挙動が維持される
+
+#### 24-4. テスト整備
+
+- `tests/test_service.py` / `tests/test_widget_api.py`
+  - Service の config 初期化・task params 補完・Tune 補完・YAML 適用を単体テスト化する
+  - Widget の adapter 注入と Save Model 委譲を検証する
+- 受け入れ条件
+  - Widget / Service 境界の回帰が自動テストで検知できる
+  - private 境界越えが再導入されてもテストで気づける
+
+**完了条件:**
+
+- Widget から Service private 参照が除去される
+- config 初期化 / 実行準備 / 保存委譲が Service の公開 API に集約される
+- `LizyWidget(adapter=...)` が利用可能になる
+- 既存の Fit / Tune / Config I/O テストが通る
+
+---
+
+### Phase 25: Backend Contract 駆動の完全疎結合化（2026-03-13 部分完了 / 要追補）📝
+
+**目標:** backend 固有の option set / parameter catalog / step 値 / default / Search Space 定義を Adapter の `Backend Contract` へ集約し、UI を `backend_contract` + `config` の generic renderer にする。
+
+#### 25-1. 共通型と Adapter Protocol を contract 駆動へ拡張
+
+- `src/lizyml_widget/types.py`
+  - `BackendContract`
+  - `ConfigPatchOp`
+- `src/lizyml_widget/adapter.py`
+  - `get_backend_contract()`
+  - `initialize_config(task=...)`
+  - `apply_config_patch(config, ops, task=...)`
+  - `prepare_run_config(config, job_type=..., task=...)`
+- 受け入れ条件
+  - backend 固有の UI/Config metadata を Adapter だけが所有する
+  - WidgetService / UI が backend 固有 default や候補値を再定義しない
+
+#### 25-2. traitlets / Action を patch ベースへ移行
+
+- `src/lizyml_widget/widget.py`
+  - `config_schema` traitlet を `backend_contract` traitlet へ置き換える
+  - `update_config` action を `patch_config` action へ置き換える
+  - canonical config は Python 側でのみ正とし、UI は snapshot を表示する
+- 受け入れ条件
+  - JS が full config dict を送らなくても設定変更が完結する
+  - YAML import / Python API / Notebook UI が同じ canonicalization 経路を通る
+
+#### 25-3. Frontend を contract-driven renderer 化
+
+- `js/src/tabs/ConfigTab.tsx` / `js/src/components/DynForm.tsx` / `js/src/components/SearchSpace.tsx`
+  - `backend_contract.ui_schema` からセクション構成・field 表示順・option set・step 値・Search Space catalog を描画する
+  - Search Space の `mode=Fixed/Range/Choice` は UI ローカル state に閉じ込め、送信時だけ `type=float/int/categorical` へ正規化する
+  - JS から `OBJECTIVE_OPTIONS` / `METRIC_OPTIONS` / LightGBM 固有 parameter catalog / step 定数を除去する
+- 受け入れ条件
+  - 別 backend を追加しても UI の主要ロジックを書き換えずに描画できる
+  - Tune の empty search space 許可などの実行条件が `backend_contract.capabilities` だけで決まる
+
+#### 25-4. Service を orchestration 専任に整理
+
+- `src/lizyml_widget/service.py`
+  - Data タブ由来 state（target / task / columns / CV）と canonical config の結合に責務を限定する
+  - backend 固有 default / option set / search space catalog / step 値を削除する
+  - Fit / Tune 実行前は `prepare_run_config()` を経由して最終 config を組み立てる
+- 受け入れ条件
+  - Service が backend 固有 constant を持たない
+  - 実行可否判定が UI / Python API / YAML import で一致する
+
+#### 25-5. 互換性・テスト・移行
+
+- `tests/test_service.py`
+  - canonical config 生成と Data state merge を検証
+- `tests/test_widget_api.py`
+  - `patch_config` / `backend_contract` traitlet 契約を検証
+- `tests/test_frontend_contract.py`
+  - contract-driven rendering と Search Space `mode -> type` 正規化を検証
+- 既存 `update_config` / `config_schema` 導線は互換期間を設けるか、P-011 に従って一括移行する
+- 受け入れ条件
+  - backend contract と UI の齟齬を CI で自動検知できる
+  - 初期 backend（LizyML）以外を追加しても主要 UI を再設計しなくてよい
+
+**完了条件:**
+
+- UI から backend 固有 option set / parameter catalog / step 定数が除去される
+- `backend_contract` traitlet と `patch_config` action で Model/Tune 編集が完結する
+- Adapter だけが backend 固有 config metadata を所有する
+- canonical config 生成経路が UI / Python API / YAML import で統一される
+
+**監査メモ（2026-03-13）:**
+
+- `25-1` は概ね完了したが、`25-2`〜`25-5` には追補が必要。
+- `set_config()` / `load_config()` / `import_yaml` が UI patch と同じ canonicalization 経路を通っていない。
+- `training.early_stopping.inner_valid` は監査時点の UI 実装が backend schema とずれており、現在の UI 形式（`"holdout"` / `"fold_0"` など）で `VALIDATION_ERROR` が再現する。
+- Tune の empty search space 許可は `backend_contract.capabilities` だけで決まっておらず、frontend が独自判定を持っている。
+- frontend / service の backend-specific special case と、CI の検知穴を埋める追補を Phase 26 で扱う。
+
+---
+
+### Phase 26: Canonical Config 経路統一 + `inner_valid` 契約整合化（P-012, 計画）
+
+**目標:** UI / Python API / YAML import の config 導線を単一 canonicalization path に統一し、`inner_valid` の schema 不整合で起きている `VALIDATION_ERROR` を解消する。
+
+#### 26-1. 外部 Config 入力の canonicalization を統一
+
+- `src/lizyml_widget/widget.py` / `src/lizyml_widget/service.py` / `src/lizyml_widget/adapter.py`
+  - `set_config()` / `load_config()` / `import_yaml` が UI `patch_config` と同じ canonicalization hook を通るよう整理する
+  - `config` traitlet には常に canonical config snapshot だけを保持する
+  - partial dict / partial YAML 入力でも `config_version` / `model.name` / backend-required default を同一規則で補完する
+- 受け入れ条件
+  - `w.set_config({"model": {"params": {}}}).get_config()` が canonical shape を返す
+  - `load_config()` / YAML import / UI patch 後の `get_config()` が同じ規則で整形される
+
+#### 26-2. `training.early_stopping.inner_valid` の契約を backend schema と一致させる
+
+- `BLUEPRINT.md` / `js/src/tabs/ConfigTab.tsx` / `js/src/components/DynForm.tsx` / `src/lizyml_widget/adapter.py`
+  - canonical config 上の `inner_valid` を `HoldoutInnerValidConfig | GroupHoldoutInnerValidConfig | TimeHoldoutInnerValidConfig | null` に統一する
+  - UI は表示都合で selector state を持てるが、Python に送る payload は object/null へ正規化する
+  - `fold_0` など split 表示専用の値は canonical config に入れない
+  - 互換期間中は legacy alias (`holdout` / `group_holdout` / `time_holdout`) を Adapter が object へ正規化してもよい
+- 受け入れ条件
+  - Config Tab で Inner Validation を変更しても `VALIDATION_ERROR` が発生しない
+  - Raw Config / YAML export に string alias ではなく canonical object/null が出力される
+
+#### 26-3. Validation failure の診断情報を改善
+
+- `src/lizyml_widget/adapter.py` / `src/lizyml_widget/widget.py`
+  - `adapter.validate_config()` が `LizyMLError.__cause__` の `ValidationError.errors()` も読み、field/path/type を返すよう改善する
+  - UI / Python API に返す `error.details` で根因 path を追えるようにする
+- 受け入れ条件
+  - `training.early_stopping.inner_valid` 型不一致時に field path が `error.details` に出る
+  - generic な `[CONFIG_INVALID]` だけで止まらず、修正箇所が判別できる
+
+#### 26-4. Phase 25 残課題の追補
+
+- `js/src/tabs/ConfigTab.tsx` / `js/src/components/SearchSpace.tsx` / `src/lizyml_widget/service.py`
+  - Tune 実行条件を `backend_contract.capabilities` 起点へ寄せ、frontend 独自判定を削減する
+  - backend-specific section/field special case を減らし、generic renderer 化を進める
+  - Service に残る `lgbm` / `objective` / `metric` / `auto_num_leaves` 固定ロジックを Adapter へ戻す
+- 受け入れ条件
+  - empty search space 許可可否が `backend_contract.capabilities` だけで決まる
+  - Service が backend 固有 constant を保持しない
+
+#### 26-5. 回帰テストを追加
+
+- `tests/test_widget_api.py` / `tests/test_service.py` / `tests/test_adapter.py` / `tests/test_frontend_contract.py` / `tests/test_e2e.py`
+  - `set_config()` / `load_config()` / YAML import の canonicalization 経路統一を検証する
+  - `inner_valid` の UI 相当入力と canonical object 出力を検証する
+  - `error.details` に nested field path が入ることを検証する
+  - `backend_contract.capabilities` による Tune 実行条件を検証する
+- 受け入れ条件
+  - 現在の validation failure を CI で再現・検知できる
+  - Phase 25 の残課題が再導入されても自動テストで気づける
+
+**完了条件:**
+
+- UI / Python API / YAML import の config 経路が単一 canonicalization path に統一される
+- `inner_valid` の schema 不整合による `VALIDATION_ERROR` が解消される
+- Validation error details に根因 path/type が含まれる
+- Phase 25 の完了条件を CI で継続検証できる

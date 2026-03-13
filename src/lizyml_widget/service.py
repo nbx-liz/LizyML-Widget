@@ -3,41 +3,21 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import pandas as pd
 
 from .adapter import BackendAdapter
 from .types import (
+    BackendContract,
     BackendInfo,
-    ConfigSchema,
+    ConfigPatchOp,
     FitSummary,
     PlotData,
     PredictionSummary,
     TuningSummary,
 )
-
-# LightGBM model.params defaults for pre-population (BLUEPRINT §5.3)
-_LGBM_PARAMS_TASK_INDEPENDENT: dict[str, Any] = {
-    "n_estimators": 1500,
-    "learning_rate": 0.001,
-    "max_depth": 5,
-    "max_bin": 511,
-    "feature_fraction": 0.7,
-    "bagging_fraction": 0.7,
-    "bagging_freq": 10,
-    "lambda_l1": 0.0,
-    "lambda_l2": 0.000001,
-    "first_metric_only": False,
-    "verbose": -1,
-}
-
-_LGBM_PARAMS_BY_TASK: dict[str, dict[str, Any]] = {
-    "regression": {"objective": "huber", "metric": ["huber", "mae", "mape"]},
-    "binary": {"objective": "binary", "metric": ["auc", "binary_logloss"]},
-    "multiclass": {"objective": "multiclass", "metric": ["auc_mu", "multi_logloss"]},
-}
 
 
 class WidgetService:
@@ -57,6 +37,14 @@ class WidgetService:
     @property
     def info(self) -> BackendInfo:
         return self._adapter.info
+
+    def has_data(self) -> bool:
+        """Return whether training data has been loaded."""
+        return self._df is not None
+
+    def has_target(self) -> bool:
+        """Return whether a target column is currently selected."""
+        return bool(self._df_info.get("target"))
 
     # ── Data management ──────────────────────────────────────
 
@@ -179,25 +167,42 @@ class WidgetService:
         """Return a copy of the current df_info state."""
         return copy.deepcopy(self._df_info)
 
-    def initial_model_params(
-        self, task: str | None, *, auto_num_leaves: bool = True
-    ) -> dict[str, Any]:
-        """Return LightGBM model.params defaults to pre-populate (BLUEPRINT §5.3)."""
-        params: dict[str, Any] = dict(_LGBM_PARAMS_TASK_INDEPENDENT)
-        if task and task in _LGBM_PARAMS_BY_TASK:
-            params.update(_LGBM_PARAMS_BY_TASK[task])
-        if not auto_num_leaves:
-            params["num_leaves"] = 256
-        return params
+    def get_backend_contract(self) -> BackendContract:
+        """Return the backend contract (delegated to adapter)."""
+        return self._adapter.get_backend_contract()
 
-    def get_task_params(self, task: str) -> dict[str, Any]:
-        """Return task-dependent model.params (objective/metric) only."""
-        return dict(_LGBM_PARAMS_BY_TASK.get(task, {}))
+    def initialize_config(self) -> dict[str, Any]:
+        """Build the initial widget config (delegated to adapter)."""
+        return self._adapter.initialize_config(task=self._df_info.get("task"))
+
+    def apply_config_patch(
+        self, config: dict[str, Any], ops: Sequence[ConfigPatchOp]
+    ) -> dict[str, Any]:
+        """Apply config patch operations (delegated to adapter)."""
+        return self._adapter.apply_config_patch(config, ops, task=self._df_info.get("task"))
+
+    def canonicalize_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Canonicalize a partial/full config via adapter defaults (delegated to adapter)."""
+        return self._adapter.canonicalize_config(config, task=self._df_info.get("task"))
+
+    def apply_task_params(self, config: dict[str, Any], task: str) -> dict[str, Any]:
+        """Re-initialize config with new task to apply task-dependent defaults."""
+        new_config = self._adapter.initialize_config(task=task)
+        # Extract task-dependent params from initialized config
+        new_params = new_config.get("model", {}).get("params", {})
+        task_keys = {"objective", "metric"}
+        task_params = {k: v for k, v in new_params.items() if k in task_keys}
+
+        if not task_params:
+            return copy.deepcopy(config)
+
+        ops = [
+            ConfigPatchOp(op="set", path=f"model.params.{k}", value=v)
+            for k, v in task_params.items()
+        ]
+        return self._adapter.apply_config_patch(config, ops, task=task)
 
     # ── Config ───────────────────────────────────────────────
-
-    def get_config_schema(self) -> ConfigSchema:
-        return self._adapter.get_config_schema()
 
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
         return self._adapter.validate_config(config)
@@ -258,22 +263,48 @@ class WidgetService:
 
         # Ensure required top-level fields are present (BLUEPRINT §5.3)
         result.setdefault("config_version", 1)
-        if "model" not in result:
-            result["model"] = {"name": "lgbm", "params": self.initial_model_params(info["task"])}
-        elif not result["model"].get("name"):
-            result["model"]["name"] = "lgbm"
-
-        # Enforce auto_num_leaves exclusivity (BLUEPRINT §5.3)
-        model = result.get("model", {})
-        auto_nl = model.get("auto_num_leaves", True)
-        params = dict(model.get("params", {}))
-        if auto_nl:
-            params.pop("num_leaves", None)
-        elif "num_leaves" not in params:
-            params["num_leaves"] = 256
-        result["model"] = {**model, "params": params}
+        result.setdefault("model", {}).setdefault("name", "lgbm")
 
         return result
+
+    def apply_loaded_config(self, loaded_config: dict[str, Any]) -> dict[str, Any]:
+        """Apply parsed config to service state; return canonicalized widget-owned keys."""
+        loaded = copy.deepcopy(loaded_config)
+        data_section = loaded.pop("data", {})
+        loaded.pop("features", {})  # consumed by build_config from df_info
+        split_section = loaded.pop("split", {})
+        loaded.pop("task", None)
+
+        if "target" in data_section and self.has_data():
+            self.set_target(data_section["target"])
+
+        if split_section:
+            strategy = split_section.get("method", split_section.get("strategy", "kfold"))
+            n_splits = split_section.get("n_splits", 5)
+            self.update_cv(
+                strategy,
+                n_splits,
+                group_column=split_section.get("group_col", split_section.get("group_column")),
+                time_column=data_section.get("time_col"),
+                random_state=split_section.get("random_state", 42),
+                shuffle=split_section.get("shuffle", True),
+                gap=split_section.get("gap", 0),
+                purge_gap=split_section.get("purge_gap", 0),
+                embargo=split_section.get("embargo", 0),
+                train_size_max=split_section.get("train_size_max"),
+                test_size_max=split_section.get("test_size_max"),
+            )
+
+        return self.canonicalize_config(loaded)
+
+    def prepare_run_config(self, user_config: dict[str, Any], *, job_type: str) -> dict[str, Any]:
+        """Build the executable config for a job, delegating backend defaults to adapter."""
+        full_config = self.build_config(copy.deepcopy(user_config))
+        return self._adapter.prepare_run_config(
+            full_config,
+            job_type=job_type,  # type: ignore[arg-type]
+            task=self._df_info.get("task"),
+        )
 
     # ── Execution ────────────────────────────────────────────
 
@@ -352,6 +383,13 @@ class WidgetService:
 
     def get_model(self) -> Any:
         return self._model
+
+    def save_model(self, path: str) -> str:
+        """Persist the current trained model using the active adapter."""
+        if self._model is None:
+            msg = "No trained model. Run fit or tune first."
+            raise ValueError(msg)
+        return self._adapter.export_model(self._model, path)
 
     # ── Auto-detection internals ─────────────────────────────
 

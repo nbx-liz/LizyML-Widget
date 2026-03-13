@@ -17,10 +17,22 @@ class BackendInfo:
 
 
 @dataclass
-class ConfigSchema:
-    """JSON Schema for backend config."""
+class BackendContract:
+    """Backend contract containing schema, UI metadata, and capabilities."""
 
-    json_schema: dict[str, Any]
+    schema_version: int
+    config_schema: dict[str, Any]  # JSON Schema for config validation
+    ui_schema: dict[str, Any]  # UI-specific metadata (sections, option_sets, parameter_hints, etc.)
+    capabilities: dict[str, Any]  # Feature flags (e.g. tune.allow_empty_space)
+
+
+@dataclass
+class ConfigPatchOp:
+    """A single config patch operation."""
+
+    op: str  # "set" | "unset" | "merge"
+    path: str  # dot-separated path (e.g. "model.params.learning_rate")
+    value: Any | None = None
 
 
 @dataclass

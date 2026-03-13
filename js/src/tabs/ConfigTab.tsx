@@ -1,28 +1,26 @@
 /**
  * ConfigTab — Fit sub-tab with sectioned Accordion layout + Tune sub-tab with SearchSpace.
- * Form changes are debounced (300ms) before syncing to Python.
+ * Form changes are debounced (300ms) before syncing to Python via patch_config.
+ * All backend-specific constants (option_sets, parameter_hints, search_space_catalog)
+ * are read from backendContract.ui_schema.
  */
 import { useState, useRef, useCallback, useEffect } from "preact/hooks";
 import { useCustomMsg } from "../hooks/useModel";
 import { Accordion } from "../components/Accordion";
 import { DynForm } from "../components/DynForm";
 import { SearchSpace } from "../components/SearchSpace";
+import { NumericStepper } from "../components/NumericStepper";
 
 type SubTab = "fit" | "tune";
 
 /** Schema top-level keys managed by Data Tab — hidden from Config Tab. */
 const DATA_TAB_KEYS = ["data", "features", "split"];
 
-/** Fit sub-tab section layout per BLUEPRINT §5.3. */
-const FIT_SECTIONS = [
-  { key: "model", title: "Model" },
-  { key: "training", title: "Training" },
-  { key: "evaluation", title: "Evaluation" },
-  { key: "calibration", title: "Calibration" },
-] as const;
+/** Model section fields handled by custom ModelSection (not delegated to DynForm). */
+const HANDLED_MODEL_FIELDS = new Set(["name", "auto_num_leaves", "num_leaves_ratio", "params"]);
 
 interface ConfigTabProps {
-  configSchema: Record<string, any>;
+  backendContract: Record<string, any>;
   config: Record<string, any>;
   dfInfo: Record<string, any>;
   status: string;
@@ -68,72 +66,35 @@ function getSectionSchema(
   return resolveSchema(props[key], rootSchema);
 }
 
-/** Model section fields handled by custom ModelSection (not delegated to DynForm). */
-const HANDLED_MODEL_FIELDS = new Set(["name", "auto_num_leaves", "num_leaves_ratio", "params"]);
-
-const OBJECTIVE_OPTIONS: Record<string, string[]> = {
-  regression: ["huber", "mse", "mae", "quantile", "mape", "cross_entropy"],
-  binary: ["binary", "cross_entropy", "cross_entropy_lambda"],
-  multiclass: ["multiclass", "softmax", "multiclassova"],
-};
-
-const METRIC_OPTIONS: Record<string, string[]> = {
-  regression: ["huber", "mae", "mape", "mse", "rmse", "quantile"],
-  binary: ["auc", "binary_logloss", "binary_error", "average_precision"],
-  multiclass: ["auc_mu", "multi_logloss", "multi_error"],
-};
-
 type TypedParamKind = "objective" | "metric" | "integer" | "number" | "boolean";
-interface TypedParamMeta { key: string; label: string; kind: TypedParamKind; }
-
-const TYPED_PARAMS: TypedParamMeta[] = [
-  { key: "objective",         label: "Objective",         kind: "objective" },
-  { key: "metric",            label: "Metric",            kind: "metric" },
-  { key: "n_estimators",      label: "N Estimators",      kind: "integer" },
-  { key: "learning_rate",     label: "Learning Rate",     kind: "number" },
-  { key: "max_depth",         label: "Max Depth",         kind: "integer" },
-  { key: "max_bin",           label: "Max Bin",           kind: "integer" },
-  { key: "feature_fraction",  label: "Feature Fraction",  kind: "number" },
-  { key: "bagging_fraction",  label: "Bagging Fraction",  kind: "number" },
-  { key: "bagging_freq",      label: "Bagging Freq",      kind: "integer" },
-  { key: "lambda_l1",         label: "Lambda L1",         kind: "number" },
-  { key: "lambda_l2",         label: "Lambda L2",         kind: "number" },
-  { key: "first_metric_only", label: "First Metric Only", kind: "boolean" },
-];
-
-/** Step values for numeric fields (BLUEPRINT §5.3). */
-const STEP_MAP: Record<string, number> = {
-  n_estimators: 100,
-  learning_rate: 0.001,
-  max_depth: 1,
-  max_bin: 1,
-  feature_fraction: 0.05,
-  bagging_fraction: 0.05,
-  bagging_freq: 1,
-  lambda_l1: 0.0001,
-  lambda_l2: 0.0001,
-};
+interface TypedParamMeta { key: string; label: string; kind: TypedParamKind; step?: number; }
 
 function TypedParamsEditor({
   task,
   autoNumLeaves,
   value,
   onChange,
+  parameterHints,
+  optionSets,
+  stepMap,
 }: {
   task: string;
   autoNumLeaves: boolean;
   value: Record<string, any>;
   onChange: (v: Record<string, any>) => void;
+  parameterHints: TypedParamMeta[];
+  optionSets: Record<string, Record<string, string[]>>;
+  stepMap: Record<string, number>;
 }) {
   const set = (k: string, v: any) => onChange({ ...value, [k]: v });
 
   return (
     <div>
-      {TYPED_PARAMS.map(({ key, label, kind }) => {
+      {parameterHints.map(({ key, label, kind }) => {
         const current = value[key];
 
         if (kind === "objective") {
-          const opts = OBJECTIVE_OPTIONS[task] ?? [];
+          const opts = optionSets.objective?.[task] ?? [];
           return (
             <div key={key} class="lzw-form-row">
               <label class="lzw-label">{label}</label>
@@ -154,24 +115,26 @@ function TypedParamsEditor({
         }
 
         if (kind === "metric") {
-          const opts = METRIC_OPTIONS[task] ?? [];
+          const opts = optionSets.metric?.[task] ?? [];
           const selected: string[] = Array.isArray(current) ? current : [];
           return (
             <div key={key} class="lzw-form-row" style="align-items:flex-start">
               <label class="lzw-label">{label}</label>
-              <div class="lzw-checkbox-group">
+              <div class="lzw-chip-group">
                 {opts.map((opt) => (
-                  <label key={opt}>
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(opt)}
-                      onChange={(e) => {
-                        const checked = (e.target as HTMLInputElement).checked;
-                        set(key, checked ? [...selected, opt] : selected.filter((v) => v !== opt));
-                      }}
-                    />
+                  <button
+                    key={opt}
+                    type="button"
+                    class={`lzw-chip ${selected.includes(opt) ? "lzw-chip--active" : ""}`}
+                    onClick={() => {
+                      const next = selected.includes(opt)
+                        ? selected.filter((v) => v !== opt)
+                        : [...selected, opt];
+                      set(key, next);
+                    }}
+                  >
                     {opt}
-                  </label>
+                  </button>
                 ))}
               </div>
             </div>
@@ -197,15 +160,10 @@ function TypedParamsEditor({
         return (
           <div key={key} class="lzw-form-row">
             <label class="lzw-label">{label}</label>
-            <input
-              class="lzw-input lzw-input--sm"
-              type="number"
-              step={STEP_MAP[key] ?? (kind === "integer" ? 1 : "any")}
-              value={current ?? ""}
-              onChange={(e) => {
-                const raw = (e.target as HTMLInputElement).value;
-                set(key, kind === "integer" ? parseInt(raw) : parseFloat(raw));
-              }}
+            <NumericStepper
+              value={current}
+              step={stepMap[key] ?? (kind === "integer" ? 1 : "any")}
+              onChange={(v) => set(key, v)}
             />
           </div>
         );
@@ -214,13 +172,11 @@ function TypedParamsEditor({
       {!autoNumLeaves && (
         <div class="lzw-form-row">
           <label class="lzw-label">Num Leaves</label>
-          <input
-            class="lzw-input lzw-input--sm"
-            type="number"
+          <NumericStepper
+            value={value.num_leaves ?? 256}
             min={2}
             step={1}
-            value={value.num_leaves ?? 256}
-            onChange={(e) => set("num_leaves", parseInt((e.target as HTMLInputElement).value))}
+            onChange={(v) => set("num_leaves", v ?? 256)}
           />
         </div>
       )}
@@ -235,12 +191,18 @@ function ModelSection({
   value,
   onChange,
   task,
+  parameterHints,
+  optionSets,
+  stepMap,
 }: {
   schema: Record<string, any>;
   rootSchema: Record<string, any>;
   value: Record<string, any>;
   onChange: (v: Record<string, any>) => void;
   task: string;
+  parameterHints: TypedParamMeta[];
+  optionSets: Record<string, Record<string, string[]>>;
+  stepMap: Record<string, number>;
 }) {
   const params = (value.params ?? {}) as Record<string, any>;
   const autoNumLeaves = value.auto_num_leaves ?? true;
@@ -298,16 +260,12 @@ function ModelSection({
       {autoNumLeaves && (
         <div class="lzw-form-row">
           <label class="lzw-label">Num Leaves Ratio</label>
-          <input
-            class="lzw-input lzw-input--sm"
-            type="number"
+          <NumericStepper
+            value={value.num_leaves_ratio ?? 1.0}
             step={0.05}
             min={0.01}
             max={1}
-            value={value.num_leaves_ratio ?? 1.0}
-            onChange={(e) =>
-              setField("num_leaves_ratio", parseFloat((e.target as HTMLInputElement).value))
-            }
+            onChange={(v) => setField("num_leaves_ratio", v ?? 1.0)}
           />
         </div>
       )}
@@ -326,18 +284,18 @@ function ModelSection({
         autoNumLeaves={autoNumLeaves}
         value={params}
         onChange={setParams}
+        parameterHints={parameterHints}
+        optionSets={optionSets}
+        stepMap={stepMap}
       />
 
       {/* Log Output (verbose) */}
       <div class="lzw-form-row">
         <label class="lzw-label">Log Output</label>
-        <input
-          class="lzw-input lzw-input--sm"
-          type="number"
+        <NumericStepper
           value={params.verbose ?? -1}
-          onChange={(e) =>
-            setParam("verbose", parseInt((e.target as HTMLInputElement).value))
-          }
+          step={1}
+          onChange={(v) => setParam("verbose", v ?? -1)}
         />
       </div>
     </div>
@@ -345,11 +303,11 @@ function ModelSection({
 }
 
 /** Get schema keys not in known sections or data tab keys. */
-function getUnknownKeys(rootSchema: Record<string, any>): string[] {
+function getUnknownKeys(rootSchema: Record<string, any>, sectionKeys: string[]): string[] {
   const resolved = resolveSchema(rootSchema, rootSchema);
   const props = resolved.properties ?? {};
   const knownKeys = new Set([
-    ...FIT_SECTIONS.map((s) => s.key),
+    ...sectionKeys,
     ...DATA_TAB_KEYS,
     "tuning",
     "config_version",  // Read-only, shown separately
@@ -358,8 +316,37 @@ function getUnknownKeys(rootSchema: Record<string, any>): string[] {
   return Object.keys(props).filter((k) => !knownKeys.has(k));
 }
 
+/** Build patch ops from old and new config objects. */
+function diffToPatchOps(
+  oldConfig: Record<string, any>,
+  newConfig: Record<string, any>,
+  prefix = "",
+): Array<{ op: string; path: string; value: any }> {
+  const ops: Array<{ op: string; path: string; value: any }> = [];
+
+  for (const key of Object.keys(newConfig)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    const oldVal = oldConfig[key];
+    const newVal = newConfig[key];
+
+    if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+      ops.push({ op: "set", path, value: newVal });
+    }
+  }
+
+  // Check for removed keys
+  for (const key of Object.keys(oldConfig)) {
+    if (!(key in newConfig)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      ops.push({ op: "unset", path, value: null });
+    }
+  }
+
+  return ops;
+}
+
 export function ConfigTab({
-  configSchema,
+  backendContract,
   config,
   dfInfo,
   status,
@@ -369,10 +356,23 @@ export function ConfigTab({
   const [subTab, setSubTab] = useState<SubTab>("fit");
   const [localConfig, setLocalConfig] = useState<Record<string, any>>(config);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSentRef = useRef<Record<string, any>>(config);
+
+  // Extract ui_schema and config_schema from backend contract
+  const uiSchema = backendContract?.ui_schema ?? {};
+  const configSchema = backendContract?.config_schema ?? {};
+  const sections: Array<{ key: string; title: string }> = uiSchema.sections ?? [];
+  const optionSets: Record<string, Record<string, string[]>> = uiSchema.option_sets ?? {};
+  const parameterHints: TypedParamMeta[] = uiSchema.parameter_hints ?? [];
+  const stepMap: Record<string, number> = uiSchema.step_map ?? {};
+  const conditionalVisibility: Record<string, any> = uiSchema.conditional_visibility ?? {};
+  const defaults: Record<string, any> = uiSchema.defaults ?? {};
+  const sectionKeys = sections.map((s) => s.key);
 
   // Sync from Python → local when Python config changes externally
   useEffect(() => {
     setLocalConfig(config);
+    lastSentRef.current = config;
   }, [config]);
 
   // Cleanup debounce timer on unmount
@@ -382,13 +382,43 @@ export function ConfigTab({
     };
   }, []);
 
-  // Debounced send to Python
+  // Auto-set tune metric when task changes or metric is unset
+  const task = dfInfo?.task ?? "";
+  const metricOpts = optionSets.metric?.[task] ?? [];
+  useEffect(() => {
+    if (metricOpts.length === 0) return;
+    const current = localConfig.tuning?.optuna?.params?.metric;
+    if (!current || !metricOpts.includes(current)) {
+      const tuning = localConfig.tuning ?? {};
+      const optuna = tuning.optuna ?? {};
+      const params = optuna.params ?? {};
+      const updated = {
+        ...localConfig,
+        tuning: { ...tuning, optuna: { ...optuna, params: { ...params, metric: metricOpts[0] } } },
+      };
+      setLocalConfig(updated);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        const ops = diffToPatchOps(lastSentRef.current, updated);
+        if (ops.length > 0) {
+          sendAction("patch_config", { ops });
+          lastSentRef.current = updated;
+        }
+      }, 300);
+    }
+  }, [task]); // Intentionally depends only on task
+
+  // Debounced send to Python via patch_config
   const handleChange = useCallback(
     (newConfig: Record<string, any>) => {
       setLocalConfig(newConfig);
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
-        sendAction("update_config", { config: newConfig });
+        const ops = diffToPatchOps(lastSentRef.current, newConfig);
+        if (ops.length > 0) {
+          sendAction("patch_config", { ops });
+          lastSentRef.current = newConfig;
+        }
       }, 300);
     },
     [sendAction],
@@ -405,13 +435,13 @@ export function ConfigTab({
   const canRun =
     status === "data_loaded" || status === "completed" || status === "failed" || status === "running";
 
-  // Tune requires at least one range/choice param
+  // Tune requires at least one range/choice param, unless backend allows empty space
   const tuneSpace = localConfig.tuning?.optuna?.space ?? {};
-  const hasSearchParam = Object.values(tuneSpace).some(
-    (p: any) => p.mode === "range" || p.mode === "choice",
+  const capabilities = backendContract?.capabilities ?? {};
+  const allowEmptySpace = capabilities?.tune?.allow_empty_space ?? false;
+  const hasSearchParam = allowEmptySpace || Object.values(tuneSpace).some(
+    (p: any) => p.type === "float" || p.type === "int" || p.type === "categorical",
   );
-
-  const task = dfInfo?.task ?? "";
 
   /** Update a single tuning.optuna.params field. */
   const handleTuneParam = useCallback(
@@ -426,7 +456,7 @@ export function ConfigTab({
     },
     [localConfig, handleChange],
   );
-  const unknownKeys = getUnknownKeys(configSchema);
+  const unknownKeys = getUnknownKeys(configSchema, sectionKeys);
 
   // Import/Export YAML
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -460,17 +490,21 @@ export function ConfigTab({
 
   // Calibration toggle: null = OFF, object = ON (per BLUEPRINT §5.3)
   const calibrationEnabled = localConfig.calibration != null;
+  const calibrationDefaults = defaults.calibration ?? { method: "platt", n_splits: 5, params: {} };
   const handleCalibrationToggle = useCallback(
     (enabled: boolean) => {
       handleChange({
         ...localConfig,
         calibration: enabled
-          ? (localConfig.calibration ?? { method: "platt", n_splits: 5, params: {} })
+          ? (localConfig.calibration ?? calibrationDefaults)
           : null,
       });
     },
-    [localConfig, handleChange],
+    [localConfig, handleChange, calibrationDefaults],
   );
+
+  // Calibration visibility from conditional_visibility
+  const calibrationVisibleTasks: string[] = conditionalVisibility.calibration?.task ?? ["binary"];
 
   return (
     <div class="lzw-config-tab">
@@ -526,10 +560,10 @@ export function ConfigTab({
               <span>{localConfig.config_version ?? 1}</span>
             </div>
 
-            {/* BLUEPRINT §5.3 sections: Model, Training, Evaluation, Calibration */}
-            {FIT_SECTIONS.map(({ key, title }) => {
-              // Calibration: only show for binary tasks
-              if (key === "calibration" && task !== "binary") return null;
+            {/* Sections from backend contract */}
+            {sections.map(({ key, title }) => {
+              // Calibration: conditional visibility from ui_schema
+              if (key === "calibration" && !calibrationVisibleTasks.includes(task)) return null;
 
               const sectionSchema = getSectionSchema(configSchema, key);
               if (!sectionSchema) return null;
@@ -544,6 +578,9 @@ export function ConfigTab({
                       value={localConfig.model ?? {}}
                       onChange={(v) => handleSectionChange("model", v)}
                       task={task}
+                      parameterHints={parameterHints}
+                      optionSets={optionSets}
+                      stepMap={stepMap}
                     />
                   </Accordion>
                 );
@@ -552,30 +589,29 @@ export function ConfigTab({
               // Evaluation section: custom checkbox group for metrics
               if (key === "evaluation") {
                 const evalMetrics: string[] = (localConfig.evaluation as any)?.metrics ?? [];
-                const metricOpts = METRIC_OPTIONS[task] ?? [];
+                const evalMetricOpts = optionSets.metric?.[task] ?? [];
                 return (
                   <Accordion key="evaluation" title="Evaluation">
                     <div class="lzw-form-row" style="align-items:flex-start">
                       <label class="lzw-label">Metrics</label>
-                      <div class="lzw-checkbox-group">
-                        {metricOpts.map((opt) => (
-                          <label key={opt}>
-                            <input
-                              type="checkbox"
-                              checked={evalMetrics.includes(opt)}
-                              onChange={(e) => {
-                                const checked = (e.target as HTMLInputElement).checked;
-                                const next = checked
-                                  ? [...evalMetrics, opt]
-                                  : evalMetrics.filter((v: string) => v !== opt);
-                                handleSectionChange("evaluation", {
-                                  ...((localConfig.evaluation as any) ?? {}),
-                                  metrics: next,
-                                });
-                              }}
-                            />
+                      <div class="lzw-chip-group">
+                        {evalMetricOpts.map((opt) => (
+                          <button
+                            key={opt}
+                            type="button"
+                            class={`lzw-chip ${evalMetrics.includes(opt) ? "lzw-chip--active" : ""}`}
+                            onClick={() => {
+                              const next = evalMetrics.includes(opt)
+                                ? evalMetrics.filter((v: string) => v !== opt)
+                                : [...evalMetrics, opt];
+                              handleSectionChange("evaluation", {
+                                ...((localConfig.evaluation as any) ?? {}),
+                                metrics: next,
+                              });
+                            }}
+                          >
                             {opt}
-                          </label>
+                          </button>
                         ))}
                       </div>
                     </div>
@@ -587,30 +623,20 @@ export function ConfigTab({
               if (key === "training") {
                 const training = (localConfig.training ?? {}) as Record<string, any>;
                 const earlyStop = training.early_stopping ?? {};
-                const splitConfig = (localConfig.split ?? {}) as Record<string, any>;
-
-                // Derive inner_valid options from split config
-                const innerValidOpts: string[] = [];
-                if (splitConfig.method === "kfold") {
-                  const n = splitConfig.n_splits ?? 5;
-                  for (let i = 0; i < n; i++) innerValidOpts.push(`fold_${i}`);
-                } else if (splitConfig.method === "holdout") {
-                  innerValidOpts.push("holdout");
-                }
+                // Inner valid options from backend contract
+                const innerValidOpts: string[] = uiSchema.inner_valid_options ?? [];
 
                 return (
                   <Accordion key="training" title="Training">
                     <div class="lzw-form-row">
                       <label class="lzw-label">Seed</label>
-                      <input
-                        class="lzw-input lzw-input--sm"
-                        type="number"
-                        step={1}
+                      <NumericStepper
                         value={training.seed ?? 42}
-                        onChange={(e) =>
+                        step={1}
+                        onChange={(v) =>
                           handleSectionChange("training", {
                             ...training,
-                            seed: parseInt((e.target as HTMLInputElement).value),
+                            seed: v ?? 42,
                           })
                         }
                       />
@@ -638,18 +664,16 @@ export function ConfigTab({
                       <>
                         <div class="lzw-form-row">
                           <label class="lzw-label">Rounds</label>
-                          <input
-                            class="lzw-input lzw-input--sm"
-                            type="number"
+                          <NumericStepper
+                            value={earlyStop.rounds ?? 150}
                             step={50}
                             min={1}
-                            value={earlyStop.rounds ?? 150}
-                            onChange={(e) =>
+                            onChange={(v) =>
                               handleSectionChange("training", {
                                 ...training,
                                 early_stopping: {
                                   ...earlyStop,
-                                  rounds: parseInt((e.target as HTMLInputElement).value),
+                                  rounds: v ?? 150,
                                 },
                               })
                             }
@@ -657,19 +681,17 @@ export function ConfigTab({
                         </div>
                         <div class="lzw-form-row">
                           <label class="lzw-label">Validation Ratio</label>
-                          <input
-                            class="lzw-input lzw-input--sm"
-                            type="number"
+                          <NumericStepper
+                            value={earlyStop.validation_ratio ?? 0.1}
                             step={0.05}
                             min={0}
                             max={1}
-                            value={earlyStop.validation_ratio ?? 0.1}
-                            onChange={(e) =>
+                            onChange={(v) =>
                               handleSectionChange("training", {
                                 ...training,
                                 early_stopping: {
                                   ...earlyStop,
-                                  validation_ratio: parseFloat((e.target as HTMLInputElement).value),
+                                  validation_ratio: v ?? 0.1,
                                 },
                               })
                             }
@@ -679,20 +701,20 @@ export function ConfigTab({
                           <label class="lzw-label">Inner Validation</label>
                           <select
                             class="lzw-select"
-                            value={earlyStop.inner_valid ?? ""}
+                            value={earlyStop.inner_valid?.method ?? ""}
                             onChange={(e) => {
                               const v = (e.target as HTMLSelectElement).value;
                               handleSectionChange("training", {
                                 ...training,
                                 early_stopping: {
                                   ...earlyStop,
-                                  inner_valid: v || null,
+                                  inner_valid: v ? { method: v } : null,
                                 },
                               });
                             }}
                           >
-                            <option value="">auto</option>
-                            {innerValidOpts.map((opt) => (
+                            <option value="">Default</option>
+                            {innerValidOpts.map((opt: string) => (
                               <option key={opt} value={opt}>{opt}</option>
                             ))}
                           </select>
@@ -815,34 +837,36 @@ export function ConfigTab({
             <Accordion title="Settings">
               <div class="lzw-form-row">
                 <label class="lzw-label">n_trials</label>
-                <input
-                  class="lzw-input lzw-input--sm"
-                  type="number"
+                <NumericStepper
+                  value={localConfig.tuning?.optuna?.params?.n_trials ?? 50}
                   min={1}
                   step={1}
-                  value={localConfig.tuning?.optuna?.params?.n_trials ?? 50}
-                  onChange={(e) => {
-                    const v = parseInt((e.target as HTMLInputElement).value) || 50;
-                    handleTuneParam("n_trials", v);
-                  }}
+                  onChange={(v) => handleTuneParam("n_trials", v ?? 50)}
                 />
               </div>
-              <div class="lzw-form-row">
-                <label class="lzw-label">metric</label>
-                <select
-                  class="lzw-select"
-                  value={localConfig.tuning?.optuna?.params?.metric ?? ""}
-                  onChange={(e) => {
-                    const v = (e.target as HTMLSelectElement).value;
-                    handleTuneParam("metric", v || null);
-                  }}
-                >
-                  <option value="">default</option>
-                  {(METRIC_OPTIONS[task] ?? []).map((opt) => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
+              {(() => {
+                const tuneMetricOpts = optionSets.metric?.[task] ?? [];
+                if (tuneMetricOpts.length === 0) return null;
+                const currentMetric = localConfig.tuning?.optuna?.params?.metric ?? tuneMetricOpts[0];
+                return (
+                  <div class="lzw-form-row">
+                    <label class="lzw-label">metric</label>
+                    <div class="lzw-segment">
+                      {tuneMetricOpts.map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          class={`lzw-segment__btn ${currentMetric === opt ? "lzw-segment__btn--active" : ""}`}
+                          aria-pressed={currentMetric === opt}
+                          onClick={() => handleTuneParam("metric", opt)}
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </Accordion>
 
             <Accordion title="Search Space">
@@ -852,6 +876,7 @@ export function ConfigTab({
                 value={tuneSpace}
                 modelConfig={localConfig.model}
                 task={task}
+                uiSchema={uiSchema}
                 onChange={(space) => {
                   const tuning = localConfig.tuning ?? {};
                   const optuna = tuning.optuna ?? {};
@@ -866,16 +891,15 @@ export function ConfigTab({
             {/* Log Output (verbose) — same treatment as Fit, BLUEPRINT §5.3 */}
             <div class="lzw-form-row" style="padding: 4px 12px;">
               <label class="lzw-label">Log Output</label>
-              <input
-                class="lzw-input lzw-input--sm"
-                type="number"
+              <NumericStepper
                 value={(localConfig.model?.params as any)?.verbose ?? -1}
-                onChange={(e) => {
-                  const model = localConfig.model ?? {};
-                  const params = (model.params as any) ?? {};
+                step={1}
+                onChange={(v) => {
+                  const mdl = localConfig.model ?? {};
+                  const prm = (mdl.params as any) ?? {};
                   handleChange({
                     ...localConfig,
-                    model: { ...model, params: { ...params, verbose: parseInt((e.target as HTMLInputElement).value) } },
+                    model: { ...mdl, params: { ...prm, verbose: v ?? -1 } },
                   });
                 }}
               />

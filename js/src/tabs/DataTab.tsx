@@ -1,6 +1,7 @@
 /** DataTab — Target/Task selection, Column settings, CV settings, Feature summary. */
 import { Accordion } from "../components/Accordion";
 import { ColumnTable } from "../components/ColumnTable";
+import { NumericStepper } from "../components/NumericStepper";
 
 interface CvInfo {
   strategy: string;
@@ -86,29 +87,20 @@ export function DataTab({ dfInfo, allColumns, sendAction }: DataTabProps) {
         </div>
         <div class="lzw-form-row">
           <label class="lzw-label">Task</label>
-          <select
-            class="lzw-select"
-            value={dfInfo.task ?? ""}
-            disabled={!hasTarget}
-            onChange={(e) => {
-              const task = (e.target as HTMLSelectElement).value;
-              if (hasTarget && task) {
-                sendAction("set_task", { task });
-              }
-            }}
-          >
-            {!hasTarget && <option value="">-- Select target first --</option>}
+          <div class="lzw-segment">
             {["binary", "multiclass", "regression"].map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
+              <button
+                key={t}
+                type="button"
+                class={`lzw-segment__btn ${dfInfo.task === t ? "lzw-segment__btn--active" : ""}`}
+                disabled={!hasTarget}
+                aria-pressed={dfInfo.task === t}
+                onClick={() => { if (hasTarget) sendAction("set_task", { task: t }); }}
+              >
+                {dfInfo.task === t && dfInfo.task === dfInfo.auto_task ? `⚡${t}` : t}
+              </button>
             ))}
-          </select>
-          {hasTarget && dfInfo.task === dfInfo.auto_task && (
-            <span class="lzw-muted" style="margin-left:4px">
-              ⚡auto
-            </span>
-          )}
+          </div>
         </div>
       </Accordion>
 
@@ -128,45 +120,39 @@ export function DataTab({ dfInfo, allColumns, sendAction }: DataTabProps) {
 
       {/* Cross Validation */}
       <Accordion title="Cross Validation">
-        <div class="lzw-form-row">
+        <div class="lzw-form-row" style="align-items:flex-start">
           <label class="lzw-label">Strategy</label>
-          <select
-            class="lzw-select"
-            value={cv.strategy}
-            onChange={(e) =>
-              sendCv({ ...cv, strategy: (e.target as HTMLSelectElement).value })
-            }
-          >
+          <div class="lzw-segment lzw-segment--wrap">
             {CV_STRATEGIES.map((s) => (
-              <option key={s.value} value={s.value}>
+              <button
+                key={s.value}
+                type="button"
+                class={`lzw-segment__btn ${cv.strategy === s.value ? "lzw-segment__btn--active" : ""}`}
+                aria-pressed={cv.strategy === s.value}
+                onClick={() => sendCv({ ...cv, strategy: s.value })}
+              >
                 {s.label}
-              </option>
+              </button>
             ))}
-          </select>
+          </div>
         </div>
         <div class="lzw-form-row">
           <label class="lzw-label">Folds</label>
-          <input
-            class="lzw-input lzw-input--sm"
-            type="number"
+          <NumericStepper
+            value={cv.n_splits}
             min={2}
             max={50}
-            value={cv.n_splits}
-            onChange={(e) =>
-              sendCv({ ...cv, n_splits: parseInt((e.target as HTMLInputElement).value) || 5 })
-            }
+            step={1}
+            onChange={(v) => sendCv({ ...cv, n_splits: v ?? 5 })}
           />
         </div>
         {NEEDS_RANDOM_STATE.has(cv.strategy) && (
           <div class="lzw-form-row">
             <label class="lzw-label">Random state</label>
-            <input
-              class="lzw-input lzw-input--sm"
-              type="number"
+            <NumericStepper
               value={cv.random_state ?? 42}
-              onChange={(e) =>
-                sendCv({ ...cv, random_state: parseInt((e.target as HTMLInputElement).value) || 42 })
-              }
+              step={1}
+              onChange={(v) => sendCv({ ...cv, random_state: v ?? 42 })}
             />
           </div>
         )}
@@ -219,14 +205,11 @@ export function DataTab({ dfInfo, allColumns, sendAction }: DataTabProps) {
         {NEEDS_GAP.has(cv.strategy) && (
           <div class="lzw-form-row">
             <label class="lzw-label">Gap</label>
-            <input
-              class="lzw-input lzw-input--sm"
-              type="number"
-              min={0}
+            <NumericStepper
               value={cv.gap ?? 0}
-              onChange={(e) =>
-                sendCv({ ...cv, gap: parseInt((e.target as HTMLInputElement).value) || 0 })
-              }
+              min={0}
+              step={1}
+              onChange={(v) => sendCv({ ...cv, gap: v ?? 0 })}
             />
           </div>
         )}
@@ -234,26 +217,20 @@ export function DataTab({ dfInfo, allColumns, sendAction }: DataTabProps) {
           <>
             <div class="lzw-form-row">
               <label class="lzw-label">Purge gap</label>
-              <input
-                class="lzw-input lzw-input--sm"
-                type="number"
-                min={0}
+              <NumericStepper
                 value={cv.purge_gap ?? 0}
-                onChange={(e) =>
-                  sendCv({ ...cv, purge_gap: parseInt((e.target as HTMLInputElement).value) || 0 })
-                }
+                min={0}
+                step={1}
+                onChange={(v) => sendCv({ ...cv, purge_gap: v ?? 0 })}
               />
             </div>
             <div class="lzw-form-row">
               <label class="lzw-label">Embargo</label>
-              <input
-                class="lzw-input lzw-input--sm"
-                type="number"
-                min={0}
+              <NumericStepper
                 value={cv.embargo ?? 0}
-                onChange={(e) =>
-                  sendCv({ ...cv, embargo: parseInt((e.target as HTMLInputElement).value) || 0 })
-                }
+                min={0}
+                step={1}
+                onChange={(v) => sendCv({ ...cv, embargo: v ?? 0 })}
               />
             </div>
           </>
@@ -262,30 +239,22 @@ export function DataTab({ dfInfo, allColumns, sendAction }: DataTabProps) {
           <>
             <div class="lzw-form-row">
               <label class="lzw-label">Train size max</label>
-              <input
-                class="lzw-input lzw-input--sm"
-                type="number"
+              <NumericStepper
+                value={cv.train_size_max ?? undefined}
                 min={0}
-                value={cv.train_size_max ?? ""}
+                step={1}
                 placeholder="null"
-                onChange={(e) => {
-                  const v = (e.target as HTMLInputElement).value;
-                  sendCv({ ...cv, train_size_max: v ? parseInt(v) : null });
-                }}
+                onChange={(v) => sendCv({ ...cv, train_size_max: v ?? null })}
               />
             </div>
             <div class="lzw-form-row">
               <label class="lzw-label">Test size max</label>
-              <input
-                class="lzw-input lzw-input--sm"
-                type="number"
+              <NumericStepper
+                value={cv.test_size_max ?? undefined}
                 min={0}
-                value={cv.test_size_max ?? ""}
+                step={1}
                 placeholder="null"
-                onChange={(e) => {
-                  const v = (e.target as HTMLInputElement).value;
-                  sendCv({ ...cv, test_size_max: v ? parseInt(v) : null });
-                }}
+                onChange={(v) => sendCv({ ...cv, test_size_max: v ?? null })}
               />
             </div>
           </>

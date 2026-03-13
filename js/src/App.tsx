@@ -19,7 +19,7 @@ export function App({ model }: AppProps) {
   const backendInfo = useTraitlet<Record<string, any>>(model, "backend_info");
   const status = useTraitlet<string>(model, "status");
   const dfInfo = useTraitlet<Record<string, any>>(model, "df_info");
-  const configSchema = useTraitlet<Record<string, any>>(model, "config_schema");
+  const backendContract = useTraitlet<Record<string, any>>(model, "backend_contract");
   const config = useTraitlet<Record<string, any>>(model, "config");
   const jobType = useTraitlet<string>(model, "job_type");
   const jobIndex = useTraitlet<number>(model, "job_index");
@@ -58,7 +58,7 @@ export function App({ model }: AppProps) {
   }, [dfInfo]);
 
   return (
-    <div class="lzw-root">
+    <div class="lzw-app">
       <Header backendInfo={backendInfo} status={status} />
 
       {/* Tab bar */}
@@ -92,7 +92,7 @@ export function App({ model }: AppProps) {
         )}
         {activeTab === "Model" && (
           <ConfigTab
-            configSchema={configSchema}
+            backendContract={backendContract}
             config={config}
             dfInfo={dfInfo}
             status={status}

@@ -5,6 +5,7 @@
  * Resolves $defs references from Pydantic v2 schemas.
  */
 import { useState } from "preact/hooks";
+import { NumericStepper } from "./NumericStepper";
 interface DynFormProps {
   schema: Record<string, any>;
   value: Record<string, any>;
@@ -291,21 +292,10 @@ function DynField({ name, schema, rootSchema, value, onChange }: DynFieldProps) 
     return (
       <div class="lzw-form-row" title={description}>
         <label class="lzw-label">{title}</label>
-        <input
-          class="lzw-input"
-          type="number"
-          step={type === "integer" ? 1 : "any"}
-          value={currentVal ?? ""}
-          onChange={(e) => {
-            const raw = (e.target as HTMLInputElement).value;
-            if (raw === "") {
-              onChange(undefined);
-            } else {
-              onChange(
-                type === "integer" ? parseInt(raw) : parseFloat(raw),
-              );
-            }
-          }}
+        <NumericStepper
+          value={currentVal ?? undefined}
+          step={type === "integer" ? 1 : undefined}
+          onChange={(v) => onChange(v)}
         />
       </div>
     );

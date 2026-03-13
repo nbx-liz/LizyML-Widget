@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.resources
 import statistics
 import threading
@@ -13,9 +14,9 @@ import anywidget
 import pandas as pd
 import traitlets
 
-from .adapter import LizyMLAdapter
+from .adapter import BackendAdapter, LizyMLAdapter
 from .service import WidgetService
-from .types import FitSummary, PredictionSummary, TuningSummary
+from .types import ConfigPatchOp, FitSummary, PredictionSummary, TuningSummary
 
 
 class LizyWidget(anywidget.AnyWidget):
@@ -27,7 +28,7 @@ class LizyWidget(anywidget.AnyWidget):
     # ── Python → JS traitlets ────────────────────────────────
     backend_info = traitlets.Dict({}).tag(sync=True)
     df_info = traitlets.Dict({}).tag(sync=True)
-    config_schema = traitlets.Dict({}).tag(sync=True)
+    backend_contract = traitlets.Dict({}).tag(sync=True)
     config = traitlets.Dict({}).tag(sync=True)
     status = traitlets.Unicode("idle").tag(sync=True)
     job_type = traitlets.Unicode("").tag(sync=True)
@@ -43,13 +44,14 @@ class LizyWidget(anywidget.AnyWidget):
     # ── JS → Python traitlet ─────────────────────────────────
     action = traitlets.Dict({}).tag(sync=True)
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, adapter: BackendAdapter | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._service = WidgetService(adapter=LizyMLAdapter())
+        self._service = WidgetService(adapter=adapter or LizyMLAdapter())
         self._job_thread: threading.Thread | None = None
         self._cancel_flag = threading.Event()
         self._job_counter = 0
         self._inference_df: pd.DataFrame | None = None
+        self._tune_config_snapshot: dict[str, Any] | None = None
 
         info = self._service.info
         self.backend_info = {"name": info.name, "version": info.version}
@@ -66,23 +68,14 @@ class LizyWidget(anywidget.AnyWidget):
         self.tune_summary = {}
         self.available_plots = []
 
-        schema = self._service.get_config_schema()
-        self.config_schema = schema.json_schema
-        config = self._extract_defaults(schema.json_schema)
-        # Ensure config_version is always present (required by LizyML, may lack schema default)
-        config.setdefault("config_version", 1)
-        # Ensure model.name is always present (oneOf/discriminator schema may not extract it)
-        config.setdefault("model", {})
-        config["model"].setdefault("name", "lgbm")
-        # Pre-populate model.params with LightGBM defaults (BLUEPRINT §5.3)
-        model_section = dict(config.get("model", {}))
-        auto_num_leaves = model_section.get("auto_num_leaves", True)
-        defaults = self._service.initial_model_params(
-            df_info.get("task"), auto_num_leaves=auto_num_leaves
-        )
-        model_section["params"] = {**defaults, **model_section.get("params", {})}
-        config["model"] = model_section
-        self.config = config
+        contract = self._service.get_backend_contract()
+        self.backend_contract = {
+            "schema_version": contract.schema_version,
+            "config_schema": contract.config_schema,
+            "ui_schema": contract.ui_schema,
+            "capabilities": contract.capabilities,
+        }
+        self.config = self._service.initialize_config()
         return self
 
     def set_target(self, col: str) -> LizyWidget:
@@ -169,11 +162,11 @@ class LizyWidget(anywidget.AnyWidget):
         return self
 
     def set_config(self, config: dict[str, Any]) -> LizyWidget:
-        """Set config programmatically. Preserves config_version if not supplied."""
+        """Set config programmatically. Canonicalizes via adapter defaults."""
         if "config_version" not in config:
             existing_version = self.config.get("config_version", 1)
             config = {**config, "config_version": existing_version}
-        self.config = config
+        self.config = self._service.canonicalize_config(config)
         return self
 
     def get_config(self) -> dict[str, Any]:
@@ -212,11 +205,7 @@ class LizyWidget(anywidget.AnyWidget):
 
     def save_model(self, path: str) -> str:
         """Save the trained model to the given path. Returns the path."""
-        model = self._service.get_model()
-        if model is None:
-            msg = "No trained model. Run fit or tune first."
-            raise ValueError(msg)
-        return self._service._adapter.export_model(model, path)  # noqa: SLF001
+        return self._service.save_model(path)
 
     def save_config(self, path: str) -> None:
         """Save current full config to YAML file."""
@@ -237,40 +226,10 @@ class LizyWidget(anywidget.AnyWidget):
         return self
 
     def _apply_loaded_config(self, loaded: dict[str, Any]) -> None:
-        """Apply a parsed config dict to widget state."""
-        loaded = dict(loaded)  # avoid mutating caller's dict
-        data_section = loaded.pop("data", {})
-        loaded.pop("features", {})  # consumed by service via build_config
-        split_section = loaded.pop("split", {})
-        # task at top-level
-        loaded.pop("task", None)
-
-        # Apply data section to service
-        if "target" in data_section and self._service._df is not None:  # noqa: SLF001
-            self._service.set_target(data_section["target"])
-
-        # Apply CV from split section
-        if split_section:
-            strategy = split_section.get("method", split_section.get("strategy", "kfold"))
-            n_splits = split_section.get("n_splits", 5)
-            self._service.update_cv(
-                strategy,
-                n_splits,
-                group_column=split_section.get("group_col", split_section.get("group_column")),
-                time_column=data_section.get("time_col"),
-                random_state=split_section.get("random_state", 42),
-                shuffle=split_section.get("shuffle", True),
-                gap=split_section.get("gap", 0),
-                purge_gap=split_section.get("purge_gap", 0),
-                embargo=split_section.get("embargo", 0),
-                train_size_max=split_section.get("train_size_max"),
-                test_size_max=split_section.get("test_size_max"),
-            )
-
+        """Apply a parsed config dict to widget state (canonicalized via adapter)."""
+        canonical = self._service.apply_loaded_config(loaded)
         self.df_info = self._service.get_df_info()
-
-        # Remaining keys go to config
-        self.config = loaded
+        self.config = canonical
 
     # ── Action dispatcher ─────────────────────────────────────
 
@@ -286,19 +245,6 @@ class LizyWidget(anywidget.AnyWidget):
         if handler is not None:
             handler(self, payload)
 
-    def _update_task_params(self, task: str) -> None:
-        """Patch model.params with task-dependent fields (objective/metric)."""
-        task_params = self._service.get_task_params(task)
-        if not task_params:
-            return
-        current = dict(self.config)
-        model_section = dict(current.get("model", {}))
-        model_params = dict(model_section.get("params", {}))
-        model_params.update(task_params)
-        model_section["params"] = model_params
-        current["model"] = model_section
-        self.config = current
-
     def _handle_set_target(self, payload: dict[str, Any]) -> None:
         target = payload.get("target", "")
         if not target:
@@ -309,7 +255,7 @@ class LizyWidget(anywidget.AnyWidget):
             self.status = "data_loaded"
             task = df_info.get("task")
             if task:
-                self._update_task_params(task)
+                self.config = self._service.apply_task_params(dict(self.config), task)
         except Exception as e:
             self.error = {"code": "TARGET_ERROR", "message": str(e)}
 
@@ -321,7 +267,7 @@ class LizyWidget(anywidget.AnyWidget):
             df_info = self._service.set_task(task)
             self.df_info = df_info
             if task:
-                self._update_task_params(task)
+                self.config = self._service.apply_task_params(dict(self.config), task)
         except Exception as e:
             self.error = {"code": "TASK_ERROR", "message": str(e)}
 
@@ -355,11 +301,12 @@ class LizyWidget(anywidget.AnyWidget):
         except Exception as e:
             self.error = {"code": "CV_ERROR", "message": str(e)}
 
-    def _handle_update_config(self, payload: dict[str, Any]) -> None:
-        new_config = payload.get("config", {})
-        if not new_config:
-            return  # Ignore empty config updates
-        self.config = new_config
+    def _handle_patch_config(self, payload: dict[str, Any]) -> None:
+        raw_ops = payload.get("ops", [])
+        if not raw_ops:
+            return
+        ops = [ConfigPatchOp(op=o["op"], path=o["path"], value=o.get("value")) for o in raw_ops]
+        self.config = self._service.apply_config_patch(dict(self.config), ops)
 
     def _handle_fit(self, _payload: dict[str, Any]) -> None:
         self._run_job("fit")
@@ -451,13 +398,22 @@ class LizyWidget(anywidget.AnyWidget):
         params = payload.get("params", {})
         if not params:
             return
-        current = dict(self.config)
+
+        # Restore tune-time config snapshot if available (P-005)
+        if self._tune_config_snapshot is not None:
+            current = copy.deepcopy(self._tune_config_snapshot)
+            # Strip data/features/split/task — managed by df_info/service
+            for key in ("data", "features", "split", "task"):
+                current.pop(key, None)
+        else:
+            current = dict(self.config)
+
         model_section = dict(current.get("model", {}))
         model_params = dict(model_section.get("params", {}))
         model_params.update(params)
         model_section["params"] = model_params
         current["model"] = model_section
-        self.config = current
+        self.config = self._service.canonicalize_config(current)
 
     def _handle_request_inference_plot(self, payload: dict[str, Any]) -> None:
         plot_type = payload.get("plot_type", "")
@@ -487,7 +443,7 @@ class LizyWidget(anywidget.AnyWidget):
         "set_task": _handle_set_task,
         "update_column": _handle_update_column,
         "update_cv": _handle_update_cv,
-        "update_config": _handle_update_config,
+        "patch_config": _handle_patch_config,
         "fit": _handle_fit,
         "tune": _handle_tune,
         "cancel": _handle_cancel,
@@ -507,12 +463,12 @@ class LizyWidget(anywidget.AnyWidget):
             return
 
         # Pre-execution data/target checks (BLUEPRINT §6.1)
-        if self._service._df is None:
+        if not self._service.has_data():
             self.error = {"code": "NO_DATA", "message": "No data loaded. Call load(df) first."}
             self.status = "failed"
             return
 
-        if not self._service._df_info.get("target"):
+        if not self._service.has_target():
             self.error = {
                 "code": "NO_TARGET",
                 "message": "No target selected. Call load(df, target=...) or set_target(col).",
@@ -529,7 +485,10 @@ class LizyWidget(anywidget.AnyWidget):
         self.elapsed_sec = 0.0
         self.error = {}
 
-        full_config = self._service.build_config(dict(self.config))
+        full_config = self._service.prepare_run_config(dict(self.config), job_type=job_type)
+
+        if job_type == "tune":
+            self._tune_config_snapshot = copy.deepcopy(full_config)
 
         # Pre-execution validation (BLUEPRINT §9-3)
         errors = self._service.validate_config(full_config)
@@ -588,16 +547,19 @@ class LizyWidget(anywidget.AnyWidget):
                     "metric_name": summary_t.metric_name,
                     "direction": summary_t.direction,
                 }
-                # After tune, model is fitted — populate fit_summary too
-                normalized = self._normalize_metrics(self._service.get_evaluate_table())
-                fold_details = self._service.get_split_summary()
-                if normalized:
-                    self.fit_summary = {
-                        "metrics": normalized,
-                        "fold_count": len(fold_details),
-                        "fold_details": fold_details,
-                        "params": [],
-                    }
+                # After tune, model MAY be fitted — guard evaluate/split calls (P-004 R3)
+                try:
+                    normalized = self._normalize_metrics(self._service.get_evaluate_table())
+                    fold_details = self._service.get_split_summary()
+                    if normalized:
+                        self.fit_summary = {
+                            "metrics": normalized,
+                            "fold_count": len(fold_details),
+                            "fold_details": fold_details,
+                            "params": [],
+                        }
+                except Exception:
+                    pass  # Tune-only: no fit results available
 
             self.available_plots = self._service.get_available_plots()
             self.elapsed_sec = round(time.monotonic() - start, 1)
@@ -628,45 +590,6 @@ class LizyWidget(anywidget.AnyWidget):
             timer.join(timeout=2.0)
 
     # ── Config helpers ─────────────────────────────────────────
-
-    @staticmethod
-    def _extract_defaults(schema: dict[str, Any]) -> dict[str, Any]:
-        """Walk a JSON Schema and extract all default values into a config dict."""
-
-        def _resolve(node: dict[str, Any], root: dict[str, Any]) -> dict[str, Any]:
-            if "$ref" in node:
-                parts = node["$ref"].lstrip("#/").split("/")
-                ref_node: Any = root
-                for p in parts:
-                    ref_node = ref_node.get(p, {})
-                merged = dict(ref_node)
-                merged.update({k: v for k, v in node.items() if k != "$ref"})
-                return merged
-            if "allOf" in node and len(node["allOf"]) == 1 and "$ref" in node["allOf"][0]:
-                resolved = _resolve(node["allOf"][0], root)
-                resolved.update({k: v for k, v in node.items() if k != "allOf"})
-                return resolved
-            return node
-
-        def _walk(node: dict[str, Any], root: dict[str, Any]) -> Any:
-            node = _resolve(node, root)
-            if node.get("type") == "object" and "properties" in node:
-                obj: dict[str, Any] = {}
-                for key, prop in node["properties"].items():
-                    prop = _resolve(prop, root)
-                    if "default" in prop:
-                        obj[key] = prop["default"]
-                    elif prop.get("type") == "object" and "properties" in prop:
-                        child = _walk(prop, root)
-                        if child:
-                            obj[key] = child
-                return obj
-            if "default" in node:
-                return node["default"]
-            return {}
-
-        result = _walk(schema, schema)
-        return result if isinstance(result, dict) else {}
 
     @staticmethod
     def _normalize_metrics(eval_records: list[dict[str, Any]]) -> dict[str, Any]:

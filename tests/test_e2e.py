@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from lizyml_widget.adapter import LizyMLAdapter
 from lizyml_widget.types import (
     BackendInfo,
-    ConfigSchema,
     FitSummary,
     PredictionSummary,
     TuningSummary,
@@ -19,13 +19,18 @@ from lizyml_widget.types import (
 
 def _make_widget_with_adapter() -> tuple[Any, MagicMock]:
     """Create a LizyWidget with a controllable mock adapter."""
+    real_adapter = LizyMLAdapter()
     with patch("lizyml_widget.widget.LizyMLAdapter") as MockAdapter:
         adapter = MockAdapter.return_value
         adapter.info = BackendInfo(name="mock", version="0.0.0")
-        adapter.get_config_schema.return_value = ConfigSchema(
-            json_schema={"type": "object", "properties": {}}
-        )
+        adapter.get_config_schema.return_value = {"type": "object", "properties": {}}
         adapter.validate_config.return_value = []
+        # Delegate config lifecycle to real adapter
+        adapter.initialize_config.side_effect = real_adapter.initialize_config
+        adapter.apply_config_patch.side_effect = real_adapter.apply_config_patch
+        adapter.prepare_run_config.side_effect = real_adapter.prepare_run_config
+        adapter.get_backend_contract.side_effect = real_adapter.get_backend_contract
+        adapter.canonicalize_config.side_effect = real_adapter.canonicalize_config
 
         from lizyml_widget.widget import LizyWidget
 
@@ -183,6 +188,123 @@ class TestErrorFlows:
         assert w.status == "failed"
         assert w.error["code"] in ("BACKEND_ERROR", "INTERNAL_ERROR")
         assert "Backend crashed" in w.error["message"]
+
+
+class TestTuneOnlyE2E:
+    """P-004: Tune-only execution tests (R3/R4)."""
+
+    def test_tune_succeeds_when_evaluate_table_raises(self) -> None:
+        """R3: Tune should complete even if evaluate_table raises (MODEL_NOT_FIT)."""
+        w, adapter = _make_widget_with_adapter()
+        df = _sample_df()
+
+        mock_model = MagicMock()
+        adapter.create_model.return_value = mock_model
+        adapter.tune.return_value = TuningSummary(
+            best_params={"learning_rate": 0.01},
+            best_score=0.92,
+            trials=[],
+            metric_name="auc",
+            direction="maximize",
+        )
+        adapter.evaluate_table.side_effect = RuntimeError("Model has not been fitted")
+        adapter.available_plots.return_value = ["optimization-history"]
+
+        w.load(df, target="y")
+        w.action = {"type": "tune", "payload": {}}
+
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+
+        assert w.status == "completed"
+        assert w.tune_summary["best_score"] == 0.92
+        # fit_summary should remain empty since evaluate_table failed
+        assert w.fit_summary == {} or w.fit_summary.get("metrics") is None
+
+    def test_tune_with_empty_space_completes(self) -> None:
+        """R1: Tune with default (empty) tuning config should complete."""
+        w, adapter = _make_widget_with_adapter()
+        df = _sample_df()
+
+        mock_model = MagicMock()
+        adapter.create_model.return_value = mock_model
+        adapter.tune.return_value = TuningSummary(
+            best_params={"lr": 0.05},
+            best_score=0.88,
+            trials=[],
+            metric_name="auc",
+            direction="maximize",
+        )
+        adapter.evaluate_table.return_value = []
+        adapter.split_summary.return_value = []
+        adapter.available_plots.return_value = ["optimization-history"]
+
+        w.load(df, target="y")
+        # Ensure no tuning config is set
+        cfg = w.get_config()
+        cfg.pop("tuning", None)
+        w.set_config(cfg)
+
+        w.action = {"type": "tune", "payload": {}}
+
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+
+        assert w.status == "completed"
+        assert w.tune_summary["best_score"] == 0.88
+
+
+class TestContractE2E:
+    """Phase 22: Full-flow contract validation tests."""
+
+    def test_fit_with_correct_contract_completes(self) -> None:
+        """Normal flow: valid config → fit completes."""
+        w, adapter = _make_widget_with_adapter()
+        df = _sample_df()
+
+        mock_model = MagicMock()
+        adapter.create_model.return_value = mock_model
+        adapter.fit.return_value = FitSummary(metrics={"auc": {"is": 0.9}}, fold_count=5, params=[])
+        adapter.evaluate_table.return_value = []
+        adapter.split_summary.return_value = []
+        adapter.available_plots.return_value = []
+
+        w.load(df, target="y")
+        w.action = {"type": "fit", "payload": {}}
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+        assert w.status == "completed"
+
+    def test_tune_with_invalid_space_type_fails(self) -> None:
+        """Invalid space type value should cause VALIDATION_ERROR."""
+        w, adapter = _make_widget_with_adapter()
+        df = _sample_df()
+
+        adapter.validate_config.return_value = [
+            {
+                "field": "tuning.optuna.space.lr",
+                "message": "Invalid type 'range'",
+                "type": "invalid_space_type",
+            }
+        ]
+
+        w.load(df, target="y")
+        w.set_config(
+            {
+                **w.get_config(),
+                "tuning": {
+                    "optuna": {
+                        "params": {"n_trials": 50},
+                        "space": {"lr": {"type": "range", "low": 0.01, "high": 0.1}},
+                    }
+                },
+            }
+        )
+        w.action = {"type": "tune", "payload": {}}
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+        assert w.error.get("code") == "VALIDATION_ERROR"
+        assert w.status == "failed"
 
 
 class TestCancelFlow:
