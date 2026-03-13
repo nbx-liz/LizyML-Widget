@@ -473,6 +473,8 @@ export function ConfigTab({
       URL.revokeObjectURL(url);
     } else if (msg.type === "raw_config") {
       setRawYaml(msg.content);
+    } else if (msg.type === "raw_config_error") {
+      setRawYaml(`# Error loading config\n# ${msg.message ?? "unknown error"}`);
     }
   }, []));
 

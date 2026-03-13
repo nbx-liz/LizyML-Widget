@@ -452,6 +452,16 @@
   transition: width 0.3s ease;
 }
 
+.lzw-progress__bar--indeterminate {
+  width: 30%;
+  animation: lzw-indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes lzw-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(333%); }
+}
+
 .lzw-progress__info {
   display: flex;
   justify-content: space-between;

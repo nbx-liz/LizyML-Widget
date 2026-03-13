@@ -479,6 +479,22 @@ class TestApplyBestParamsSnapshot:
 
         assert w.config["model"]["params"]["lr"] == 0.01
 
+    def test_apply_best_params_without_snapshot_no_mutation(self) -> None:
+        """Non-snapshot path must not mutate the original config's nested dicts."""
+        w = _make_widget()
+        original_params = {"lr": 0.1, "depth": 5}
+        original_model = {"name": "lgbm", "params": original_params}
+        w.config = {"model": original_model}
+
+        w.action = {
+            "type": "apply_best_params",
+            "payload": {"params": {"lr": 0.01}},
+        }
+
+        # The original nested dict objects should NOT have been mutated
+        assert original_params["lr"] == 0.1
+        assert original_model["params"]["lr"] == 0.1
+
 
 class TestBackendContract:
     """Phase 25: backend_contract traitlet and patch_config action."""
@@ -901,12 +917,52 @@ class TestActionHandlerEdgeCases:
         assert sent[0]["type"] == "raw_config"
         assert "content" in sent[0]
 
-    def test_raw_config_error(self) -> None:
-        """widget.py lines 394-395: raw_config error."""
+    def test_raw_config_without_data_sends_user_config(self) -> None:
+        """raw_config without data loaded sends current config as-is."""
         w = _make_widget()
-        w._service.build_config = MagicMock(side_effect=RuntimeError("err"))
+        w.config = {"model": {"name": "lgbm", "params": {}}}
+
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
         w.action = {"type": "raw_config", "payload": {}}
+        assert len(sent) == 1
+        assert sent[0]["type"] == "raw_config"
+        assert "model" in sent[0]["content"]
+
+    def test_raw_config_error_sends_msg(self) -> None:
+        """raw_config error sends error via custom msg and sets error traitlet."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w._service.build_config = MagicMock(side_effect=RuntimeError("boom"))
+
+        sent: list[dict[str, Any]] = []
+        w.send = lambda msg: sent.append(msg)  # type: ignore[assignment]
+        w.action = {"type": "raw_config", "payload": {}}
+        assert len(sent) == 1
+        assert sent[0]["type"] == "raw_config_error"
+        assert "boom" in sent[0]["message"]
         assert w.error["code"] == "EXPORT_ERROR"
+
+    def test_raw_config_error_with_disconnected_send(self) -> None:
+        """H-1: send() raising in error path should not propagate."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w._service.build_config = MagicMock(side_effect=RuntimeError("boom"))
+
+        # Simulate disconnected widget — send() raises
+        def broken_send(msg: Any) -> None:
+            raise ConnectionError("Widget disconnected")
+
+        w.send = broken_send  # type: ignore[assignment]
+
+        # Should NOT raise even though send() fails in error path
+        w.action = {"type": "raw_config", "payload": {}}
+
+        # Error traitlet should still be set
+        assert w.error["code"] == "EXPORT_ERROR"
+        assert "boom" in w.error["message"]
 
     def test_apply_best_params_empty_ignored(self) -> None:
         """widget.py line 400: empty params returns early."""
@@ -1005,6 +1061,51 @@ class TestRunJobGuard:
         # Status should remain running, no error set
         assert w.status == "running"
         assert w.error == {}
+
+
+class TestTuneProgress:
+    """Tune sets initial progress with n_trials info."""
+
+    def test_tune_sets_initial_progress(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        def mock_tune(config: Any, *, on_progress: Any = None) -> Any:
+            # Capture progress calls and return a mock summary
+            return TuningSummary(
+                best_params={"lr": 0.01},
+                best_score=0.9,
+                trials=[],
+                metric_name="auc",
+                direction="maximize",
+            )
+
+        w._service.tune = mock_tune  # type: ignore[assignment]
+
+        # Set config with tuning section
+        w.config = {
+            **dict(w.config),
+            "tuning": {
+                "optuna": {"params": {"n_trials": 30}, "space": {}},
+            },
+        }
+
+        # Run tune — check that progress traitlet is set before tune starts
+        w.action = {"type": "tune", "payload": {}}
+
+        # Poll for progress instead of fixed sleep (avoids CI flakiness)
+        import time
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if w.progress.get("total"):
+                break
+            time.sleep(0.05)
+
+        # Progress should contain n_trials info
+        assert w.progress["total"] == 30
+        assert "30" in w.progress["message"]
 
 
 class TestRequestPlotSuccess:

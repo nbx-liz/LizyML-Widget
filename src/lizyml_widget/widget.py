@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import importlib.resources
 import statistics
@@ -388,10 +389,15 @@ class LizyWidget(anywidget.AnyWidget):
         try:
             import yaml
 
-            full_config = self._service.build_config(dict(self.config))
+            if self._service.has_data() and self._service.has_target():
+                full_config = self._service.build_config(dict(self.config))
+            else:
+                full_config = dict(self.config)
             content = yaml.dump(full_config, default_flow_style=False)
             self.send({"type": "raw_config", "content": content})
         except Exception as e:
+            with contextlib.suppress(Exception):
+                self.send({"type": "raw_config_error", "message": str(e)})
             self.error = {"code": "EXPORT_ERROR", "message": str(e)}
 
     def _handle_apply_best_params(self, payload: dict[str, Any]) -> None:
@@ -406,7 +412,7 @@ class LizyWidget(anywidget.AnyWidget):
             for key in ("data", "features", "split", "task"):
                 current.pop(key, None)
         else:
-            current = dict(self.config)
+            current = copy.deepcopy(dict(self.config))
 
         model_section = dict(current.get("model", {}))
         model_params = dict(model_section.get("params", {}))
@@ -539,6 +545,10 @@ class LizyWidget(anywidget.AnyWidget):
                     "params": summary.params,
                 }
             elif job_type == "tune":
+                n_trials = (
+                    config.get("tuning", {}).get("optuna", {}).get("params", {}).get("n_trials", 50)
+                )
+                on_progress(0, n_trials, f"Tuning {n_trials} trials...")
                 summary_t = self._service.tune(config, on_progress=on_progress)
                 self.tune_summary = {
                     "best_params": summary_t.best_params,

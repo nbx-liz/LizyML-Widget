@@ -25,6 +25,11 @@ interface ResultsTabProps {
   onSwitchToFit?: () => void;
 }
 
+/** Format a plot type slug into a display label. */
+function plotLabel(slug: string): string {
+  return slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export function ResultsTab({
   status,
   jobType,
@@ -42,6 +47,8 @@ export function ResultsTab({
   sendAction,
   onSwitchToFit,
 }: ResultsTabProps) {
+  const [selectedPlot, setSelectedPlot] = useState<string | null>(null);
+
   // Idle — no results yet
   if (status === "idle" || status === "data_loaded") {
     return (
@@ -69,7 +76,7 @@ export function ResultsTab({
     return (
       <div class="lzw-results">
         <div class="lzw-results__header">
-          <span class="lzw-badge lzw-badge--error">✗ Failed</span>
+          <span class="lzw-badge lzw-badge--error">&#x2717; Failed</span>
           <span class="lzw-muted" style="margin-left:8px">
             {jobType.charAt(0).toUpperCase() + jobType.slice(1)} #{jobIndex}
           </span>
@@ -102,12 +109,15 @@ export function ResultsTab({
     inferenceResult.status === "completed" &&
     inferenceResult.data?.length > 0;
 
-  const otherPlots = availablePlots.filter((p) => p !== "learning-curve" && p !== "optimization-history");
+  // Auto-select first available plot, or keep user's selection if still valid
+  const activePlot = (selectedPlot && availablePlots.includes(selectedPlot))
+    ? selectedPlot
+    : availablePlots[0] ?? null;
 
   return (
     <div class="lzw-results">
       <div class="lzw-results__header">
-        <span class="lzw-badge lzw-badge--success">✓ Completed</span>
+        <span class="lzw-badge lzw-badge--success">&#x2713; Completed</span>
         <span class="lzw-muted" style="margin-left:8px">
           {jobType.charAt(0).toUpperCase() + jobType.slice(1)} #{jobIndex} — {elapsedSec.toFixed(1)}s
         </span>
@@ -115,112 +125,84 @@ export function ResultsTab({
 
       {/* Tune specific results */}
       {hasTune && (
-        <>
-          <Accordion title="Optimization History" defaultOpen={true}>
-            {availablePlots.includes("optimization-history") && (
-              <PlotViewer
-                availablePlots={["optimization-history"]}
-                plots={plots}
-                loading={plotLoading}
-                onRequest={onRequestPlot}
-              />
-            )}
-          </Accordion>
-          <Accordion title="Best Params">
-            {tuneSummary.best_params && Object.keys(tuneSummary.best_params).length > 0 ? (
-              <>
-                <ParamsTable params={[tuneSummary.best_params]} />
-                <div style="margin-top: 8px;">
-                  <button
-                    class="lzw-btn"
-                    onClick={() => {
-                      sendAction("apply_best_params", { params: tuneSummary.best_params });
-                      onSwitchToFit?.();
-                    }}
-                    type="button"
-                  >
-                    Apply to Fit ▸
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p class="lzw-muted">No best params available.</p>
-            )}
-            <div class="lzw-form-row" style="margin-top: 8px;">
-              <span class="lzw-label">Best Score</span>
-              <span>
-                {tuneSummary.metric_name}: {tuneSummary.best_score?.toFixed(4)}
-              </span>
-            </div>
-            <div class="lzw-form-row">
-              <span class="lzw-label">Trials</span>
-              <span>{tuneSummary.trials?.length ?? 0}</span>
-            </div>
-          </Accordion>
-        </>
+        <Accordion title="Best Params" defaultOpen={true}>
+          {tuneSummary.best_params && Object.keys(tuneSummary.best_params).length > 0 ? (
+            <>
+              <ParamsTable params={[tuneSummary.best_params]} />
+              <div style="margin-top: 8px;">
+                <button
+                  class="lzw-btn"
+                  onClick={() => {
+                    sendAction("apply_best_params", { params: tuneSummary.best_params });
+                    onSwitchToFit?.();
+                  }}
+                  type="button"
+                >
+                  Apply to Fit &#x25B8;
+                </button>
+              </div>
+            </>
+          ) : (
+            <p class="lzw-muted">No best params available.</p>
+          )}
+          <div class="lzw-form-row" style="margin-top: 8px;">
+            <span class="lzw-label">Best Score</span>
+            <span>
+              {tuneSummary.metric_name}: {tuneSummary.best_score?.toFixed(4)}
+            </span>
+          </div>
+          <div class="lzw-form-row">
+            <span class="lzw-label">Trials</span>
+            <span>{tuneSummary.trials?.length ?? 0}</span>
+          </div>
+        </Accordion>
       )}
 
-      {/* Fit results */}
+      {/* Score (Fit) */}
       {hasFit && (
-        <>
-          <div style="margin-bottom: 8px;">
-            <div style="font-weight: 600; margin-bottom: 8px;">── Score ──</div>
-            <ScoreTable metrics={fitSummary.metrics} />
-          </div>
+        <div style="margin-bottom: 12px;">
+          <div style="font-weight: 600; margin-bottom: 8px;">Score</div>
+          <ScoreTable metrics={fitSummary.metrics} />
+        </div>
+      )}
 
-          {availablePlots.includes("learning-curve") && (
-            <div style="margin-bottom: 16px;">
-              <div style="font-weight: 600; margin-bottom: 8px;">── Learning Curve ──</div>
-              <PlotViewer
-                availablePlots={["learning-curve"]}
-                plots={plots}
-                loading={plotLoading}
-                onRequest={onRequestPlot}
-              />
-            </div>
-          )}
-
-          {otherPlots.length > 0 && (
-            <div style="font-weight: 600; margin-bottom: 8px;">
-              ── Plots{" "}
-              <select
-                class="lzw-select"
-                style="font-weight: 400; margin-left: 8px;"
-                onChange={(e) => onRequestPlot((e.target as HTMLSelectElement).value)}
+      {/* Unified Plots section */}
+      {availablePlots.length > 0 && (
+        <div style="margin-bottom: 12px;">
+          <div style="font-weight: 600; margin-bottom: 8px;">Plots</div>
+          <div class="lzw-chip-group" style="margin-bottom: 8px;">
+            {availablePlots.map((p) => (
+              <button
+                key={p}
+                type="button"
+                class={`lzw-chip ${activePlot === p ? "lzw-chip--active" : ""}`}
+                onClick={() => {
+                  setSelectedPlot(p);
+                  if (!plots[p]) onRequestPlot(p);
+                }}
               >
-                <option value="">-- Select --</option>
-                {otherPlots.map(p => <option key={p} value={p}>{p.replace(/-/g, " ")}</option>)}
-              </select>
-              {" "}──
-            </div>
+                {plotLabel(p)}
+              </button>
+            ))}
+          </div>
+          {activePlot && (
+            <PlotViewer
+              availablePlots={[activePlot]}
+              plots={plots}
+              loading={plotLoading}
+              onRequest={onRequestPlot}
+            />
           )}
-          {otherPlots.some(p => plots[p]) && (
-            <div style="margin-bottom: 16px;">
-              <PlotViewer
-                availablePlots={otherPlots.filter(p => plots[p])}
-                plots={plots}
-                loading={plotLoading}
-                onRequest={() => {}} // Handle dynamically by external select
-              />
-            </div>
-          )}
+        </div>
+      )}
 
-          <Accordion title="Feature Importance" defaultOpen={false}>
-            {availablePlots.includes("feature-importance") ? (
-              <PlotViewer
-                availablePlots={["feature-importance"]}
-                plots={plots}
-                loading={plotLoading}
-                onRequest={onRequestPlot}
-              />
-            ) : (
-              <p class="lzw-muted">Feature importance not available.</p>
-            )}
-          </Accordion>
-          
+      {/* Details: Fold Details + Parameters */}
+      {hasFit && (
+        <Accordion title="Details" defaultOpen={false}>
           {fitSummary.fold_details && fitSummary.fold_details.length > 0 && (
-            <Accordion title="Fold Details" defaultOpen={false}>
-              <div class="lzw-table-wrap">
+            <>
+              <div style="font-weight: 600; margin-bottom: 4px; font-size: 13px;">Fold Details</div>
+              <div class="lzw-table-wrap" style="margin-bottom: 12px;">
                 <table class="lzw-table">
                   <thead>
                     <tr>
@@ -242,15 +224,15 @@ export function ResultsTab({
                   </tbody>
                 </table>
               </div>
-            </Accordion>
+            </>
           )}
-
           {fitSummary.params?.length > 0 && (
-            <Accordion title="Parameters" defaultOpen={false}>
+            <>
+              <div style="font-weight: 600; margin-bottom: 4px; font-size: 13px;">Parameters</div>
               <ParamsTable params={fitSummary.params} />
-            </Accordion>
+            </>
           )}
-        </>
+        </Accordion>
       )}
 
       {/* Inference */}

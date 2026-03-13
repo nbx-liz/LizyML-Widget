@@ -42,7 +42,11 @@ export function ProgressView({
 
       {total > 0 && (
         <div class="lzw-progress__bar-wrap">
-          <div class="lzw-progress__bar" style={{ width: `${pct}%` }} />
+          {current > 0 ? (
+            <div class="lzw-progress__bar" style={{ width: `${pct}%` }} />
+          ) : (
+            <div class="lzw-progress__bar lzw-progress__bar--indeterminate" />
+          )}
         </div>
       )}
 

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
+from lizyml_widget import adapter_schema
 from lizyml_widget.adapter import LizyMLAdapter
 from lizyml_widget.types import (
     BackendContract,
@@ -93,8 +94,8 @@ class TestConfigSchema:
         mock_loader = MagicMock(load_config=mock_load_config)
         mock_config_cls = MagicMock()
         mock_config_cls.model_json_schema.return_value = {"properties": {}}
-        old_cache = LizyMLAdapter._schema_cache
-        LizyMLAdapter._schema_cache = None
+        old_cache = adapter_schema._schema_cache
+        adapter_schema.reset_schema_cache()
         try:
             with patch.dict(
                 "sys.modules",
@@ -109,15 +110,15 @@ class TestConfigSchema:
                 errors = adapter.validate_config({"model": {"name": "lgbm"}})
                 assert errors == []
         finally:
-            LizyMLAdapter._schema_cache = old_cache
+            adapter_schema._schema_cache = old_cache
 
     def test_validate_config_invalid(self) -> None:
         mock_load_config = MagicMock(side_effect=ValueError("config_version is required"))
         mock_loader = MagicMock(load_config=mock_load_config)
         mock_config_cls = MagicMock()
         mock_config_cls.model_json_schema.return_value = {"properties": {}}
-        old_cache = LizyMLAdapter._schema_cache
-        LizyMLAdapter._schema_cache = None
+        old_cache = adapter_schema._schema_cache
+        adapter_schema.reset_schema_cache()
         try:
             with patch.dict(
                 "sys.modules",
@@ -133,7 +134,7 @@ class TestConfigSchema:
                 assert len(errors) == 1
                 assert "config_version" in errors[0]["message"]
         finally:
-            LizyMLAdapter._schema_cache = old_cache
+            adapter_schema._schema_cache = old_cache
 
     def test_validate_config_catches_legacy_mode_format(self) -> None:
         """R2 defense: legacy 'mode' format should be caught before backend validation."""
@@ -552,6 +553,11 @@ def _mock_schema_modules() -> dict[str, Any]:
             "training": {"type": "object", "properties": {}},
             "evaluation": {"type": "object", "properties": {}},
             "calibration": {"type": "object", "properties": {}},
+            "output_dir": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "default": None,
+                "title": "Output Dir",
+            },
         },
     }
     return {
@@ -693,6 +699,12 @@ class TestInitializeConfig:
             assert params["objective"] == "multiclass"
             assert "auc_mu" in params["metric"]
 
+    def test_output_dir_default(self) -> None:
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            config = adapter.initialize_config()
+            assert config["output_dir"] == "outputs/"
+
 
 class TestApplyConfigPatch:
     def test_set_operation(self) -> None:
@@ -799,6 +811,72 @@ class TestApplyTaskDefaults:
         config = {"model": {"name": "lgbm", "params": {"n_estimators": 100}}}
         adapter.apply_task_defaults(config, task="binary")
         assert "objective" not in config["model"]["params"]
+
+    @pytest.mark.parametrize(
+        "task,expected_metrics",
+        [
+            (
+                "regression",
+                ["huber", "mae", "mape", "mse", "rmse", "quantile"],
+            ),
+            (
+                "binary",
+                ["auc", "binary_logloss", "binary_error", "average_precision"],
+            ),
+            (
+                "multiclass",
+                ["auc_mu", "multi_logloss", "multi_error"],
+            ),
+        ],
+    )
+    def test_all_eval_metrics_on_by_default(self, task: str, expected_metrics: list[str]) -> None:
+        adapter = LizyMLAdapter()
+        config: dict[str, Any] = {
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": []},
+        }
+        result = adapter.apply_task_defaults(config, task=task)
+        assert result["evaluation"]["metrics"] == expected_metrics
+
+    def test_eval_metrics_not_overwritten_if_set(self) -> None:
+        adapter = LizyMLAdapter()
+        config: dict[str, Any] = {
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": ["auc"]},
+        }
+        result = adapter.apply_task_defaults(config, task="binary")
+        assert result["evaluation"]["metrics"] == ["auc"]
+
+    def test_task_change_filters_stale_metrics(self) -> None:
+        """When task changes, stale metrics from old task should be removed."""
+        adapter = LizyMLAdapter()
+        # Start with regression metrics
+        config: dict[str, Any] = {
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": ["mae", "mse", "rmse"]},
+        }
+        # Switch to binary → regression metrics are invalid
+        result = adapter.apply_task_defaults(config, task="binary")
+        binary_valid = {"auc", "binary_logloss", "binary_error", "average_precision"}
+        actual = set(result["evaluation"]["metrics"])
+        # All returned metrics must be valid for binary
+        assert actual <= binary_valid
+        # Since no valid metrics survived, should populate defaults
+        assert len(actual) > 0
+
+    def test_task_change_keeps_valid_metrics(self) -> None:
+        """When task changes, metrics valid for new task should be kept."""
+        adapter = LizyMLAdapter()
+        # Config has mix of binary and invalid metrics
+        config: dict[str, Any] = {
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": ["auc", "mae", "binary_logloss"]},
+        }
+        result = adapter.apply_task_defaults(config, task="binary")
+        # auc and binary_logloss are valid for binary; mae is not
+        assert "auc" in result["evaluation"]["metrics"]
+        assert "binary_logloss" in result["evaluation"]["metrics"]
+        assert "mae" not in result["evaluation"]["metrics"]
 
 
 class TestApplyConfigPatchCanonicalInvariant:
@@ -983,6 +1061,18 @@ class TestInnerValidNormalization:
         }
         result = adapter.canonicalize_config(config)
         assert result["training"]["early_stopping"]["inner_valid"] is None
+
+    def test_unrecognized_type_becomes_null(self) -> None:
+        """Integer, list, or boolean inner_valid should be discarded as None."""
+        adapter = LizyMLAdapter()
+        for bad_value in [42, [1, 2], True]:
+            config = {
+                "training": {"early_stopping": {"inner_valid": bad_value}},
+            }
+            result = adapter.canonicalize_config(config)
+            assert result["training"]["early_stopping"]["inner_valid"] is None, (
+                f"inner_valid={bad_value!r} should become None"
+            )
 
     def test_normalization_in_apply_config_patch(self) -> None:
         adapter = LizyMLAdapter()
@@ -1174,18 +1264,164 @@ class TestInnerValidFieldStripping:
         assert result["training"]["early_stopping"]["inner_valid"] is None
 
 
+class TestGetDefaultSearchSpace:
+    """get_default_search_space returns LizyML default space as dict."""
+
+    @pytest.mark.parametrize("task", ["binary", "regression", "multiclass"])
+    def test_returns_dict_for_known_tasks(self, task: str) -> None:
+        LizyMLAdapter()
+        space = adapter_schema.get_default_search_space(task)
+        assert isinstance(space, dict)
+        assert len(space) > 0
+
+    def test_binary_contains_expected_keys(self) -> None:
+        LizyMLAdapter()
+        space = adapter_schema.get_default_search_space("binary")
+        # Should contain range params from LizyML default_space
+        assert "n_estimators" in space
+        assert "learning_rate" in space
+        assert "max_depth" in space
+        assert "feature_fraction" in space
+
+    def test_range_param_format(self) -> None:
+        LizyMLAdapter()
+        space = adapter_schema.get_default_search_space("binary")
+        # n_estimators should be int range
+        n_est = space["n_estimators"]
+        assert n_est["type"] == "int"
+        assert "low" in n_est
+        assert "high" in n_est
+
+    def test_categorical_param_format(self) -> None:
+        LizyMLAdapter()
+        space = adapter_schema.get_default_search_space("binary")
+        # objective should be categorical
+        obj = space["objective"]
+        assert obj["type"] == "categorical"
+        assert "choices" in obj
+
+    def test_log_scale_preserved(self) -> None:
+        LizyMLAdapter()
+        space = adapter_schema.get_default_search_space("binary")
+        # learning_rate is log-scale in LizyML
+        lr = space["learning_rate"]
+        assert lr["log"] is True
+
+    def test_apply_task_defaults_without_lgbm_params_still_populates_metrics(self) -> None:
+        """H-4 regression: metrics must be populated even when no LGBM param defaults exist."""
+        adapter = LizyMLAdapter()
+        # Patch _LGBM_PARAMS_BY_TASK to simulate a task with no LGBM defaults
+        original = dict(adapter._LGBM_PARAMS_BY_TASK)
+        adapter._LGBM_PARAMS_BY_TASK = {}
+        try:
+            config: dict[str, Any] = {
+                "model": {"name": "lgbm", "params": {}},
+                "evaluation": {"metrics": []},
+            }
+            result = adapter.apply_task_defaults(config, task="binary")
+            # Metrics should still be populated despite no LGBM param defaults
+            assert len(result["evaluation"]["metrics"]) > 0
+            assert "auc" in result["evaluation"]["metrics"]
+        finally:
+            adapter._LGBM_PARAMS_BY_TASK = original
+
+    def test_apply_task_defaults_without_lgbm_params_still_populates_space(self) -> None:
+        """H-4 regression: search space must be populated even when no LGBM param defaults exist."""
+        adapter = LizyMLAdapter()
+        original = dict(adapter._LGBM_PARAMS_BY_TASK)
+        adapter._LGBM_PARAMS_BY_TASK = {}
+        try:
+            config: dict[str, Any] = {
+                "model": {"name": "lgbm", "params": {}},
+                "evaluation": {"metrics": []},
+                "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}},
+            }
+            result = adapter.apply_task_defaults(config, task="binary")
+            space = result["tuning"]["optuna"]["space"]
+            assert len(space) > 0
+            assert "n_estimators" in space
+        finally:
+            adapter._LGBM_PARAMS_BY_TASK = original
+
+    def test_apply_task_defaults_populates_space(self) -> None:
+        """apply_task_defaults fills tuning.optuna.space with defaults."""
+        adapter = LizyMLAdapter()
+        config: dict[str, Any] = {
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": []},
+            "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}},
+        }
+        result = adapter.apply_task_defaults(config, task="binary")
+        space = result["tuning"]["optuna"]["space"]
+        assert "n_estimators" in space
+        assert space["learning_rate"]["log"] is True
+
+    def test_apply_task_defaults_does_not_overwrite_existing_space(
+        self,
+    ) -> None:
+        """Existing search space is not overwritten."""
+        adapter = LizyMLAdapter()
+        config: dict[str, Any] = {
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": []},
+            "tuning": {
+                "optuna": {
+                    "params": {"n_trials": 50},
+                    "space": {"n_estimators": {"type": "int", "low": 10, "high": 20, "log": False}},
+                }
+            },
+        }
+        result = adapter.apply_task_defaults(config, task="binary")
+        space = result["tuning"]["optuna"]["space"]
+        # Should keep existing, not overwrite
+        assert space["n_estimators"]["low"] == 10
+
+    def test_apply_task_defaults_populates_space_when_tuning_is_none(self) -> None:
+        """When tuning is None (schema default), space should still be populated."""
+        adapter = LizyMLAdapter()
+        config: dict[str, Any] = {
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": []},
+            "tuning": None,
+        }
+        result = adapter.apply_task_defaults(config, task="binary")
+        # Tuning section should be created with default space
+        assert result["tuning"] is not None
+        assert isinstance(result["tuning"], dict)
+        space = result["tuning"]["optuna"]["space"]
+        assert "n_estimators" in space
+
+    def test_apply_task_defaults_populates_space_when_tuning_absent(self) -> None:
+        """When tuning key is absent, space should still be populated."""
+        adapter = LizyMLAdapter()
+        config: dict[str, Any] = {
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": []},
+        }
+        result = adapter.apply_task_defaults(config, task="binary")
+        assert result["tuning"] is not None
+        space = result["tuning"]["optuna"]["space"]
+        assert "n_estimators" in space
+
+    def test_unknown_task_still_returns_space(self) -> None:
+        """LizyML returns a default space for any task string."""
+        LizyMLAdapter()
+        space = adapter_schema.get_default_search_space("unknown_task")
+        assert isinstance(space, dict)
+
+
 class TestStripForBackend:
     """strip_for_backend removes non-schema fields at all nesting levels."""
 
     def test_strips_extra_top_level(self) -> None:
-        adapter = LizyMLAdapter()
+        LizyMLAdapter()
         config = {"config_version": 1, "task": "binary", "extra": "bad"}
-        result = adapter.strip_for_backend(config)
+        result = adapter_schema.strip_for_backend(config)
         assert "extra" not in result
         assert result["config_version"] == 1
 
     def test_strips_extra_in_model(self) -> None:
-        adapter = LizyMLAdapter()
+        LizyMLAdapter()
         config = {
             "model": {
                 "name": "lgbm",
@@ -1193,51 +1429,51 @@ class TestStripForBackend:
                 "widget_only_field": True,
             }
         }
-        result = adapter.strip_for_backend(config)
+        result = adapter_schema.strip_for_backend(config)
         assert "widget_only_field" not in result["model"]
         assert result["model"]["name"] == "lgbm"
         assert result["model"]["params"]["n_estimators"] == 100
 
     def test_strips_extra_in_training(self) -> None:
-        adapter = LizyMLAdapter()
+        LizyMLAdapter()
         config = {
             "training": {"seed": 42, "ui_state": "running"},
         }
-        result = adapter.strip_for_backend(config)
+        result = adapter_schema.strip_for_backend(config)
         assert "ui_state" not in result["training"]
         assert result["training"]["seed"] == 42
 
     def test_strips_extra_in_data(self) -> None:
-        adapter = LizyMLAdapter()
+        LizyMLAdapter()
         config = {
             "data": {"target": "y", "widget_managed": True},
         }
-        result = adapter.strip_for_backend(config)
+        result = adapter_schema.strip_for_backend(config)
         assert "widget_managed" not in result["data"]
         assert result["data"]["target"] == "y"
 
     def test_strips_extra_in_features(self) -> None:
-        adapter = LizyMLAdapter()
+        LizyMLAdapter()
         config = {
             "features": {"exclude": [], "categorical": [], "js_extra": True},
         }
-        result = adapter.strip_for_backend(config)
+        result = adapter_schema.strip_for_backend(config)
         assert "js_extra" not in result["features"]
 
     def test_preserves_model_params_additionalProperties(self) -> None:
         """model.params has additionalProperties=true, so custom keys survive."""
-        adapter = LizyMLAdapter()
+        LizyMLAdapter()
         config = {
             "model": {
                 "name": "lgbm",
                 "params": {"n_estimators": 100, "custom_lgbm_param": 42},
             }
         }
-        result = adapter.strip_for_backend(config)
+        result = adapter_schema.strip_for_backend(config)
         assert result["model"]["params"]["custom_lgbm_param"] == 42
 
     def test_multiple_levels_stripped_at_once(self) -> None:
-        adapter = LizyMLAdapter()
+        LizyMLAdapter()
         config = {
             "config_version": 1,
             "task": "binary",
@@ -1246,7 +1482,7 @@ class TestStripForBackend:
             "model": {"name": "lgbm", "params": {}, "model_extra": "x"},
             "training": {"seed": 42, "training_extra": "x"},
         }
-        result = adapter.strip_for_backend(config)
+        result = adapter_schema.strip_for_backend(config)
         assert "top_extra" not in result
         assert "data_extra" not in result["data"]
         assert "model_extra" not in result["model"]

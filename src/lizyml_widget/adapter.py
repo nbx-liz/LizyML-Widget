@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import contextlib
 import copy
-import threading
+import logging
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol
 
 import pandas as pd
 
+from .adapter_contract import build_capabilities, build_ui_schema
+from .adapter_schema import (
+    get_default_search_space,
+    normalize_inner_valid,
+    strip_for_backend,
+)
 from .types import (
     BackendContract,
     BackendInfo,
@@ -19,6 +25,8 @@ from .types import (
     PredictionSummary,
     TuningSummary,
 )
+
+_log = logging.getLogger(__name__)
 
 
 class BackendAdapter(Protocol):
@@ -139,156 +147,8 @@ class LizyMLAdapter:
     def get_backend_contract(self) -> BackendContract:
         """Return the full backend contract with config schema, UI metadata, and capabilities."""
         config_schema = self.get_config_schema()
-
-        ui_schema: dict[str, Any] = {
-            "sections": [
-                {"key": "model", "title": "Model"},
-                {"key": "training", "title": "Training"},
-                {"key": "evaluation", "title": "Evaluation"},
-                {"key": "calibration", "title": "Calibration"},
-            ],
-            "option_sets": {
-                "objective": {
-                    "regression": ["huber", "mse", "mae", "quantile", "mape", "cross_entropy"],
-                    "binary": ["binary", "cross_entropy", "cross_entropy_lambda"],
-                    "multiclass": ["multiclass", "softmax", "multiclassova"],
-                },
-                "metric": {
-                    "regression": ["huber", "mae", "mape", "mse", "rmse", "quantile"],
-                    "binary": ["auc", "binary_logloss", "binary_error", "average_precision"],
-                    "multiclass": ["auc_mu", "multi_logloss", "multi_error"],
-                },
-            },
-            "parameter_hints": [
-                {"key": "objective", "label": "Objective", "kind": "objective"},
-                {"key": "metric", "label": "Metric", "kind": "metric"},
-                {"key": "n_estimators", "label": "N Estimators", "kind": "integer", "step": 100},
-                {"key": "learning_rate", "label": "Learning Rate", "kind": "number", "step": 0.001},
-                {"key": "max_depth", "label": "Max Depth", "kind": "integer", "step": 1},
-                {"key": "max_bin", "label": "Max Bin", "kind": "integer", "step": 1},
-                {
-                    "key": "feature_fraction",
-                    "label": "Feature Fraction",
-                    "kind": "number",
-                    "step": 0.05,
-                },
-                {
-                    "key": "bagging_fraction",
-                    "label": "Bagging Fraction",
-                    "kind": "number",
-                    "step": 0.05,
-                },
-                {"key": "bagging_freq", "label": "Bagging Freq", "kind": "integer", "step": 1},
-                {"key": "lambda_l1", "label": "Lambda L1", "kind": "number", "step": 0.0001},
-                {"key": "lambda_l2", "label": "Lambda L2", "kind": "number", "step": 0.0001},
-                {
-                    "key": "first_metric_only",
-                    "label": "First Metric Only",
-                    "kind": "boolean",
-                },
-            ],
-            "search_space_catalog": [
-                {
-                    "key": "objective",
-                    "title": "Objective",
-                    "paramType": "string",
-                    "modes": ["fixed", "choice"],
-                },
-                {
-                    "key": "metric",
-                    "title": "Metric",
-                    "paramType": "string",
-                    "modes": ["fixed", "choice"],
-                },
-                {
-                    "key": "n_estimators",
-                    "title": "N Estimators",
-                    "paramType": "integer",
-                    "modes": ["fixed", "range"],
-                },
-                {
-                    "key": "learning_rate",
-                    "title": "Learning Rate",
-                    "paramType": "number",
-                    "modes": ["fixed", "range"],
-                },
-                {
-                    "key": "max_depth",
-                    "title": "Max Depth",
-                    "paramType": "integer",
-                    "modes": ["fixed", "range"],
-                },
-                {
-                    "key": "max_bin",
-                    "title": "Max Bin",
-                    "paramType": "integer",
-                    "modes": ["fixed", "range"],
-                },
-                {
-                    "key": "feature_fraction",
-                    "title": "Feature Fraction",
-                    "paramType": "number",
-                    "modes": ["fixed", "range"],
-                },
-                {
-                    "key": "bagging_fraction",
-                    "title": "Bagging Fraction",
-                    "paramType": "number",
-                    "modes": ["fixed", "range"],
-                },
-                {
-                    "key": "bagging_freq",
-                    "title": "Bagging Freq",
-                    "paramType": "integer",
-                    "modes": ["fixed", "range"],
-                },
-                {
-                    "key": "lambda_l1",
-                    "title": "Lambda L1",
-                    "paramType": "number",
-                    "modes": ["fixed", "range"],
-                },
-                {
-                    "key": "lambda_l2",
-                    "title": "Lambda L2",
-                    "paramType": "number",
-                    "modes": ["fixed", "range"],
-                },
-                {
-                    "key": "first_metric_only",
-                    "title": "First Metric Only",
-                    "paramType": "boolean",
-                    "modes": ["fixed", "choice"],
-                },
-            ],
-            "step_map": {
-                "n_estimators": 100,
-                "learning_rate": 0.001,
-                "max_depth": 1,
-                "max_bin": 1,
-                "feature_fraction": 0.05,
-                "bagging_fraction": 0.05,
-                "bagging_freq": 1,
-                "lambda_l1": 0.0001,
-                "lambda_l2": 0.0001,
-                "num_leaves_ratio": 0.05,
-                "num_leaves": 1,
-            },
-            "conditional_visibility": {
-                "calibration": {"task": ["binary"]},
-                "num_leaves_ratio": {"auto_num_leaves": True},
-                "num_leaves": {"auto_num_leaves": False},
-            },
-            "defaults": {
-                "calibration": {"method": "platt", "n_splits": 5, "params": {}},
-            },
-            "inner_valid_options": ["holdout", "group_holdout", "time_holdout"],
-        }
-
-        capabilities: dict[str, Any] = {
-            "tune": {"allow_empty_space": True},
-        }
-
+        ui_schema = build_ui_schema(dict(self._ALL_METRICS_BY_TASK))
+        capabilities = build_capabilities()
         return BackendContract(
             schema_version=1,
             config_schema=config_schema,
@@ -301,6 +161,8 @@ class LizyMLAdapter:
         schema = self.get_config_schema()
         config = self._extract_defaults(schema)
         config.setdefault("config_version", 1)
+        if not config.get("output_dir"):
+            config["output_dir"] = "outputs/"
 
         model_section = dict(config.get("model", {}))
         model_section.setdefault("name", "lgbm")
@@ -354,22 +216,79 @@ class LizyMLAdapter:
         result["model"] = self._enforce_auto_num_leaves(cur_model)
 
         # 3. Normalize inner_valid
-        result = self._normalize_inner_valid_pure(result)
+        result = normalize_inner_valid(result)
         return result
 
+    _ALL_METRICS_BY_TASK: dict[str, list[str]] = {
+        "regression": ["huber", "mae", "mape", "mse", "rmse", "quantile"],
+        "binary": ["auc", "binary_logloss", "binary_error", "average_precision"],
+        "multiclass": ["auc_mu", "multi_logloss", "multi_error"],
+    }
+
     def apply_task_defaults(self, config: dict[str, Any], *, task: str) -> dict[str, Any]:
-        """Apply task-dependent default params to config.
+        """Apply task-dependent default params to config via patch operations."""
+        ops: list[ConfigPatchOp] = []
 
-        Returns a new config with task-specific objective/metric applied
-        via patch operations. Backend-specific knowledge stays here.
-        """
+        # LGBM model params (may be empty for unknown tasks)
         defaults = self._LGBM_PARAMS_BY_TASK.get(task, {})
-        if not defaults:
-            return copy.deepcopy(config)
-
-        ops = [
+        ops.extend(
             ConfigPatchOp(op="set", path=f"model.params.{k}", value=v) for k, v in defaults.items()
-        ]
+        )
+
+        # Ensure evaluation metrics are valid for current task
+        eval_metrics = (config.get("evaluation") or {}).get("metrics", [])
+        task_metrics = self._ALL_METRICS_BY_TASK.get(task, [])
+        if task_metrics:
+            valid_set = set(task_metrics)
+            if not eval_metrics:
+                # Empty → populate all defaults for this task
+                ops.append(
+                    ConfigPatchOp(
+                        op="set",
+                        path="evaluation.metrics",
+                        value=list(task_metrics),
+                    )
+                )
+            else:
+                # Filter to only valid metrics for current task
+                filtered = [m for m in eval_metrics if m in valid_set]
+                if not filtered:
+                    filtered = list(task_metrics)
+                if filtered != eval_metrics:
+                    ops.append(
+                        ConfigPatchOp(
+                            op="set",
+                            path="evaluation.metrics",
+                            value=filtered,
+                        )
+                    )
+
+        # Populate default search space (create tuning section if absent/None)
+        default_space = get_default_search_space(task)
+        if default_space:
+            tuning = config.get("tuning")
+            if not isinstance(tuning, dict):
+                # tuning is None or absent → create full structure
+                ops.append(
+                    ConfigPatchOp(
+                        op="set",
+                        path="tuning",
+                        value={"optuna": {"params": {"n_trials": 50}, "space": default_space}},
+                    )
+                )
+            else:
+                space = (tuning.get("optuna") or {}).get("space", {})
+                if not space:
+                    ops.append(
+                        ConfigPatchOp(
+                            op="set",
+                            path="tuning.optuna.space",
+                            value=default_space,
+                        )
+                    )
+
+        if not ops:
+            return copy.deepcopy(config)
         return self.apply_config_patch(config, ops, task=task)
 
     @staticmethod
@@ -382,160 +301,6 @@ class LizyMLAdapter:
         elif "num_leaves" not in params:
             params["num_leaves"] = 256
         return {**model, "params": params}
-
-    # ── inner_valid normalization ─────────────────────────────
-
-    _INNER_VALID_ALIASES: set[str] = {"holdout", "group_holdout", "time_holdout"}
-
-    # Allowed fields per inner_valid method (LizyML Pydantic schema, extra='forbid')
-    _INNER_VALID_FIELDS: dict[str, set[str]] = {
-        "holdout": {"method", "ratio", "random_state", "stratify"},
-        "group_holdout": {"method", "ratio", "random_state"},
-        "time_holdout": {"method", "ratio"},
-    }
-
-    @classmethod
-    def _normalize_iv_value(cls, iv: Any) -> Any:
-        """Return a normalized inner_valid value (pure, no mutation)."""
-        if iv is None:
-            return None
-        if isinstance(iv, str):
-            return {"method": iv} if iv in cls._INNER_VALID_ALIASES else None
-        if isinstance(iv, dict):
-            method = iv.get("method")
-            allowed = cls._INNER_VALID_FIELDS.get(method or "")
-            if allowed:
-                return {k: v for k, v in iv.items() if k in allowed}
-            if method is not None:
-                return None
-        return iv
-
-    @classmethod
-    def _normalize_inner_valid_pure(cls, config: dict[str, Any]) -> dict[str, Any]:
-        """Return a new config with inner_valid normalized (no mutation).
-
-        - Converts legacy string format ("holdout") to dict {"method": "holdout"}.
-        - Strips fields not allowed by the selected method's schema to prevent
-          Pydantic 'Extra inputs are not permitted' validation errors.
-        """
-        training = config.get("training")
-        if not isinstance(training, dict):
-            return config
-        es = training.get("early_stopping")
-        if not isinstance(es, dict):
-            return config
-        iv = es.get("inner_valid")
-        new_iv = cls._normalize_iv_value(iv)
-        if new_iv is iv:
-            return config
-        return {
-            **config,
-            "training": {
-                **training,
-                "early_stopping": {**es, "inner_valid": new_iv},
-            },
-        }
-
-    # ── Schema-based config sanitizer ────────────────────────
-
-    _schema_cache: dict[str, Any] | None = None
-    _schema_lock: threading.Lock = threading.Lock()
-
-    @classmethod
-    def _get_schema(cls) -> dict[str, Any]:
-        """Lazily load and cache the LizyML JSON schema (thread-safe)."""
-        if cls._schema_cache is not None:
-            return cls._schema_cache
-        with cls._schema_lock:
-            if cls._schema_cache is None:
-                from lizyml.config.schema import LizyMLConfig
-
-                cls._schema_cache = LizyMLConfig.model_json_schema()
-        return cls._schema_cache
-
-    @classmethod
-    def _resolve_ref(cls, ref: str, defs: dict[str, Any]) -> dict[str, Any]:
-        """Resolve a $ref pointer like '#/$defs/FooConfig'."""
-        name = ref.rsplit("/", 1)[-1]
-        result: dict[str, Any] = defs.get(name, {})
-        return result
-
-    @classmethod
-    def _resolve_sub_schema(
-        cls, prop_schema: dict[str, Any], defs: dict[str, Any], value: Any
-    ) -> dict[str, Any] | None:
-        """Resolve a property schema to a concrete object schema, handling
-        $ref, oneOf, anyOf, and discriminated unions."""
-        if "$ref" in prop_schema:
-            return cls._resolve_ref(prop_schema["$ref"], defs)
-
-        # oneOf with discriminator (e.g., model, split, inner_valid)
-        if "oneOf" in prop_schema and isinstance(value, dict):
-            discriminator = prop_schema.get("discriminator", {})
-            prop_name = discriminator.get("propertyName")
-            mapping = discriminator.get("mapping", {})
-            if prop_name and prop_name in value:
-                ref = mapping.get(value[prop_name])
-                if ref:
-                    return cls._resolve_ref(ref, defs)
-            # Fallback: try each oneOf variant
-            for variant in prop_schema["oneOf"]:
-                resolved = cls._resolve_sub_schema(variant, defs, value)
-                if resolved and "properties" in resolved:
-                    return resolved
-
-        # anyOf (nullable types, union types)
-        if "anyOf" in prop_schema and isinstance(value, dict):
-            for variant in prop_schema["anyOf"]:
-                resolved = cls._resolve_sub_schema(variant, defs, value)
-                if resolved and "properties" in resolved:
-                    return resolved
-
-        # Direct object with properties
-        if prop_schema.get("type") == "object" and "properties" in prop_schema:
-            return prop_schema
-
-        return None
-
-    @classmethod
-    def _strip_to_schema(
-        cls,
-        config: dict[str, Any],
-        obj_schema: dict[str, Any],
-        defs: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Recursively strip fields not in the schema.
-
-        Only removes keys when the schema has additionalProperties=false.
-        Recurses into nested objects to strip at all levels.
-        """
-        props = obj_schema.get("properties", {})
-        additional = obj_schema.get("additionalProperties", True)
-
-        result: dict[str, Any] = {}
-        for key, value in config.items():
-            # If additionalProperties is false, skip unknown keys
-            if not additional and key not in props:
-                continue
-
-            if isinstance(value, dict) and key in props:
-                sub = cls._resolve_sub_schema(props[key], defs, value)
-                if sub and "properties" in sub:
-                    value = cls._strip_to_schema(value, sub, defs)
-
-            result[key] = value
-        return result
-
-    @classmethod
-    def strip_for_backend(cls, config: dict[str, Any]) -> dict[str, Any]:
-        """Strip fields not recognized by LizyML schema.
-
-        Uses the Pydantic JSON schema to whitelist allowed fields at each
-        nesting level. Prevents 'Extra inputs are not permitted' errors.
-        """
-        schema = cls._get_schema()
-        defs = schema.get("$defs", {})
-        return cls._strip_to_schema(config, schema, defs)
 
     # ── Canonicalize config ───────────────────────────────────
 
@@ -556,7 +321,7 @@ class LizyMLAdapter:
         # Enforce auto_num_leaves exclusivity
         result["model"] = self._enforce_auto_num_leaves(result.get("model", {}))
 
-        result = self._normalize_inner_valid_pure(result)
+        result = normalize_inner_valid(result)
         return result
 
     @staticmethod
@@ -598,8 +363,8 @@ class LizyMLAdapter:
                 optuna.setdefault("params", {}).setdefault("n_trials", 50)
                 optuna.setdefault("space", {})
 
-        result = self._normalize_inner_valid_pure(result)
-        return self.strip_for_backend(result)
+        result = normalize_inner_valid(result)
+        return strip_for_backend(result)
 
     # ── Config patch helpers ──────────────────────────────────
 
@@ -713,8 +478,8 @@ class LizyMLAdapter:
 
         # Normalize and strip non-schema fields before validation
         normalized = copy.deepcopy(config)
-        normalized = self._normalize_inner_valid_pure(normalized)
-        normalized = self.strip_for_backend(normalized)
+        normalized = normalize_inner_valid(normalized)
+        normalized = strip_for_backend(normalized)
 
         try:
             load_config(normalized)
