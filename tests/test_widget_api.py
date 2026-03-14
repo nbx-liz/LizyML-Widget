@@ -1535,3 +1535,109 @@ class TestClassifyBestParamsTupleGuard:
 
         result = w._service.classify_best_params({"lr": 0.1})
         assert len(result) == 3
+
+
+# ── Fix 1: lazy backend info (P1) ────────────────────────────
+
+
+class TestLazyBackendInfo:
+    """Widget must not crash when backend import fails."""
+
+    def test_widget_init_without_backend(self) -> None:
+        """LizyWidget() should succeed even when adapter.info raises."""
+        adapter = MagicMock()
+        type(adapter).info = property(
+            lambda _: (_ for _ in ()).throw(ModuleNotFoundError("no lizyml"))
+        )
+
+        from lizyml_widget.widget import LizyWidget
+
+        w = LizyWidget(adapter=adapter)
+        assert w.backend_info == {}
+
+    def test_widget_init_with_backend(self) -> None:
+        """When adapter works, backend_info is populated."""
+        w = _make_widget()
+        assert w.backend_info["name"] == "mock"
+
+
+# ── Fix 2: status stuck on config build failure (P1) ─────────
+
+
+class TestRunJobConfigError:
+    """_run_job must transition to failed if prepare_run_config raises."""
+
+    def test_config_build_error_transitions_to_failed(self) -> None:
+        """Status must be 'failed' (not stuck at 'running') on config error."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w._service.prepare_run_config = MagicMock(
+            side_effect=ValueError("No features available")
+        )
+
+        w._run_job("fit")
+        assert w.status == "failed"
+        assert w.error.get("code") == "CONFIG_ERROR"
+        assert "No features" in w.error.get("message", "")
+
+    def test_config_error_allows_retry(self) -> None:
+        """After config error, a subsequent job should be able to run."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        # First call fails
+        w._service.prepare_run_config = MagicMock(
+            side_effect=ValueError("bad config")
+        )
+        w._run_job("fit")
+        assert w.status == "failed"
+
+        # Second call should not be blocked by "running" guard
+        w._service.prepare_run_config = MagicMock(
+            side_effect=ValueError("still bad")
+        )
+        w._run_job("fit")
+        assert w.status == "failed"
+        assert "still bad" in w.error.get("message", "")
+
+
+# ── Fix 5: timeout check in fit()/tune() (P2) ────────────────
+
+
+class TestBlockingHelperTimeout:
+    """fit()/tune() must raise TimeoutError when timeout expires."""
+
+    def test_fit_timeout_raises(self) -> None:
+        """fit(timeout=...) raises TimeoutError if job doesn't complete."""
+        import pytest
+
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        def _stuck_job(job_type: str) -> None:
+            w.status = "running"
+
+        w._run_job = _stuck_job  # type: ignore[assignment]
+
+        with pytest.raises(TimeoutError):
+            w.fit(timeout=0.1)
+
+    def test_tune_timeout_raises(self) -> None:
+        """tune(timeout=...) raises TimeoutError if job doesn't complete."""
+        import pytest
+
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        def _stuck_job(job_type: str) -> None:
+            w.status = "running"
+
+        w._run_job = _stuck_job  # type: ignore[assignment]
+
+        with pytest.raises(TimeoutError):
+            w.tune(timeout=0.1)
