@@ -2149,6 +2149,91 @@ class TestAbandonedThreadTracking:
         assert not warned, "Should not warn when previous thread finished"
 
 
+# ── Fix 6: multiclass proba expansion ─────────────────────────
+
+
+class TestMulticlassProbaExpansion:
+    """Multiclass predict must expand 2D proba into per-class columns."""
+
+    def test_binary_proba_single_column(self) -> None:
+        """Binary proba (1D) produces a single 'proba' column."""
+        import numpy as np
+
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_result = MagicMock()
+        mock_result.pred = np.array([0, 1, 0])
+        mock_result.proba = np.array([0.2, 0.8, 0.3])
+        mock_result.warnings = []
+        mock_model.predict.return_value = mock_result
+
+        summary = adapter.predict(mock_model, pd.DataFrame({"x": [1, 2, 3]}))
+        assert "proba" in summary.predictions.columns
+        assert "proba_0" not in summary.predictions.columns
+
+    def test_multiclass_proba_per_class_columns(self) -> None:
+        """Multiclass proba (2D) produces proba_0, proba_1, ... columns."""
+        import numpy as np
+
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_result = MagicMock()
+        mock_result.pred = np.array([0, 1, 2])
+        mock_result.proba = np.array([[0.7, 0.2, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]])
+        mock_result.warnings = []
+        mock_model.predict.return_value = mock_result
+
+        summary = adapter.predict(mock_model, pd.DataFrame({"x": [1, 2, 3]}))
+        assert "proba_0" in summary.predictions.columns
+        assert "proba_1" in summary.predictions.columns
+        assert "proba_2" in summary.predictions.columns
+        assert "proba" not in summary.predictions.columns
+
+
+# ── Fix 4: SHAP output in predict ────────────────────────────
+
+
+class TestShapOutput:
+    """predict() must include SHAP columns when available."""
+
+    def test_predict_with_shap_values(self) -> None:
+        """SHAP values from result should appear as shap_ prefixed columns."""
+        import numpy as np
+
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_result = MagicMock()
+        mock_result.pred = np.array([0, 1])
+        mock_result.proba = np.array([0.3, 0.9])
+        mock_result.warnings = []
+        mock_result.shap_values = np.array([[0.1, -0.2], [0.3, 0.4]])
+        mock_model.predict.return_value = mock_result
+
+        data = pd.DataFrame({"feat_a": [1, 2], "feat_b": [3, 4]})
+        summary = adapter.predict(mock_model, data, return_shap=True)
+        assert "shap_feat_a" in summary.predictions.columns
+        assert "shap_feat_b" in summary.predictions.columns
+
+    def test_predict_without_shap_no_columns(self) -> None:
+        """No shap_ columns when return_shap=False."""
+        import numpy as np
+
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_result = MagicMock()
+        mock_result.pred = np.array([0, 1])
+        mock_result.proba = np.array([0.3, 0.9])
+        mock_result.warnings = []
+        # shap_values not present
+        del mock_result.shap_values
+        mock_model.predict.return_value = mock_result
+
+        data = pd.DataFrame({"feat_a": [1, 2], "feat_b": [3, 4]})
+        summary = adapter.predict(mock_model, data, return_shap=False)
+        shap_cols = [c for c in summary.predictions.columns if c.startswith("shap_")]
+        assert shap_cols == []
+
+
 @contextlib.contextmanager
 def _capture_log(logger: logging.Logger, level: int = logging.WARNING):
     """Context manager to capture log records from a specific logger."""

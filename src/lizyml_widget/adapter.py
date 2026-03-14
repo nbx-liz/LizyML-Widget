@@ -649,10 +649,30 @@ class LizyMLAdapter:
         *,
         return_shap: bool = False,
     ) -> PredictionSummary:
+        import numpy as np
+
         result = model.predict(data, return_shap=return_shap)
         df = pd.DataFrame({"pred": result.pred})
+
+        # Proba: expand 2D (multiclass) into per-class columns
         if result.proba is not None:
-            df["proba"] = result.proba
+            proba = np.asarray(result.proba)
+            if proba.ndim == 2:
+                for i in range(proba.shape[1]):
+                    df[f"proba_{i}"] = proba[:, i]
+            else:
+                df["proba"] = proba
+
+        # SHAP values: include if available
+        shap_values = getattr(result, "shap_values", None)
+        if shap_values is not None:
+            shap_arr = np.asarray(shap_values)
+            if shap_arr.ndim == 2:
+                feature_names = list(data.columns)
+                for i, name in enumerate(feature_names):
+                    if i < shap_arr.shape[1]:
+                        df[f"shap_{name}"] = shap_arr[:, i]
+
         return PredictionSummary(predictions=df, warnings=result.warnings)
 
     def evaluate_table(self, model: Any) -> list[dict[str, Any]]:

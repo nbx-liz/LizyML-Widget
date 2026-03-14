@@ -57,8 +57,11 @@ class LizyWidget(anywidget.AnyWidget):
         self._inference_df: pd.DataFrame | None = None
         self._tune_config_snapshot: dict[str, Any] | None = None
 
-        info = self._service.info
-        self.backend_info = {"name": info.name, "version": info.version}
+        try:
+            info = self._service.info
+            self.backend_info = {"name": info.name, "version": info.version}
+        except Exception:
+            self.backend_info = {}
 
     # ── Public Python API ─────────────────────────────────────
 
@@ -109,8 +112,10 @@ class LizyWidget(anywidget.AnyWidget):
         # Validation failure sets status synchronously before thread starts
         if self.status in ("completed", "failed"):
             done.set()
-        done.wait(timeout=timeout)
+        finished = done.wait(timeout=timeout)
         self.unobserve(_watch, names=["status"])
+        if not finished and timeout is not None:
+            raise TimeoutError(f"fit() timed out after {timeout}s")
         if self.status == "failed":
             msg = self.error.get("message", "Fit failed")
             raise RuntimeError(msg)
@@ -131,8 +136,10 @@ class LizyWidget(anywidget.AnyWidget):
         self._run_job("tune")
         if self.status in ("completed", "failed"):
             done.set()
-        done.wait(timeout=timeout)
+        finished = done.wait(timeout=timeout)
         self.unobserve(_watch, names=["status"])
+        if not finished and timeout is not None:
+            raise TimeoutError(f"tune() timed out after {timeout}s")
         if self.status == "failed":
             msg = self.error.get("message", "Tune failed")
             raise RuntimeError(msg)
@@ -541,7 +548,13 @@ class LizyWidget(anywidget.AnyWidget):
         self.elapsed_sec = 0.0
         self.error = {}
 
-        full_config = self._service.prepare_run_config(dict(self.config), job_type=job_type)
+        try:
+            full_config = self._service.prepare_run_config(dict(self.config), job_type=job_type)
+        except Exception as exc:
+            _log.error("Config build failed: %s", exc, exc_info=True)
+            self.error = {"code": "CONFIG_ERROR", "message": str(exc)}
+            self.status = "failed"
+            return
 
         if job_type == "tune":
             self._tune_config_snapshot = copy.deepcopy(full_config)

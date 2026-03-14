@@ -310,7 +310,11 @@ class WidgetService:
             self.update_cv(
                 strategy,
                 n_splits,
-                group_column=split_section.get("group_col", split_section.get("group_column")),
+                group_column=(
+                    split_section.get("group_col")
+                    or split_section.get("group_column")
+                    or data_section.get("group_col")
+                ),
                 time_column=data_section.get("time_col"),
                 random_state=split_section.get("random_state", 42),
                 shuffle=split_section.get("shuffle", True),
