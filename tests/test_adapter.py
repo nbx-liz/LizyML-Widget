@@ -731,7 +731,7 @@ class TestGetBackendContract:
                 assert len(option_sets["metric"][task]) > 0
 
     def test_model_metric_option_set_uses_lgbm_names(self) -> None:
-        """model_metric option set must contain LightGBM-native metric names, not LizyML eval names."""
+        """model_metric option set must use LightGBM-native names."""
         with patch.dict("sys.modules", _mock_schema_modules()):
             adapter = LizyMLAdapter()
             contract = adapter.get_backend_contract()
@@ -755,7 +755,7 @@ class TestGetBackendContract:
             assert "auc" not in mc_metrics
 
     def test_parameter_hints_metric_uses_model_metric_kind(self) -> None:
-        """The metric parameter_hint must use kind='model_metric' to pick from model_metric option set."""
+        """metric parameter_hint must use kind='model_metric'."""
         with patch.dict("sys.modules", _mock_schema_modules()):
             adapter = LizyMLAdapter()
             contract = adapter.get_backend_contract()

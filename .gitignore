@@ -12,8 +12,8 @@ js/node_modules/
 .eslintcache
 
 # Built widget assets (esbuild output)
-src/lizyml_widget/static/widget.js
-src/lizyml_widget/static/widget.css
+# NOTE: widget.js and widget.css are tracked in git for PyPI distribution
+# (sdist consumers should not need Node.js/pnpm to install)
 
 # IDE
 .vscode/
