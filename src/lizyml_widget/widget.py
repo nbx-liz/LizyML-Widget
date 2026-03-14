@@ -286,22 +286,51 @@ class LizyWidget(anywidget.AnyWidget):
         except Exception as e:
             self.error = {"code": "TASK_ERROR", "message": str(e)}
 
+    _VALID_COL_TYPES: frozenset[str] = frozenset({"numeric", "categorical"})
+
     def _handle_update_column(self, payload: dict[str, Any]) -> None:
+        name = payload.get("name")
+        if not name:
+            self.error = {"code": "COLUMN_ERROR", "message": "Missing column name"}
+            return
+        col_type = payload.get("col_type", "numeric")
+        if col_type not in self._VALID_COL_TYPES:
+            self.error = {"code": "COLUMN_ERROR", "message": f"Invalid col_type: {col_type!r}"}
+            return
         try:
             df_info = self._service.update_column(
-                payload["name"],
+                name,
                 excluded=payload.get("excluded", False),
-                col_type=payload.get("col_type", "numeric"),
+                col_type=col_type,
             )
             self.df_info = df_info
         except Exception as e:
             self.error = {"code": "COLUMN_ERROR", "message": str(e)}
 
+    _VALID_STRATEGIES: frozenset[str] = frozenset(
+        {
+            "kfold",
+            "stratified_kfold",
+            "time_series",
+            "group_time_series",
+            "purged_time_series",
+            "group_kfold",
+        }
+    )
+
     def _handle_update_cv(self, payload: dict[str, Any]) -> None:
+        strategy = payload.get("strategy", "kfold")
+        if strategy not in self._VALID_STRATEGIES:
+            self.error = {"code": "CV_ERROR", "message": f"Invalid strategy: {strategy!r}"}
+            return
+        n_splits = int(payload.get("n_splits", 5))
+        if not (2 <= n_splits <= 100):
+            self.error = {"code": "CV_ERROR", "message": f"n_splits must be 2-100, got {n_splits}"}
+            return
         try:
             df_info = self._service.update_cv(
-                payload.get("strategy", "kfold"),
-                payload.get("n_splits", 5),
+                strategy,
+                n_splits,
                 group_column=payload.get("group_column"),
                 time_column=payload.get("time_column"),
                 random_state=payload.get("random_state", 42),
@@ -456,7 +485,11 @@ class LizyWidget(anywidget.AnyWidget):
             model_section = {**model_section, "params": model_params}
 
             # Smart params → model.* level (e.g. model.num_leaves_ratio)
-            current = {**current, "model": {**model_section, **smart_p}}
+            # Filter to known smart param keys to prevent overwriting model.name etc.
+            from .adapter_params import SMART_PARAMS
+
+            safe_smart = {k: v for k, v in smart_p.items() if k in SMART_PARAMS}
+            current = {**current, "model": {**model_section, **safe_smart}}
 
             # Training params → training.early_stopping.*
             if training_p:

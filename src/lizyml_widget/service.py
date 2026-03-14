@@ -121,13 +121,12 @@ class WidgetService:
                     configured["col_type"] = prev["col_type"]
             updated_columns.append(configured)
 
-        self._df_info.update(
-            {
-                "target": target,
-                "columns": updated_columns,
-                "feature_summary": self._calc_feature_summary(updated_columns),
-            }
-        )
+        self._df_info = {
+            **self._df_info,
+            "target": target,
+            "columns": updated_columns,
+            "feature_summary": self._calc_feature_summary(updated_columns),
+        }
         self._apply_task_defaults(task, update_auto_task=True)
         return copy.deepcopy(self._df_info)
 
@@ -177,18 +176,21 @@ class WidgetService:
         test_size_max: int | None = None,
     ) -> dict[str, Any]:
         """Update cross-validation settings."""
-        self._df_info["cv"] = {
-            "strategy": strategy,
-            "n_splits": n_splits,
-            "group_column": group_column,
-            "time_column": time_column,
-            "random_state": random_state,
-            "shuffle": shuffle,
-            "gap": gap,
-            "purge_gap": purge_gap,
-            "embargo": embargo,
-            "train_size_max": train_size_max,
-            "test_size_max": test_size_max,
+        self._df_info = {
+            **self._df_info,
+            "cv": {
+                "strategy": strategy,
+                "n_splits": n_splits,
+                "group_column": group_column,
+                "time_column": time_column,
+                "random_state": random_state,
+                "shuffle": shuffle,
+                "gap": gap,
+                "purge_gap": purge_gap,
+                "embargo": embargo,
+                "train_size_max": train_size_max,
+                "test_size_max": test_size_max,
+            },
         }
         return copy.deepcopy(self._df_info)
 
@@ -325,21 +327,32 @@ class WidgetService:
                 test_size_max=split_section.get("test_size_max"),
             )
 
-        # Restore feature exclusions and categorical overrides
+        # Restore feature exclusions and categorical overrides (batch update)
         if features_section and self.has_data():
             exclude_set = set(features_section.get("exclude", []))
             categorical_set = set(features_section.get("categorical", []))
             target = self._df_info.get("target")
-            for col in self._df_info["columns"]:
-                name = col["name"]
-                if name == target:
-                    continue
-                excluded = name in exclude_set
-                col_type = (
-                    "categorical" if name in categorical_set else col.get("col_type", "numeric")
+            new_columns = [
+                (
+                    {
+                        **col,
+                        "excluded": col["name"] in exclude_set,
+                        "col_type": (
+                            "categorical"
+                            if col["name"] in categorical_set
+                            else col.get("col_type", "numeric")
+                        ),
+                    }
+                    if col["name"] != target
+                    else col
                 )
-                if excluded != col.get("excluded", False) or col_type != col.get("col_type"):
-                    self.update_column(name, excluded=excluded, col_type=col_type)
+                for col in self._df_info["columns"]
+            ]
+            self._df_info = {
+                **self._df_info,
+                "columns": new_columns,
+                "feature_summary": self._calc_feature_summary(new_columns),
+            }
 
         # Restore explicit task override
         if task_override and self.has_data():
@@ -497,10 +510,28 @@ class WidgetService:
         n_splits = int(cv.get("n_splits", 5))
         strategy = self._default_strategy_for_task(task)
 
-        self._df_info["task"] = task
-        if update_auto_task:
-            self._df_info["auto_task"] = task
-        self._df_info["cv"] = self._default_cv_state(strategy=strategy, n_splits=n_splits)
+        new_cv = self._default_cv_state(strategy=strategy, n_splits=n_splits)
+        # Preserve user-configured CV fields that are strategy-independent
+        for key in (
+            "group_column",
+            "time_column",
+            "random_state",
+            "shuffle",
+            "gap",
+            "purge_gap",
+            "embargo",
+            "train_size_max",
+            "test_size_max",
+        ):
+            if cv.get(key) is not None:
+                new_cv[key] = cv[key]
+
+        self._df_info = {
+            **self._df_info,
+            "task": task,
+            **({"auto_task": task} if update_auto_task else {}),
+            "cv": new_cv,
+        }
 
     def _auto_configure_column(self, col_info: dict[str, Any], n_rows: int) -> dict[str, Any]:
         """Auto-configure a single column (exclusion + type)."""

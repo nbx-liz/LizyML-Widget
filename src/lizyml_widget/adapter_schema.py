@@ -241,7 +241,7 @@ def get_default_search_space(task: str) -> dict[str, Any]:
         name: str = d.name
         if hasattr(d, "low") and hasattr(d, "high"):
             space[name] = {
-                "type": "int" if type(d).__name__ == "IntDim" else "float",
+                "type": "int" if isinstance(getattr(d, "low", None), int) else "float",
                 "low": d.low,
                 "high": d.high,
                 "log": getattr(d, "log", False),
