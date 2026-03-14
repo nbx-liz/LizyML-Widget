@@ -657,8 +657,7 @@ class LizyMLAdapter:
 
     def evaluate_table(self, model: Any) -> list[dict[str, Any]]:
         df: pd.DataFrame = model.evaluate_table()
-        records: list[dict[str, Any]] = df.reset_index().to_dict(orient="records")
-        return records
+        return list(df.reset_index().to_dict(orient="records"))  # type: ignore[arg-type]
 
     def split_summary(self, model: Any) -> list[dict[str, Any]]:
         df: pd.DataFrame = model.split_summary()

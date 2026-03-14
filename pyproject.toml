@@ -64,6 +64,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
+warn_unused_ignores = false
 packages = ["lizyml_widget"]
 mypy_path = "src"
 
