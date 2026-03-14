@@ -1799,9 +1799,7 @@ class TestPrepareRunConfigTuneMetric:
         config["data"] = {"target": "y"}
         config["features"] = {"exclude": [], "categorical": []}
         config["split"] = {"method": "kfold", "n_splits": 5}
-        config["tuning"] = {
-            "optuna": {"params": {"n_trials": 50, "metric": metric}, "space": {}}
-        }
+        config["tuning"] = {"optuna": {"params": {"n_trials": 50, "metric": metric}, "space": {}}}
         return config
 
     def test_tune_metric_placed_first_in_evaluation_metrics(self) -> None:
@@ -1814,9 +1812,7 @@ class TestPrepareRunConfigTuneMetric:
         result = adapter.prepare_run_config(config, job_type="tune", task="multiclass")
 
         eval_metrics = result.get("evaluation", {}).get("metrics", [])
-        assert eval_metrics[0] == "auc", (
-            f"Expected 'auc' as first eval metric, got {eval_metrics}"
-        )
+        assert eval_metrics[0] == "auc", f"Expected 'auc' as first eval metric, got {eval_metrics}"
 
     def test_tune_direction_auto_set_maximize(self) -> None:
         """Direction should be auto-set to 'maximize' for auc_mu (auc)."""
@@ -2015,16 +2011,15 @@ class TestPrepareRunConfigImmutability:
         config = {**config, "data": {"target": "y"}}
         config = {**config, "features": {"exclude": [], "categorical": []}}
         config = {**config, "split": {"method": "kfold", "n_splits": 5}}
-        config = {**config, "tuning": {
-            "optuna": {"params": {"n_trials": 50, "metric": "auc"}, "space": {}}
-        }}
+        config = {
+            **config,
+            "tuning": {"optuna": {"params": {"n_trials": 50, "metric": "auc"}, "space": {}}},
+        }
 
         original = copy.deepcopy(config)
         adapter.prepare_run_config(config, job_type="tune", task="binary")
 
-        assert config == original, (
-            "prepare_run_config must not mutate the input config"
-        )
+        assert config == original, "prepare_run_config must not mutate the input config"
 
 
 # ── Phase 1: num_threads must be explicitly set ──────────────
@@ -2096,7 +2091,9 @@ class TestAbandonedThreadTracking:
         # Start and cancel (abandons the daemon thread)
         with pytest.raises(InterruptedError):
             adapter._run_with_cancel_polling(
-                slow_target, cancel_after_start, poll_interval=0.05,
+                slow_target,
+                cancel_after_start,
+                poll_interval=0.05,
             )
 
         # Second call: should log a warning about abandoned thread
@@ -2106,7 +2103,9 @@ class TestAbandonedThreadTracking:
             pytest.raises(InterruptedError),
         ):
             adapter._run_with_cancel_polling(
-                slow_target, cancel_after_start, poll_interval=0.05,
+                slow_target,
+                cancel_after_start,
+                poll_interval=0.05,
             )
 
         warned = any("still running" in r.getMessage() for r in records)
@@ -2127,7 +2126,9 @@ class TestAbandonedThreadTracking:
 
         # First call: fast target that completes via the threaded path
         result = adapter._run_with_cancel_polling(
-            lambda: "done", noop_progress, poll_interval=0.05,
+            lambda: "done",
+            noop_progress,
+            poll_interval=0.05,
         )
         assert result == "done"
         # Thread should have completed; verify it's tracked
@@ -2138,7 +2139,9 @@ class TestAbandonedThreadTracking:
         logger = logging.getLogger("lizyml_widget.adapter")
         with _capture_log(logger, logging.WARNING) as records:
             result2 = adapter._run_with_cancel_polling(
-                lambda: "done2", noop_progress, poll_interval=0.05,
+                lambda: "done2",
+                noop_progress,
+                poll_interval=0.05,
             )
 
         assert result2 == "done2"
