@@ -100,7 +100,7 @@ LGBM_PARAMS_TASK_INDEPENDENT: dict[str, Any] = {
     "lambda_l2": 0.000001,
     "first_metric_only": False,
     "verbose": -1,
-    "num_threads": -1,
+    "num_threads": 0,
 }
 
 LGBM_PARAMS_BY_TASK: dict[str, dict[str, Any]] = {

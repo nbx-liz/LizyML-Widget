@@ -51,6 +51,10 @@ scripts/jupyter-reset.sh
 .python-version
 .uv-cache/
 
+# Temporary / working files
+.tmp/
+outputs/
+
 # AI & Automation
 .abstra/
 .ai_settings/

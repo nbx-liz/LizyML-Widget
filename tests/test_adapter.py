@@ -2037,9 +2037,9 @@ class TestNumThreadsExplicit:
         """_LGBM_PARAMS_TASK_INDEPENDENT must contain num_threads."""
         assert "num_threads" in LizyMLAdapter._LGBM_PARAMS_TASK_INDEPENDENT
 
-    def test_num_threads_value_is_minus_one(self) -> None:
-        """num_threads should be -1 (use all cores, bypass auto-detect)."""
-        assert LizyMLAdapter._LGBM_PARAMS_TASK_INDEPENDENT["num_threads"] == -1
+    def test_num_threads_value_is_zero(self) -> None:
+        """num_threads should be 0 (LightGBM native default = all cores)."""
+        assert LizyMLAdapter._LGBM_PARAMS_TASK_INDEPENDENT["num_threads"] == 0
 
     def test_prepare_run_config_preserves_num_threads_for_fit(self) -> None:
         """num_threads must appear in the config produced by prepare_run_config."""
@@ -2052,7 +2052,7 @@ class TestNumThreadsExplicit:
 
         result = adapter.prepare_run_config(config, job_type="fit", task="binary")
         model_params = result.get("model", {}).get("params", {})
-        assert model_params.get("num_threads") == -1
+        assert model_params.get("num_threads") == 0
 
     def test_user_num_threads_overrides_default(self) -> None:
         """User-specified num_threads must not be overwritten by the default."""
