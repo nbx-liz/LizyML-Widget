@@ -445,3 +445,23 @@
   - ConfigTab Evaluation UI の更新
   - ScoreTable の表示更新
 - **BLUEPRINT 更新**: §5.3 Evaluation セクションに `params` フィールドを追記
+
+---
+
+### P-013: `classify_best_params` を `BackendAdapter` Protocol に追加
+
+- **日付**: 2026-03-14
+- **ステータス**: Proposed
+- **背景**:
+  - Tune 完了後の Apply to Fit で `best_params` を `model / smart / training` カテゴリに分類する `classify_best_params` メソッドが `LizyMLAdapter` に実装済み。
+  - 現状 `WidgetService` は `getattr` による duck typing で呼び出しており、`BackendAdapter` Protocol に含まれていない。
+  - 新規 Adapter 実装時にカテゴリ分類の契約が不明瞭になるリスクがある。
+- **提案内容**:
+  - `BackendAdapter` Protocol に `classify_best_params(params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]` を追加。
+  - 戻り値は `(model_params, smart_params, training_params)` の 3-tuple。
+  - デフォルト実装を持たない Adapter は `(params, {}, {})` を返す（全パラメータを model カテゴリに分類）。
+  - `WidgetService` の `getattr` フォールバックを通常のメソッド呼び出しに変更。
+- **影響範囲**:
+  - `BackendAdapter` Protocol の変更（`adapter.py`）
+  - `WidgetService.classify_best_params` の簡素化（`service.py`）
+  - 将来の Adapter 実装者への契約明示

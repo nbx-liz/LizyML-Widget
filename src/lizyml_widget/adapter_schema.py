@@ -166,6 +166,40 @@ def normalize_inner_valid(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def enforce_iv_exclusivity(config: dict[str, Any]) -> dict[str, Any]:
+    """Remove conflicting inner_valid/validation_ratio keys for Pydantic.
+
+    Pydantic's ``model_fields_set`` treats an explicit ``None`` as "set",
+    so having both ``validation_ratio`` and ``inner_valid: None`` in the dict
+    triggers ``Specify either 'validation_ratio' or 'inner_valid', not both``.
+
+    This function removes the losing key entirely:
+    - validation_ratio is set + inner_valid is None → remove inner_valid key
+    - inner_valid is set (non-None) + validation_ratio present → remove validation_ratio
+    """
+    training = config.get("training")
+    if not isinstance(training, dict):
+        return config
+    es = training.get("early_stopping")
+    if not isinstance(es, dict):
+        return config
+
+    iv = es.get("inner_valid")
+    vr = es.get("validation_ratio")
+    has_iv_key = "inner_valid" in es
+    has_vr = vr is not None
+
+    if has_vr and has_iv_key and iv is None:
+        # validation_ratio wins → remove inner_valid key entirely
+        new_es = {k: v for k, v in es.items() if k != "inner_valid"}
+        return {**config, "training": {**training, "early_stopping": new_es}}
+    if iv is not None and has_vr:
+        # inner_valid wins → remove validation_ratio
+        new_es = {k: v for k, v in es.items() if k != "validation_ratio"}
+        return {**config, "training": {**training, "early_stopping": new_es}}
+    return config
+
+
 def strip_for_backend(config: dict[str, Any]) -> dict[str, Any]:
     """Strip fields not recognized by LizyML schema.
 

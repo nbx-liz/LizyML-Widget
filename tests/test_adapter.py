@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -10,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from lizyml_widget import adapter_schema
+from lizyml_widget import adapter_params, adapter_schema
 from lizyml_widget.adapter import LizyMLAdapter
 from lizyml_widget.types import (
     BackendContract,
@@ -26,10 +29,10 @@ from lizyml_widget.types import (
 
 @pytest.fixture(autouse=True)
 def _reset_eval_metrics_cache() -> None:  # type: ignore[misc]
-    """Reset the class-level eval metrics cache between tests."""
-    LizyMLAdapter._eval_metrics_cache = None
+    """Reset the module-level eval metrics cache between tests."""
+    adapter_params._eval_metrics_cache = None
     yield  # type: ignore[misc]
-    LizyMLAdapter._eval_metrics_cache = None
+    adapter_params._eval_metrics_cache = None
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -1719,3 +1722,445 @@ class TestStripForBackend:
         }
         errors = adapter.validate_config(config)
         assert errors == []
+
+
+# ── Bug 1: Tune metric mapping and direction auto-set ─────
+
+
+class TestTuneMetricMapping:
+    """Tests for model_metric → eval_metric mapping and direction auto-set."""
+
+    def test_model_metric_to_eval_mapping_exists(self) -> None:
+        """Adapter should have a mapping from model_metric names to eval metric names."""
+        adapter = LizyMLAdapter()
+        mapping = adapter._MODEL_METRIC_TO_EVAL
+        # Key model_metric names must be present
+        assert "auc_mu" in mapping
+        assert "multi_logloss" in mapping
+        assert "binary_logloss" in mapping
+        assert "multi_error" in mapping
+
+    def test_model_metric_to_eval_mapping_values(self) -> None:
+        """Mapped values should be valid LizyML evaluation metric names."""
+        adapter = LizyMLAdapter()
+        mapping = adapter._MODEL_METRIC_TO_EVAL
+        assert mapping["auc_mu"] == "auc"
+        assert mapping["multi_logloss"] == "logloss"
+        assert mapping["binary_logloss"] == "logloss"
+        assert mapping["multi_error"] == "accuracy"
+        # Identity mappings for names that already match
+        assert mapping["auc"] == "auc"
+        assert mapping["rmse"] == "rmse"
+
+    def test_resolve_direction_maximize(self) -> None:
+        """Metrics with greater_is_better=True should resolve to 'maximize'."""
+        assert adapter_params.resolve_direction("auc") == "maximize"
+        assert adapter_params.resolve_direction("accuracy") == "maximize"
+        assert adapter_params.resolve_direction("f1") == "maximize"
+
+    def test_resolve_direction_minimize(self) -> None:
+        """Metrics with greater_is_better=False should resolve to 'minimize'."""
+        assert adapter_params.resolve_direction("logloss") == "minimize"
+        assert adapter_params.resolve_direction("rmse") == "minimize"
+        assert adapter_params.resolve_direction("brier") == "minimize"
+
+    def test_resolve_direction_unknown_fallback(self) -> None:
+        """Unknown metrics should fall back to 'minimize'."""
+        assert adapter_params.resolve_direction("nonexistent_metric") == "minimize"
+
+
+# ── Immutability: class-level mapping protection ─────────
+
+
+class TestModelMetricToEvalImmutability:
+    """_MODEL_METRIC_TO_EVAL must be protected from mutation."""
+
+    def test_mutation_raises_type_error(self) -> None:
+        """Assigning to _MODEL_METRIC_TO_EVAL should raise TypeError."""
+        adapter = LizyMLAdapter()
+        with pytest.raises(TypeError):
+            adapter._MODEL_METRIC_TO_EVAL["injected"] = "bad"  # type: ignore[index]
+
+    def test_read_access_works(self) -> None:
+        """Reading from _MODEL_METRIC_TO_EVAL must still work normally."""
+        adapter = LizyMLAdapter()
+        assert adapter._MODEL_METRIC_TO_EVAL.get("auc_mu") == "auc"
+        assert "auc" in adapter._MODEL_METRIC_TO_EVAL
+
+
+class TestPrepareRunConfigTuneMetric:
+    """Tests for prepare_run_config applying tune metric and direction."""
+
+    @staticmethod
+    def _make_tune_config(adapter: LizyMLAdapter, task: str, metric: str) -> dict[str, Any]:
+        """Helper: build a config with tuning.optuna.params.metric set."""
+        config = adapter.initialize_config(task=task)
+        config["task"] = task
+        config["data"] = {"target": "y"}
+        config["features"] = {"exclude": [], "categorical": []}
+        config["split"] = {"method": "kfold", "n_splits": 5}
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 50, "metric": metric}, "space": {}}
+        }
+        return config
+
+    def test_tune_metric_placed_first_in_evaluation_metrics(self) -> None:
+        """When tuning.optuna.params.metric is set, the corresponding eval metric
+        should be evaluation.metrics[0]."""
+        adapter = LizyMLAdapter()
+        config = self._make_tune_config(adapter, "multiclass", "auc_mu")
+        config["evaluation"] = {"metrics": ["accuracy", "auc", "logloss"]}
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="multiclass")
+
+        eval_metrics = result.get("evaluation", {}).get("metrics", [])
+        assert eval_metrics[0] == "auc", (
+            f"Expected 'auc' as first eval metric, got {eval_metrics}"
+        )
+
+    def test_tune_direction_auto_set_maximize(self) -> None:
+        """Direction should be auto-set to 'maximize' for auc_mu (auc)."""
+        adapter = LizyMLAdapter()
+        config = self._make_tune_config(adapter, "multiclass", "auc_mu")
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="multiclass")
+
+        direction = result.get("tuning", {}).get("optuna", {}).get("params", {}).get("direction")
+        assert direction == "maximize", f"Expected 'maximize', got {direction}"
+
+    def test_tune_direction_auto_set_minimize(self) -> None:
+        """Direction should be auto-set to 'minimize' for multi_logloss (logloss)."""
+        adapter = LizyMLAdapter()
+        config = self._make_tune_config(adapter, "multiclass", "multi_logloss")
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="multiclass")
+
+        direction = result.get("tuning", {}).get("optuna", {}).get("params", {}).get("direction")
+        assert direction == "minimize", f"Expected 'minimize', got {direction}"
+
+    def test_tune_metric_stripped_from_optuna_params(self) -> None:
+        """The widget-only 'metric' key must be stripped before backend validation."""
+        adapter = LizyMLAdapter()
+        config = self._make_tune_config(adapter, "binary", "auc")
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        optuna_params = result.get("tuning", {}).get("optuna", {}).get("params", {})
+        assert "metric" not in optuna_params, (
+            f"Widget-only 'metric' key should be stripped, but found in {optuna_params}"
+        )
+
+    def test_fit_job_ignores_tune_metric(self) -> None:
+        """For fit jobs, tuning.optuna.params.metric should be ignored (no crash)."""
+        adapter = LizyMLAdapter()
+        config = self._make_tune_config(adapter, "binary", "auc")
+
+        # Should not raise
+        result = adapter.prepare_run_config(config, job_type="fit", task="binary")
+        assert result is not None
+
+
+# ── Bug 2: Apply best_params routing by category ─────────
+
+
+class TestClassifyBestParams:
+    """Tests for classifying best_params into model/smart/training categories."""
+
+    def test_classify_splits_correctly(self) -> None:
+        """best_params should be split into model, smart, and training dicts."""
+        adapter = LizyMLAdapter()
+        params = {
+            "learning_rate": 0.01,
+            "max_depth": 7,
+            "n_estimators": 1500,
+            "feature_fraction": 0.8,
+            "bagging_fraction": 0.9,
+            "objective": "binary",
+            "num_leaves_ratio": 0.7,
+            "min_data_in_leaf_ratio": 0.05,
+            "early_stopping_rounds": 80,
+            "validation_ratio": 0.2,
+        }
+        model_p, smart_p, training_p = adapter.classify_best_params(params)
+
+        assert "learning_rate" in model_p
+        assert "max_depth" in model_p
+        assert "n_estimators" in model_p
+        assert "objective" in model_p
+
+        assert "num_leaves_ratio" in smart_p
+        assert "min_data_in_leaf_ratio" in smart_p
+
+        assert "early_stopping_rounds" in training_p
+        assert "validation_ratio" in training_p
+
+    def test_classify_unknown_defaults_to_model(self) -> None:
+        """Unknown param names should default to model category."""
+        adapter = LizyMLAdapter()
+        params = {"some_custom_param": 42}
+        model_p, smart_p, training_p = adapter.classify_best_params(params)
+        assert "some_custom_param" in model_p
+        assert not smart_p
+        assert not training_p
+
+    def test_classify_empty_params(self) -> None:
+        """Empty params should return three empty dicts."""
+        adapter = LizyMLAdapter()
+        model_p, smart_p, training_p = adapter.classify_best_params({})
+        assert model_p == {}
+        assert smart_p == {}
+        assert training_p == {}
+
+
+# ── normalize_inner_valid: mutual exclusivity ─────────────
+
+
+class TestNormalizeInnerValidExclusivity:
+    """Tests for validation_ratio / inner_valid mutual exclusivity in apply_best_params."""
+
+    def test_validation_ratio_set_inner_valid_none_removes_inner_valid_key(self) -> None:
+        """When validation_ratio is set and inner_valid is None,
+        inner_valid key must be removed entirely (not kept as None).
+
+        Pydantic's model_fields_set treats explicit None as "set", causing
+        the 'Specify either validation_ratio or inner_valid' error.
+        """
+        from lizyml_widget.adapter_schema import enforce_iv_exclusivity
+
+        config = {
+            "training": {
+                "early_stopping": {
+                    "rounds": 150,
+                    "validation_ratio": 0.2,
+                    "inner_valid": None,
+                }
+            }
+        }
+        result = enforce_iv_exclusivity(config)
+        es = result["training"]["early_stopping"]
+        assert "inner_valid" not in es, (
+            "inner_valid key must be removed when validation_ratio is set"
+        )
+        assert es["validation_ratio"] == 0.2
+
+    def test_inner_valid_set_validation_ratio_present_removes_validation_ratio(self) -> None:
+        """When inner_valid is explicitly set (non-None), validation_ratio
+        must be removed to avoid mutual exclusivity error.
+        """
+        from lizyml_widget.adapter_schema import enforce_iv_exclusivity
+
+        config = {
+            "training": {
+                "early_stopping": {
+                    "rounds": 150,
+                    "validation_ratio": 0.2,
+                    "inner_valid": {"method": "holdout", "ratio": 0.1},
+                }
+            }
+        }
+        result = enforce_iv_exclusivity(config)
+        es = result["training"]["early_stopping"]
+        assert "validation_ratio" not in es, (
+            "validation_ratio must be removed when inner_valid is set"
+        )
+        assert es["inner_valid"] == {"method": "holdout", "ratio": 0.1}
+
+    def test_neither_set_leaves_config_unchanged(self) -> None:
+        """When neither validation_ratio nor inner_valid is set, config is unchanged."""
+        from lizyml_widget.adapter_schema import enforce_iv_exclusivity
+
+        config = {
+            "training": {
+                "early_stopping": {
+                    "rounds": 150,
+                }
+            }
+        }
+        result = enforce_iv_exclusivity(config)
+        es = result["training"]["early_stopping"]
+        assert "inner_valid" not in es
+        assert "validation_ratio" not in es
+
+    def test_validation_ratio_only_no_inner_valid_key_unchanged(self) -> None:
+        """When only validation_ratio is present (no inner_valid key at all), unchanged."""
+        from lizyml_widget.adapter_schema import enforce_iv_exclusivity
+
+        config = {
+            "training": {
+                "early_stopping": {
+                    "rounds": 150,
+                    "validation_ratio": 0.2,
+                }
+            }
+        }
+        result = enforce_iv_exclusivity(config)
+        es = result["training"]["early_stopping"]
+        assert es["validation_ratio"] == 0.2
+        assert "inner_valid" not in es
+
+
+# ── Immutability: prepare_run_config must not mutate input ─
+
+
+class TestPrepareRunConfigImmutability:
+    """prepare_run_config must not mutate the input config dict."""
+
+    def test_tune_config_input_not_mutated(self) -> None:
+        """The original config dict must be unchanged after prepare_run_config."""
+        import copy
+
+        adapter = LizyMLAdapter()
+        config = adapter.initialize_config(task="binary")
+        config = {**config, "task": "binary"}
+        config = {**config, "data": {"target": "y"}}
+        config = {**config, "features": {"exclude": [], "categorical": []}}
+        config = {**config, "split": {"method": "kfold", "n_splits": 5}}
+        config = {**config, "tuning": {
+            "optuna": {"params": {"n_trials": 50, "metric": "auc"}, "space": {}}
+        }}
+
+        original = copy.deepcopy(config)
+        adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        assert config == original, (
+            "prepare_run_config must not mutate the input config"
+        )
+
+
+# ── Phase 1: num_threads must be explicitly set ──────────────
+
+
+class TestNumThreadsExplicit:
+    """LightGBM num_threads must be explicitly set to avoid OpenMP degradation."""
+
+    def test_task_independent_params_include_num_threads(self) -> None:
+        """_LGBM_PARAMS_TASK_INDEPENDENT must contain num_threads."""
+        assert "num_threads" in LizyMLAdapter._LGBM_PARAMS_TASK_INDEPENDENT
+
+    def test_num_threads_value_is_minus_one(self) -> None:
+        """num_threads should be -1 (use all cores, bypass auto-detect)."""
+        assert LizyMLAdapter._LGBM_PARAMS_TASK_INDEPENDENT["num_threads"] == -1
+
+    def test_prepare_run_config_preserves_num_threads_for_fit(self) -> None:
+        """num_threads must appear in the config produced by prepare_run_config."""
+        adapter = LizyMLAdapter()
+        config = adapter.initialize_config(task="binary")
+        config = {**config, "task": "binary"}
+        config = {**config, "data": {"target": "y"}}
+        config = {**config, "features": {"exclude": [], "categorical": []}}
+        config = {**config, "split": {"method": "kfold", "n_splits": 5}}
+
+        result = adapter.prepare_run_config(config, job_type="fit", task="binary")
+        model_params = result.get("model", {}).get("params", {})
+        assert model_params.get("num_threads") == -1
+
+    def test_user_num_threads_overrides_default(self) -> None:
+        """User-specified num_threads must not be overwritten by the default."""
+        adapter = LizyMLAdapter()
+        config = adapter.initialize_config(task="binary")
+        config = {**config, "task": "binary"}
+        config = {**config, "data": {"target": "y"}}
+        config = {**config, "features": {"exclude": [], "categorical": []}}
+        config = {**config, "split": {"method": "kfold", "n_splits": 5}}
+        # User explicitly sets num_threads=4
+        model_section = dict(config.get("model", {}))
+        params = dict(model_section.get("params", {}))
+        params["num_threads"] = 4
+        model_section["params"] = params
+        config = {**config, "model": model_section}
+
+        result = adapter.prepare_run_config(config, job_type="fit", task="binary")
+        model_params = result.get("model", {}).get("params", {})
+        assert model_params.get("num_threads") == 4
+
+
+# ── Phase 2: Abandoned thread tracking ───────────────────────
+
+
+class TestAbandonedThreadTracking:
+    """_run_with_cancel_polling must track and warn about abandoned threads."""
+
+    def test_warns_when_previous_thread_still_alive(self) -> None:
+        """Starting a new job while the previous is running should log a warning."""
+        adapter = LizyMLAdapter()
+        barrier = threading.Event()
+
+        # First call: slow target that blocks until we release it
+        def slow_target() -> str:
+            barrier.wait(timeout=5.0)
+            return "done"
+
+        def cancel_after_start(_c: int, _t: int, _m: str) -> None:
+            raise InterruptedError("cancel")
+
+        # Start and cancel (abandons the daemon thread)
+        with pytest.raises(InterruptedError):
+            adapter._run_with_cancel_polling(
+                slow_target, cancel_after_start, poll_interval=0.05,
+            )
+
+        # Second call: should log a warning about abandoned thread
+        logger = logging.getLogger("lizyml_widget.adapter")
+        with (
+            _capture_log(logger, logging.WARNING) as records,
+            pytest.raises(InterruptedError),
+        ):
+            adapter._run_with_cancel_polling(
+                slow_target, cancel_after_start, poll_interval=0.05,
+            )
+
+        warned = any("still running" in r.getMessage() for r in records)
+        assert warned, "Expected warning about abandoned thread still running"
+
+        # Cleanup
+        barrier.set()
+
+    def test_no_warning_when_previous_thread_finished(self) -> None:
+        """No warning when previous thread completed normally (with on_progress)."""
+        adapter = LizyMLAdapter()
+
+        call_count = 0
+
+        def noop_progress(_c: int, _t: int, _m: str) -> None:
+            nonlocal call_count
+            call_count += 1
+
+        # First call: fast target that completes via the threaded path
+        result = adapter._run_with_cancel_polling(
+            lambda: "done", noop_progress, poll_interval=0.05,
+        )
+        assert result == "done"
+        # Thread should have completed; verify it's tracked
+        assert adapter._last_worker_thread is not None
+        assert not adapter._last_worker_thread.is_alive()
+
+        # Second call: should NOT warn
+        logger = logging.getLogger("lizyml_widget.adapter")
+        with _capture_log(logger, logging.WARNING) as records:
+            result2 = adapter._run_with_cancel_polling(
+                lambda: "done2", noop_progress, poll_interval=0.05,
+            )
+
+        assert result2 == "done2"
+        warned = any("still running" in r.getMessage() for r in records)
+        assert not warned, "Should not warn when previous thread finished"
+
+
+@contextlib.contextmanager
+def _capture_log(logger: logging.Logger, level: int = logging.WARNING):
+    """Context manager to capture log records from a specific logger."""
+    records: list[logging.LogRecord] = []
+
+    class _Handler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Handler(level)
+    logger.addHandler(handler)
+    old_level = logger.level
+    logger.setLevel(level)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)

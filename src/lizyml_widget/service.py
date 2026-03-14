@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -18,6 +19,8 @@ from .types import (
     PredictionSummary,
     TuningSummary,
 )
+
+_log = logging.getLogger(__name__)
 
 
 class WidgetService:
@@ -399,13 +402,28 @@ class WidgetService:
             return []
         return self._adapter.split_summary(self._model)
 
-    def get_importance(self, kind: str = "split") -> dict[str, float]:
-        if self._model is None:
-            return {}
-        return self._adapter.importance(self._model, kind)
-
     def get_model(self) -> Any:
         return self._model
+
+    def classify_best_params(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """Classify best_params into (model, smart, training) categories.
+
+        Delegates to the adapter. Falls back to treating all params as model
+        category if the adapter does not support classification.
+        """
+        # classify_best_params is an adapter extension (not in BackendAdapter Protocol).
+        # Adapters without it fall back to treating all params as model-category.
+        # Adding to Protocol requires a HISTORY.md Proposal (change gate).
+        classify = getattr(self._adapter, "classify_best_params", None)
+        if callable(classify):
+            result = classify(params)
+            if isinstance(result, tuple) and len(result) == 3:
+                return result
+            _log.warning("classify_best_params returned unexpected type/length; falling back")
+            return dict(params), {}, {}
+        return dict(params), {}, {}
 
     def save_model(self, path: str) -> str:
         """Persist the current trained model using the active adapter."""

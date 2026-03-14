@@ -5,10 +5,11 @@ from __future__ import annotations
 import contextlib
 import copy
 import importlib.resources
+import logging
+import re
 import statistics
 import threading
 import time
-import traceback
 from typing import Any
 
 import anywidget
@@ -18,6 +19,8 @@ import traitlets
 from .adapter import BackendAdapter, LizyMLAdapter
 from .service import WidgetService
 from .types import ConfigPatchOp, FitSummary, PredictionSummary, TuningSummary
+
+_log = logging.getLogger(__name__)
 
 
 class LizyWidget(anywidget.AnyWidget):
@@ -306,12 +309,30 @@ class LizyWidget(anywidget.AnyWidget):
         except Exception as e:
             self.error = {"code": "CV_ERROR", "message": str(e)}
 
+    # Safe path pattern: dotted identifiers (no dunder, no special chars)
+    _SAFE_PATH_RE = re.compile(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$")
+
+    _VALID_PATCH_OPS: frozenset[str] = frozenset({"set", "unset", "merge"})
+
     def _handle_patch_config(self, payload: dict[str, Any]) -> None:
         raw_ops = payload.get("ops", [])
         if not raw_ops:
             return
-        ops = [ConfigPatchOp(op=o["op"], path=o["path"], value=o.get("value")) for o in raw_ops]
-        self.config = self._service.apply_config_patch(dict(self.config), ops)
+        ops: list[ConfigPatchOp] = []
+        for o in raw_ops:
+            path = o.get("path", "")
+            if not self._SAFE_PATH_RE.match(path) or "__" in path:
+                self.error = {"code": "INVALID_PATCH", "message": f"Invalid patch path: {path!r}"}
+                return
+            op_str = o.get("op", "")
+            if op_str not in self._VALID_PATCH_OPS:
+                self.error = {"code": "INVALID_PATCH", "message": f"Invalid op: {op_str!r}"}
+                return
+            ops.append(ConfigPatchOp(op=op_str, path=path, value=o.get("value")))
+        try:
+            self.config = self._service.apply_config_patch(dict(self.config), ops)
+        except Exception as e:
+            self.error = {"code": "PATCH_ERROR", "message": str(e)}
 
     def _handle_fit(self, _payload: dict[str, Any]) -> None:
         self._run_job("fit")
@@ -409,21 +430,46 @@ class LizyWidget(anywidget.AnyWidget):
         if not params:
             return
 
-        # Restore tune-time config snapshot if available (P-005)
-        if self._tune_config_snapshot is not None:
-            current = copy.deepcopy(self._tune_config_snapshot)
-            # Strip data/features/split/task — managed by df_info/service
-            for key in ("data", "features", "split", "task"):
-                current.pop(key, None)
-        else:
-            current = copy.deepcopy(dict(self.config))
+        try:
+            # Restore tune-time config snapshot if available (P-005)
+            if self._tune_config_snapshot is not None:
+                current = copy.deepcopy(self._tune_config_snapshot)
+                # Strip data/features/split/task — managed by df_info/service
+                for key in ("data", "features", "split", "task"):
+                    current.pop(key, None)
+            else:
+                current = copy.deepcopy(dict(self.config))
 
-        model_section = dict(current.get("model", {}))
-        model_params = dict(model_section.get("params", {}))
-        model_params.update(params)
-        model_section["params"] = model_params
-        current["model"] = model_section
-        self.config = self._service.canonicalize_config(current)
+            # Classify params by category (model / smart / training)
+            model_p, smart_p, training_p = self._service.classify_best_params(params)
+
+            # Model params → model.params
+            model_section = dict(current.get("model", {}))
+            model_params = {**dict(model_section.get("params", {})), **model_p}
+            model_section = {**model_section, "params": model_params}
+
+            # Smart params → model.* level (e.g. model.num_leaves_ratio)
+            current = {**current, "model": {**model_section, **smart_p}}
+
+            # Training params → training.early_stopping.*
+            if training_p:
+                training = dict(current.get("training", {}))
+                es = dict(training.get("early_stopping", {}))
+                es_updates: dict[str, Any] = {}
+                if "early_stopping_rounds" in training_p:
+                    es_updates["rounds"] = training_p["early_stopping_rounds"]
+                if "validation_ratio" in training_p:
+                    es_updates["validation_ratio"] = training_p["validation_ratio"]
+                    # Nullify inner_valid so deep-merge with defaults won't
+                    # re-add the default dict.  enforce_iv_exclusivity in
+                    # prepare_run_config strips this None before backend call.
+                    es_updates["inner_valid"] = None
+                new_es = {**es, **es_updates}
+                current = {**current, "training": {**training, "early_stopping": new_es}}
+
+            self.config = self._service.canonicalize_config(current)
+        except Exception as e:
+            self.error = {"code": "APPLY_ERROR", "message": str(e)}
 
     def _handle_request_inference_plot(self, payload: dict[str, Any]) -> None:
         plot_type = payload.get("plot_type", "")
@@ -592,10 +638,10 @@ class LizyWidget(anywidget.AnyWidget):
                 code = "BACKEND_ERROR" if "lizyml" in mod.lower() else "INTERNAL_ERROR"
             except Exception:
                 code = "INTERNAL_ERROR"
+            _log.error("Job %s failed (%s): %s", job_type, code, e, exc_info=True)
             self.error = {
                 "code": code,
                 "message": str(e),
-                "traceback": traceback.format_exc(),
             }
             self.status = "failed"
 

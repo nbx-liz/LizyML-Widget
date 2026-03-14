@@ -26,6 +26,7 @@ def _make_widget() -> Any:
         adapter.get_backend_contract.side_effect = real_adapter.get_backend_contract
         adapter.canonicalize_config.side_effect = real_adapter.canonicalize_config
         adapter.apply_task_defaults.side_effect = real_adapter.apply_task_defaults
+        adapter.classify_best_params.side_effect = real_adapter.classify_best_params
 
         from lizyml_widget.widget import LizyWidget
 
@@ -1169,3 +1170,388 @@ class TestUpdateCvError:
         w._service.update_cv = MagicMock(side_effect=ValueError("bad strategy"))
         w.action = {"type": "update_cv", "payload": {"strategy": "bad", "n_splits": 3}}
         assert w.error["code"] == "CV_ERROR"
+
+
+# ── Bug 2: Apply best_params routing via widget ──────────
+
+
+class TestApplyBestParamsRouting:
+    """Test that _handle_apply_best_params routes params to correct config locations."""
+
+    def test_smart_params_at_model_level(self) -> None:
+        """num_leaves_ratio should be at model.num_leaves_ratio, not model.params."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        best_params = {
+            "learning_rate": 0.05,
+            "num_leaves_ratio": 0.7,
+            "min_data_in_leaf_ratio": 0.05,
+        }
+        w._handle_apply_best_params({"params": best_params})
+
+        model = dict(w.config.get("model", {}))
+        assert model.get("num_leaves_ratio") == 0.7
+        assert model.get("min_data_in_leaf_ratio") == 0.05
+        assert "num_leaves_ratio" not in model.get("params", {})
+        assert "min_data_in_leaf_ratio" not in model.get("params", {})
+
+    def test_training_params_at_training_level(self) -> None:
+        """early_stopping_rounds → training.early_stopping.rounds."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        best_params = {
+            "learning_rate": 0.05,
+            "early_stopping_rounds": 80,
+            "validation_ratio": 0.2,
+        }
+        w._handle_apply_best_params({"params": best_params})
+
+        config = dict(w.config)
+        es = config.get("training", {}).get("early_stopping", {})
+        assert es.get("rounds") == 80
+        assert es.get("validation_ratio") == 0.2
+        model_params = config.get("model", {}).get("params", {})
+        assert "early_stopping_rounds" not in model_params
+        assert "validation_ratio" not in model_params
+
+    def test_model_params_still_in_model_params(self) -> None:
+        """Model-category params should remain in model.params."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        best_params = {
+            "learning_rate": 0.05,
+            "max_depth": 7,
+            "feature_fraction": 0.8,
+        }
+        w._handle_apply_best_params({"params": best_params})
+
+        model_params = dict(w.config.get("model", {}).get("params", {}))
+        assert model_params.get("learning_rate") == 0.05
+        assert model_params.get("max_depth") == 7
+        assert model_params.get("feature_fraction") == 0.8
+
+    def test_validation_ratio_clears_inner_valid(self) -> None:
+        """When validation_ratio is set from best_params, inner_valid must be
+        set to None in the config traitlet so that it overrides the default
+        dict value.  enforce_iv_exclusivity in prepare_run_config strips the
+        None key before backend validation.
+        """
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        best_params = {
+            "learning_rate": 0.05,
+            "validation_ratio": 0.2,
+        }
+        w._handle_apply_best_params({"params": best_params})
+
+        config = dict(w.config)
+        es = config.get("training", {}).get("early_stopping", {})
+        assert es.get("validation_ratio") == 0.2
+        # inner_valid must be None (overrides default dict);
+        # enforce_iv_exclusivity strips it at prepare_run_config time
+        assert es.get("inner_valid") is None, (
+            f"inner_valid should be None when validation_ratio is set, got {es.get('inner_valid')}"
+        )
+
+    def test_apply_best_params_config_validates_cleanly(self) -> None:
+        """Config after apply_best_params with validation_ratio must pass validation."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        best_params = {
+            "learning_rate": 0.05,
+            "early_stopping_rounds": 80,
+            "validation_ratio": 0.2,
+        }
+        w._handle_apply_best_params({"params": best_params})
+
+        # Build run config and validate — should not raise
+        full_config = w._service.prepare_run_config(dict(w.config), job_type="fit")
+        errors = w._service.validate_config(full_config)
+        assert errors == [], f"Validation errors: {errors}"
+
+    def test_apply_best_params_with_validation_ratio_passes_real_validation(self) -> None:
+        """Full flow: apply best_params with validation_ratio, then validate
+        against the REAL LizyML backend validator (not mocked).
+
+        Reproduces: VALIDATION_ERROR 'Specify either validation_ratio or inner_valid, not both.'
+        """
+        real_adapter = LizyMLAdapter()
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        best_params = {
+            "learning_rate": 0.05,
+            "early_stopping_rounds": 80,
+            "validation_ratio": 0.2,
+        }
+        w._handle_apply_best_params({"params": best_params})
+
+        # Use REAL adapter validate_config (not mock)
+        full_config = w._service.prepare_run_config(dict(w.config), job_type="fit")
+        errors = real_adapter.validate_config(full_config)
+        assert errors == [], (
+            f"Real validation errors after apply_best_params: {errors}"
+        )
+
+
+# ── Security: traceback not in error traitlet ────────────
+
+
+class TestErrorTracebackNotSynced:
+    """Traceback should not be synced to frontend via error traitlet."""
+
+    def test_job_error_has_no_traceback_key(self) -> None:
+        """When a job fails, error traitlet must NOT contain 'traceback'."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        # Make fit raise an error
+        w._service.fit = MagicMock(side_effect=RuntimeError("test backend error"))
+        w._service.validate_config = MagicMock(return_value=[])
+
+        w._run_job("fit")
+        # Wait for background thread to complete
+        if w._job_thread:
+            w._job_thread.join(timeout=5)
+
+        assert w.status == "failed"
+        assert w.error.get("code") in ("BACKEND_ERROR", "INTERNAL_ERROR")
+        assert "traceback" not in w.error, (
+            "traceback must not be synced to frontend via error traitlet"
+        )
+
+    def test_job_error_still_has_message(self) -> None:
+        """Error traitlet should still contain the error message."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w._service.fit = MagicMock(side_effect=RuntimeError("specific error msg"))
+        w._service.validate_config = MagicMock(return_value=[])
+
+        w._run_job("fit")
+        if w._job_thread:
+            w._job_thread.join(timeout=5)
+
+        assert "specific error msg" in w.error.get("message", "")
+
+
+# ── Security: patch_config path validation ───────────────
+
+
+class TestPatchConfigPathValidation:
+    """patch_config must validate path format before processing."""
+
+    def test_valid_dotted_path_accepted(self) -> None:
+        """Normal dotted paths like 'model.params.learning_rate' should work."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w.action = {
+            "type": "patch_config",
+            "payload": {
+                "ops": [{"op": "set", "path": "model.params.learning_rate", "value": 0.01}]
+            },
+        }
+        # Should succeed — no error
+        assert w.error.get("code") != "INVALID_PATCH"
+        assert w.config["model"]["params"]["learning_rate"] == 0.01
+
+    def test_dunder_path_rejected(self) -> None:
+        """Paths containing '__' (dunder) should be rejected."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w.action = {
+            "type": "patch_config",
+            "payload": {
+                "ops": [{"op": "set", "path": "__class__.__init__", "value": "bad"}]
+            },
+        }
+        assert w.error.get("code") == "INVALID_PATCH"
+
+    def test_empty_path_rejected(self) -> None:
+        """Empty path should be rejected."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w.action = {
+            "type": "patch_config",
+            "payload": {
+                "ops": [{"op": "set", "path": "", "value": "bad"}]
+            },
+        }
+        assert w.error.get("code") == "INVALID_PATCH"
+
+    def test_path_with_special_chars_rejected(self) -> None:
+        """Paths with special characters should be rejected."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w.action = {
+            "type": "patch_config",
+            "payload": {
+                "ops": [{"op": "set", "path": "model/../etc/passwd", "value": "bad"}]
+            },
+        }
+        assert w.error.get("code") == "INVALID_PATCH"
+
+
+# ── Security: patch_config op validation ─────────────────
+
+
+class TestPatchConfigOpValidation:
+    """patch_config must validate op field before processing."""
+
+    def test_missing_op_returns_error(self) -> None:
+        """Missing 'op' key should return INVALID_PATCH, not raise KeyError."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w.action = {
+            "type": "patch_config",
+            "payload": {
+                "ops": [{"path": "model.params.learning_rate", "value": 0.01}]
+            },
+        }
+        assert w.error.get("code") == "INVALID_PATCH"
+
+    def test_invalid_op_value_returns_error(self) -> None:
+        """Unknown op value (e.g. 'delete') should return INVALID_PATCH."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w.action = {
+            "type": "patch_config",
+            "payload": {
+                "ops": [{"op": "delete", "path": "model.params.x", "value": 1}]
+            },
+        }
+        assert w.error.get("code") == "INVALID_PATCH"
+
+    def test_valid_ops_accepted(self) -> None:
+        """Valid ops ('set', 'unset', 'merge') should be accepted."""
+        for op in ("set", "unset", "merge"):
+            w = _make_widget()
+            df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+            w.load(df, target="y")
+
+            w.action = {
+                "type": "patch_config",
+                "payload": {
+                    "ops": [{"op": op, "path": "model.params.learning_rate", "value": 0.01}]
+                },
+            }
+            assert w.error.get("code") != "INVALID_PATCH", f"op={op!r} should be valid"
+
+
+# ── Robustness: patch_config exception handling ──────────
+
+
+class TestPatchConfigExceptionHandling:
+    """apply_config_patch errors should be caught, not propagated."""
+
+    def test_adapter_error_returns_patch_error(self) -> None:
+        """If apply_config_patch raises, error traitlet should have PATCH_ERROR."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w._service.apply_config_patch = MagicMock(
+            side_effect=TypeError("deepcopy failed")
+        )
+
+        w.action = {
+            "type": "patch_config",
+            "payload": {
+                "ops": [{"op": "set", "path": "model.params.x", "value": 1}]
+            },
+        }
+        assert w.error.get("code") == "PATCH_ERROR"
+        assert "deepcopy" in w.error.get("message", "")
+
+
+# ── Robustness: apply_best_params exception handling ─────
+
+
+class TestApplyBestParamsExceptionHandling:
+    """_handle_apply_best_params errors should be caught."""
+
+    def test_classify_error_returns_apply_error(self) -> None:
+        """If classify_best_params raises, error traitlet should have APPLY_ERROR."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w._service.classify_best_params = MagicMock(
+            side_effect=ValueError("bad params")
+        )
+
+        w._handle_apply_best_params({"params": {"learning_rate": 0.1}})
+        assert w.error.get("code") == "APPLY_ERROR"
+
+    def test_canonicalize_error_returns_apply_error(self) -> None:
+        """If canonicalize_config raises, error traitlet should have APPLY_ERROR."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w._service.canonicalize_config = MagicMock(
+            side_effect=RuntimeError("schema error")
+        )
+
+        w._handle_apply_best_params({"params": {"learning_rate": 0.1}})
+        assert w.error.get("code") == "APPLY_ERROR"
+
+
+# ── Robustness: classify_best_params tuple guard ─────────
+
+
+class TestClassifyBestParamsTupleGuard:
+    """classify_best_params must handle malformed adapter returns."""
+
+    def test_wrong_length_tuple_fallback(self) -> None:
+        """If adapter returns 2-tuple, service should fall back safely."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        # Adapter returns wrong-length tuple
+        w._service._adapter.classify_best_params = MagicMock(
+            return_value=({"lr": 0.1}, {"ratio": 0.5})  # 2-tuple instead of 3
+        )
+
+        result = w._service.classify_best_params({"lr": 0.1, "ratio": 0.5})
+        # Should return 3-tuple safely (fallback)
+        assert len(result) == 3
+
+    def test_non_tuple_return_fallback(self) -> None:
+        """If adapter returns a non-tuple, service should fall back safely."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w._service._adapter.classify_best_params = MagicMock(
+            return_value={"lr": 0.1}  # dict instead of tuple
+        )
+
+        result = w._service.classify_best_params({"lr": 0.1})
+        assert len(result) == 3

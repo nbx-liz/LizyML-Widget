@@ -12,7 +12,16 @@ from typing import Any, Literal, Protocol
 import pandas as pd
 
 from .adapter_contract import build_capabilities, build_ui_schema
+from .adapter_params import (
+    LGBM_PARAMS_BY_TASK,
+    LGBM_PARAMS_TASK_INDEPENDENT,
+    MODEL_METRIC_TO_EVAL,
+    get_eval_metrics_by_task,
+    resolve_direction,
+)
+from .adapter_params import classify_best_params as _classify_best_params_impl
 from .adapter_schema import (
+    enforce_iv_exclusivity,
     get_default_search_space,
     normalize_inner_valid,
     strip_for_backend,
@@ -111,6 +120,9 @@ class BackendAdapter(Protocol):
 class LizyMLAdapter:
     """Adapter for the LizyML backend library."""
 
+    def __init__(self) -> None:
+        self._last_worker_thread: threading.Thread | None = None
+
     @property
     def info(self) -> BackendInfo:
         import lizyml
@@ -124,26 +136,18 @@ class LizyMLAdapter:
 
     # ── Backend Contract & Config Lifecycle (Phase 25) ─────────
 
-    # LightGBM model.params defaults for pre-population (moved from service.py)
-    _LGBM_PARAMS_TASK_INDEPENDENT: dict[str, Any] = {
-        "n_estimators": 1500,
-        "learning_rate": 0.001,
-        "max_depth": 5,
-        "max_bin": 511,
-        "feature_fraction": 0.7,
-        "bagging_fraction": 0.7,
-        "bagging_freq": 10,
-        "lambda_l1": 0.0,
-        "lambda_l2": 0.000001,
-        "first_metric_only": False,
-        "verbose": -1,
-    }
+    # Class-level aliases for constants defined in adapter_params.py.
+    # Tests and internal methods access these via self._ or cls._ ;
+    # the aliases keep that interface stable.
+    _MODEL_METRIC_TO_EVAL = MODEL_METRIC_TO_EVAL
+    _LGBM_PARAMS_TASK_INDEPENDENT = LGBM_PARAMS_TASK_INDEPENDENT
+    _LGBM_PARAMS_BY_TASK = LGBM_PARAMS_BY_TASK
 
-    _LGBM_PARAMS_BY_TASK: dict[str, dict[str, Any]] = {
-        "regression": {"objective": "huber", "metric": ["huber", "mae", "mape"]},
-        "binary": {"objective": "binary", "metric": ["auc", "binary_logloss"]},
-        "multiclass": {"objective": "multiclass", "metric": ["auc_mu", "multi_logloss"]},
-    }
+    def classify_best_params(
+        self, params: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """Split best_params into (model, smart, training) category dicts."""
+        return _classify_best_params_impl(params)
 
     def get_backend_contract(self) -> BackendContract:
         """Return the full backend contract with config schema, UI metadata, and capabilities."""
@@ -220,43 +224,10 @@ class LizyMLAdapter:
         result = normalize_inner_valid(result)
         return result
 
-    _eval_metrics_cache: dict[str, list[str]] | None = None
-    _eval_metrics_lock: threading.Lock = threading.Lock()
-
-    @classmethod
-    def _get_eval_metrics_by_task(cls) -> dict[str, list[str]]:
+    @staticmethod
+    def _get_eval_metrics_by_task() -> dict[str, list[str]]:
         """Query LizyML's metric registry for available evaluation metrics per task."""
-        if cls._eval_metrics_cache is not None:
-            return cls._eval_metrics_cache
-        with cls._eval_metrics_lock:
-            # Double-checked locking
-            if cls._eval_metrics_cache is not None:
-                return cls._eval_metrics_cache
-            metrics: dict[str, list[str]]
-            try:
-                from lizyml.metrics.registry import _TASK_METRICS
-
-                metrics = {task: sorted(ms) for task, ms in _TASK_METRICS.items()}
-            except (ImportError, AttributeError, TypeError):
-                # Fallback for older LizyML versions without _TASK_METRICS
-                metrics = {
-                    "regression": sorted(["mae", "mape", "rmse", "huber", "r2", "rmsle"]),
-                    "binary": sorted(
-                        [
-                            "auc",
-                            "logloss",
-                            "auc_pr",
-                            "f1",
-                            "accuracy",
-                            "brier",
-                            "ece",
-                            "precision_at_k",
-                        ]
-                    ),
-                    "multiclass": sorted(["auc", "logloss", "auc_pr", "f1", "accuracy", "brier"]),
-                }
-            cls._eval_metrics_cache = metrics
-            return metrics
+        return get_eval_metrics_by_task()
 
     def apply_task_defaults(self, config: dict[str, Any], *, task: str) -> dict[str, Any]:
         """Apply task-dependent default params to config via patch operations."""
@@ -381,22 +352,56 @@ class LizyMLAdapter:
         # Ensure model name
         model = result.get("model", {})
         if not model.get("name"):
-            model["name"] = "lgbm"
-            result["model"] = model
+            model = {**model, "name": "lgbm"}
 
         # Enforce auto_num_leaves exclusivity
-        result["model"] = self._enforce_auto_num_leaves(model)
+        result = {**result, "model": self._enforce_auto_num_leaves(model)}
 
         # Tune defaults
         if job_type == "tune":
             if not result.get("tuning"):
-                result["tuning"] = {"optuna": {"params": {"n_trials": 50}, "space": {}}}
+                result = {**result, "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}}}
             else:
-                optuna = result["tuning"].setdefault("optuna", {})
-                optuna.setdefault("params", {}).setdefault("n_trials", 50)
-                optuna.setdefault("space", {})
+                existing_tuning = result["tuning"]
+                existing_optuna = existing_tuning.get("optuna") or {}
+                existing_params = existing_optuna.get("params") or {}
+                merged_optuna = {
+                    **existing_optuna,
+                    "params": {"n_trials": 50, **existing_params},
+                    "space": existing_optuna.get("space") or {},
+                }
+                result = {**result, "tuning": {**existing_tuning, "optuna": merged_optuna}}
+
+            # ── Map widget tune metric → eval metric + auto-set direction ──
+            cur_optuna = result["tuning"]["optuna"]
+            cur_params = dict(cur_optuna.get("params", {}))
+            widget_metric: str | None = cur_params.pop("metric", None)
+            if widget_metric is not None and widget_metric:
+                eval_metric: str = self._MODEL_METRIC_TO_EVAL.get(widget_metric, widget_metric)
+                # Place eval metric first in evaluation.metrics
+                existing = [
+                    m for m in (result.get("evaluation") or {}).get("metrics", [])
+                    if m != eval_metric
+                ]
+                result = {
+                    **result,
+                    "evaluation": {
+                        **result.get("evaluation", {}),
+                        "metrics": [eval_metric, *existing],
+                    },
+                }
+                # Auto-set direction from metric
+                cur_params["direction"] = resolve_direction(eval_metric)
+            result = {
+                **result,
+                "tuning": {
+                    **result["tuning"],
+                    "optuna": {**cur_optuna, "params": cur_params},
+                },
+            }
 
         result = normalize_inner_valid(result)
+        result = enforce_iv_exclusivity(result)
         return strip_for_backend(result)
 
     # ── Config patch helpers ──────────────────────────────────
@@ -545,8 +550,8 @@ class LizyMLAdapter:
         model._widget_config = config  # type: ignore[attr-defined]  # noqa: SLF001
         return model
 
-    @staticmethod
     def _run_with_cancel_polling(
+        self,
         target: Callable[[], Any],
         on_progress: Callable[..., Any] | None,
         poll_interval: float = 0.5,
@@ -557,7 +562,16 @@ class LizyMLAdapter:
         abandoned (daemon) and the exception propagates to the caller.
         The abandoned thread will finish in the background.
         """
+        # Warn if a previously abandoned thread is still running
+        prev = self._last_worker_thread
+        if prev is not None and prev.is_alive():
+            _log.warning(
+                "Previous backend worker thread is still running; "
+                "OpenMP thread contention may degrade performance."
+            )
+
         if on_progress is None:
+            self._last_worker_thread = None
             return target()
 
         result_holder: dict[str, Any] = {}
@@ -570,6 +584,7 @@ class LizyMLAdapter:
                 error_holder["error"] = exc
 
         thread = threading.Thread(target=_worker, daemon=True)
+        self._last_worker_thread = thread
         thread.start()
 
         try:
