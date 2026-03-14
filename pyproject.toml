@@ -9,6 +9,8 @@ description = "Jupyter Notebook / Google Colab / VS Code Notebooks widget for Li
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+authors = [{ name = "NBX" }]
+keywords = ["jupyter", "widget", "lightgbm", "automl", "machine-learning", "anywidget"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: Jupyter",
@@ -30,8 +32,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lizyml/lizyml-widget"
-Repository = "https://github.com/lizyml/lizyml-widget"
+Homepage = "https://github.com/nbx-liz/LizyML-Widget"
+Repository = "https://github.com/nbx-liz/LizyML-Widget"
 
 [project.optional-dependencies]
 lizyml = ["lizyml[plots,tuning,calibration,explain]"]
