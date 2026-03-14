@@ -1181,7 +1181,6 @@ tuning = [
 
 [[package]]
 name = "lizyml-widget"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anywidget" },
@@ -1215,8 +1214,8 @@ dev = [
 requires-dist = [
     { name = "anywidget", specifier = ">=0.9" },
     { name = "jupyterlab", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "lizyml", extras = ["plots", "tuning", "calibration", "explain"], marker = "extra == 'dev'" },
-    { name = "lizyml", extras = ["plots", "tuning", "calibration", "explain"], marker = "extra == 'lizyml'" },
+    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], marker = "extra == 'dev'" },
+    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], marker = "extra == 'lizyml'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pandas", specifier = ">=1.5" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.0" },
@@ -1226,7 +1225,7 @@ requires-dist = [
     { name = "traitlets", specifier = ">=5.0" },
     { name = "watchfiles", marker = "extra == 'dev'", specifier = ">=1.1" },
 ]
-provides-extras = ["lizyml", "dev"]
+provides-extras = ["dev", "lizyml"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "vulture", specifier = ">=2.15" }]
