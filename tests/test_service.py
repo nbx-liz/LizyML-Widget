@@ -633,9 +633,7 @@ class TestGroupColRoundTrip:
 
     def test_apply_loaded_config_reads_group_col_from_data_section(self) -> None:
         """apply_loaded_config must read group_col from data section (export format)."""
-        df = pd.DataFrame(
-            {"x": range(50), "y": [0, 1] * 25, "grp": ["a", "b"] * 25}
-        )
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25, "grp": ["a", "b"] * 25})
         svc = WidgetService(adapter=_mock_adapter())
         svc.load_data(df, target="y")
         svc.update_cv("group_kfold", 5, group_column="grp")

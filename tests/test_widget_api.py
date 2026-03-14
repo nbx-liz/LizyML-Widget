@@ -1573,9 +1573,7 @@ class TestRunJobConfigError:
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        w._service.prepare_run_config = MagicMock(
-            side_effect=ValueError("No features available")
-        )
+        w._service.prepare_run_config = MagicMock(side_effect=ValueError("No features available"))
 
         w._run_job("fit")
         assert w.status == "failed"
@@ -1589,16 +1587,12 @@ class TestRunJobConfigError:
         w.load(df, target="y")
 
         # First call fails
-        w._service.prepare_run_config = MagicMock(
-            side_effect=ValueError("bad config")
-        )
+        w._service.prepare_run_config = MagicMock(side_effect=ValueError("bad config"))
         w._run_job("fit")
         assert w.status == "failed"
 
         # Second call should not be blocked by "running" guard
-        w._service.prepare_run_config = MagicMock(
-            side_effect=ValueError("still bad")
-        )
+        w._service.prepare_run_config = MagicMock(side_effect=ValueError("still bad"))
         w._run_job("fit")
         assert w.status == "failed"
         assert "still bad" in w.error.get("message", "")
