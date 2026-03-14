@@ -18,36 +18,45 @@ _log = logging.getLogger(__name__)
 # ── Model metric → eval metric mapping ──────────────────────
 # LightGBM model_metric names (used in training) differ from LizyML
 # evaluation metric names. This mapping bridges the two namespaces.
-MODEL_METRIC_TO_EVAL: Mapping[str, str] = _types.MappingProxyType({
-    # Multiclass-specific
-    "auc_mu": "auc",
-    "multi_logloss": "logloss",
-    "multi_error": "accuracy",
-    # Binary-specific
-    "binary_logloss": "logloss",
-    # Identity mappings (names that match between model_metric and eval_metric)
-    "auc": "auc",
-    "auc_pr": "auc_pr",
-    "f1": "f1",
-    "accuracy": "accuracy",
-    "brier": "brier",
-    "logloss": "logloss",
-    # Regression
-    "huber": "huber",
-    "mae": "mae",
-    "mape": "mape",
-    "rmse": "rmse",
-    "r2": "r2",
-    "rmsle": "rmsle",
-})
+MODEL_METRIC_TO_EVAL: Mapping[str, str] = _types.MappingProxyType(
+    {
+        # Multiclass-specific
+        "auc_mu": "auc",
+        "multi_logloss": "logloss",
+        "multi_error": "accuracy",
+        # Binary-specific
+        "binary_logloss": "logloss",
+        # Identity mappings (names that match between model_metric and eval_metric)
+        "auc": "auc",
+        "auc_pr": "auc_pr",
+        "f1": "f1",
+        "accuracy": "accuracy",
+        "brier": "brier",
+        "logloss": "logloss",
+        # Regression
+        "huber": "huber",
+        "mae": "mae",
+        "mape": "mape",
+        "rmse": "rmse",
+        "r2": "r2",
+        "rmsle": "rmsle",
+    }
+)
 
 # ── Param category classification for best_params routing ────
-SMART_PARAMS: frozenset[str] = frozenset({
-    "num_leaves_ratio", "min_data_in_leaf_ratio", "min_data_in_bin_ratio",
-})
-TRAINING_PARAMS: frozenset[str] = frozenset({
-    "early_stopping_rounds", "validation_ratio",
-})
+SMART_PARAMS: frozenset[str] = frozenset(
+    {
+        "num_leaves_ratio",
+        "min_data_in_leaf_ratio",
+        "min_data_in_bin_ratio",
+    }
+)
+TRAINING_PARAMS: frozenset[str] = frozenset(
+    {
+        "early_stopping_rounds",
+        "validation_ratio",
+    }
+)
 
 
 def classify_best_params(
@@ -146,9 +155,7 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
                         "precision_at_k",
                     ]
                 ),
-                "multiclass": sorted(
-                    ["auc", "logloss", "auc_pr", "f1", "accuracy", "brier"]
-                ),
+                "multiclass": sorted(["auc", "logloss", "auc_pr", "f1", "accuracy", "brier"]),
             }
         _eval_metrics_cache = metrics
         return metrics

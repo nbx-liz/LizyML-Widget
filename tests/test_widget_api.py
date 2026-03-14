@@ -1300,9 +1300,7 @@ class TestApplyBestParamsRouting:
         # Use REAL adapter validate_config (not mock)
         full_config = w._service.prepare_run_config(dict(w.config), job_type="fit")
         errors = real_adapter.validate_config(full_config)
-        assert errors == [], (
-            f"Real validation errors after apply_best_params: {errors}"
-        )
+        assert errors == [], f"Real validation errors after apply_best_params: {errors}"
 
 
 # ── Security: traceback not in error traitlet ────────────
@@ -1378,9 +1376,7 @@ class TestPatchConfigPathValidation:
 
         w.action = {
             "type": "patch_config",
-            "payload": {
-                "ops": [{"op": "set", "path": "__class__.__init__", "value": "bad"}]
-            },
+            "payload": {"ops": [{"op": "set", "path": "__class__.__init__", "value": "bad"}]},
         }
         assert w.error.get("code") == "INVALID_PATCH"
 
@@ -1392,9 +1388,7 @@ class TestPatchConfigPathValidation:
 
         w.action = {
             "type": "patch_config",
-            "payload": {
-                "ops": [{"op": "set", "path": "", "value": "bad"}]
-            },
+            "payload": {"ops": [{"op": "set", "path": "", "value": "bad"}]},
         }
         assert w.error.get("code") == "INVALID_PATCH"
 
@@ -1406,9 +1400,7 @@ class TestPatchConfigPathValidation:
 
         w.action = {
             "type": "patch_config",
-            "payload": {
-                "ops": [{"op": "set", "path": "model/../etc/passwd", "value": "bad"}]
-            },
+            "payload": {"ops": [{"op": "set", "path": "model/../etc/passwd", "value": "bad"}]},
         }
         assert w.error.get("code") == "INVALID_PATCH"
 
@@ -1427,9 +1419,7 @@ class TestPatchConfigOpValidation:
 
         w.action = {
             "type": "patch_config",
-            "payload": {
-                "ops": [{"path": "model.params.learning_rate", "value": 0.01}]
-            },
+            "payload": {"ops": [{"path": "model.params.learning_rate", "value": 0.01}]},
         }
         assert w.error.get("code") == "INVALID_PATCH"
 
@@ -1441,9 +1431,7 @@ class TestPatchConfigOpValidation:
 
         w.action = {
             "type": "patch_config",
-            "payload": {
-                "ops": [{"op": "delete", "path": "model.params.x", "value": 1}]
-            },
+            "payload": {"ops": [{"op": "delete", "path": "model.params.x", "value": 1}]},
         }
         assert w.error.get("code") == "INVALID_PATCH"
 
@@ -1475,15 +1463,11 @@ class TestPatchConfigExceptionHandling:
         df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        w._service.apply_config_patch = MagicMock(
-            side_effect=TypeError("deepcopy failed")
-        )
+        w._service.apply_config_patch = MagicMock(side_effect=TypeError("deepcopy failed"))
 
         w.action = {
             "type": "patch_config",
-            "payload": {
-                "ops": [{"op": "set", "path": "model.params.x", "value": 1}]
-            },
+            "payload": {"ops": [{"op": "set", "path": "model.params.x", "value": 1}]},
         }
         assert w.error.get("code") == "PATCH_ERROR"
         assert "deepcopy" in w.error.get("message", "")
@@ -1501,9 +1485,7 @@ class TestApplyBestParamsExceptionHandling:
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        w._service.classify_best_params = MagicMock(
-            side_effect=ValueError("bad params")
-        )
+        w._service.classify_best_params = MagicMock(side_effect=ValueError("bad params"))
 
         w._handle_apply_best_params({"params": {"learning_rate": 0.1}})
         assert w.error.get("code") == "APPLY_ERROR"
@@ -1514,9 +1496,7 @@ class TestApplyBestParamsExceptionHandling:
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        w._service.canonicalize_config = MagicMock(
-            side_effect=RuntimeError("schema error")
-        )
+        w._service.canonicalize_config = MagicMock(side_effect=RuntimeError("schema error"))
 
         w._handle_apply_best_params({"params": {"learning_rate": 0.1}})
         assert w.error.get("code") == "APPLY_ERROR"

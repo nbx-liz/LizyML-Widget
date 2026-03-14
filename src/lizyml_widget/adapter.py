@@ -144,7 +144,8 @@ class LizyMLAdapter:
     _LGBM_PARAMS_BY_TASK = LGBM_PARAMS_BY_TASK
 
     def classify_best_params(
-        self, params: dict[str, Any],
+        self,
+        params: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         """Split best_params into (model, smart, training) category dicts."""
         return _classify_best_params_impl(params)
@@ -380,7 +381,8 @@ class LizyMLAdapter:
                 eval_metric: str = self._MODEL_METRIC_TO_EVAL.get(widget_metric, widget_metric)
                 # Place eval metric first in evaluation.metrics
                 existing = [
-                    m for m in (result.get("evaluation") or {}).get("metrics", [])
+                    m
+                    for m in (result.get("evaluation") or {}).get("metrics", [])
                     if m != eval_metric
                 ]
                 result = {
