@@ -297,9 +297,9 @@ class WidgetService:
         """Apply parsed config to service state; return canonicalized widget-owned keys."""
         loaded = copy.deepcopy(loaded_config)
         data_section = loaded.pop("data", {})
-        loaded.pop("features", {})  # consumed by build_config from df_info
+        features_section = loaded.pop("features", {})
         split_section = loaded.pop("split", {})
-        loaded.pop("task", None)
+        task_override = loaded.pop("task", None)
 
         if "target" in data_section and self.has_data():
             self.set_target(data_section["target"])
@@ -324,6 +324,26 @@ class WidgetService:
                 train_size_max=split_section.get("train_size_max"),
                 test_size_max=split_section.get("test_size_max"),
             )
+
+        # Restore feature exclusions and categorical overrides
+        if features_section and self.has_data():
+            exclude_set = set(features_section.get("exclude", []))
+            categorical_set = set(features_section.get("categorical", []))
+            target = self._df_info.get("target")
+            for col in self._df_info["columns"]:
+                name = col["name"]
+                if name == target:
+                    continue
+                excluded = name in exclude_set
+                col_type = (
+                    "categorical" if name in categorical_set else col.get("col_type", "numeric")
+                )
+                if excluded != col.get("excluded", False) or col_type != col.get("col_type"):
+                    self.update_column(name, excluded=excluded, col_type=col_type)
+
+        # Restore explicit task override
+        if task_override and self.has_data():
+            self._df_info = {**self._df_info, "task": task_override}
 
         return self.canonicalize_config(loaded)
 

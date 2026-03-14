@@ -651,6 +651,57 @@ class TestGroupColRoundTrip:
         assert svc._df_info["cv"]["group_column"] == "grp"
 
 
+class TestApplyLoadedConfigFeaturesAndTask:
+    """apply_loaded_config must restore features and task from imported config."""
+
+    def test_restores_excluded_features(self) -> None:
+        """Excluded columns in features section should be reflected in df_info."""
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        df = pd.DataFrame({"a": rng.normal(size=50), "b": rng.normal(size=50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+
+        # Verify b is not excluded initially
+        col_b = next(c for c in svc._df_info["columns"] if c["name"] == "b")
+        assert not col_b["excluded"]
+
+        # Import config with b excluded
+        config = {"features": {"exclude": ["b"], "categorical": []}}
+        svc.apply_loaded_config(config)
+
+        col_b_after = next(c for c in svc._df_info["columns"] if c["name"] == "b")
+        assert col_b_after["excluded"]
+
+    def test_restores_categorical_type(self) -> None:
+        """Categorical columns in features section should update col_type."""
+        df = pd.DataFrame({"a": range(50), "b": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+
+        col_a = next(c for c in svc._df_info["columns"] if c["name"] == "a")
+        assert col_a["col_type"] != "categorical"
+
+        config = {"features": {"exclude": [], "categorical": ["a"]}}
+        svc.apply_loaded_config(config)
+
+        col_a_after = next(c for c in svc._df_info["columns"] if c["name"] == "a")
+        assert col_a_after["col_type"] == "categorical"
+
+    def test_restores_task_override(self) -> None:
+        """Explicit task in imported config should override auto-detected task."""
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+        assert svc._df_info["task"] == "binary"
+
+        config = {"task": "regression"}
+        svc.apply_loaded_config(config)
+
+        assert svc._df_info["task"] == "regression"
+
+
 class TestZeroFeatureGuard:
     """build_config should raise ValueError when all features are excluded."""
 
