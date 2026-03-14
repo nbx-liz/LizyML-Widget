@@ -11,6 +11,9 @@ js/node_modules/
 *.tsbuildinfo
 .eslintcache
 
+# hatch-vcs generated version file
+src/lizyml_widget/_version.py
+
 # Built widget assets (esbuild output)
 # NOTE: widget.js and widget.css are tracked in git for PyPI distribution
 # (sdist consumers should not need Node.js/pnpm to install)
