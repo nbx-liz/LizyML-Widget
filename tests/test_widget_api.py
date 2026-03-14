@@ -1158,6 +1158,34 @@ class TestUpdateColumnError:
         w.action = {"type": "update_column", "payload": {}}
         assert w.error["code"] == "COLUMN_ERROR"
 
+    def test_invalid_col_type_rejected(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.action = {"type": "update_column", "payload": {"name": "x", "col_type": "evil"}}
+        assert w.error["code"] == "COLUMN_ERROR"
+        assert "Invalid col_type" in w.error["message"]
+
+
+class TestUpdateCvValidation:
+    """Cover _handle_update_cv validation (strategy allowlist, n_splits range)."""
+
+    def test_invalid_strategy_rejected(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.action = {"type": "update_cv", "payload": {"strategy": "../../etc"}}
+        assert w.error["code"] == "CV_ERROR"
+        assert "Invalid strategy" in w.error["message"]
+
+    def test_n_splits_out_of_range_rejected(self) -> None:
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w.action = {"type": "update_cv", "payload": {"strategy": "kfold", "n_splits": 0}}
+        assert w.error["code"] == "CV_ERROR"
+        assert "n_splits" in w.error["message"]
+
 
 class TestUpdateCvError:
     """Cover _handle_update_cv error path (widget.py lines 301-302)."""

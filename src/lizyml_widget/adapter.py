@@ -310,7 +310,7 @@ class LizyMLAdapter:
     # ── Canonicalize config ───────────────────────────────────
 
     # Keys managed by Service (df_info / build_config), not the widget config traitlet
-    _SERVICE_MANAGED_KEYS: set[str] = {"data", "features", "split", "task"}
+    _SERVICE_MANAGED_KEYS: frozenset[str] = frozenset({"data", "features", "split", "task"})
 
     def canonicalize_config(
         self, config: dict[str, Any], *, task: str | None = None
@@ -549,7 +549,7 @@ class LizyMLAdapter:
         from lizyml.core.model import Model
 
         model = Model(config, data=dataframe)
-        model._widget_config = config  # type: ignore[attr-defined]  # noqa: SLF001
+        model._widget_config = copy.deepcopy(config)  # type: ignore[attr-defined]  # noqa: SLF001
         return model
 
     def _run_with_cancel_polling(
@@ -577,12 +577,12 @@ class LizyMLAdapter:
             return target()
 
         result_holder: dict[str, Any] = {}
-        error_holder: dict[str, Exception] = {}
+        error_holder: dict[str, BaseException] = {}
 
         def _worker() -> None:
             try:
                 result_holder["value"] = target()
-            except Exception as exc:
+            except BaseException as exc:
                 error_holder["error"] = exc
 
         thread = threading.Thread(target=_worker, daemon=True)
@@ -618,7 +618,7 @@ class LizyMLAdapter:
         )
         return FitSummary(
             metrics=result.metrics,
-            fold_count=len(result.splits.outer),
+            fold_count=len(getattr(getattr(result, "splits", None), "outer", [])),
             params=model.params_table().reset_index().to_dict(orient="records"),
         )
 

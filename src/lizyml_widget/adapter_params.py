@@ -97,26 +97,36 @@ def resolve_direction(eval_metric_name: str) -> str:
 
 
 # ── LightGBM default params ─────────────────────────────────
-LGBM_PARAMS_TASK_INDEPENDENT: dict[str, Any] = {
-    "n_estimators": 1500,
-    "learning_rate": 0.001,
-    "max_depth": 5,
-    "max_bin": 511,
-    "feature_fraction": 0.7,
-    "bagging_fraction": 0.7,
-    "bagging_freq": 10,
-    "lambda_l1": 0.0,
-    "lambda_l2": 0.000001,
-    "first_metric_only": False,
-    "verbose": -1,
-    "num_threads": 0,
-}
+LGBM_PARAMS_TASK_INDEPENDENT: Mapping[str, Any] = _types.MappingProxyType(
+    {
+        "n_estimators": 1500,
+        "learning_rate": 0.001,
+        "max_depth": 5,
+        "max_bin": 511,
+        "feature_fraction": 0.7,
+        "bagging_fraction": 0.7,
+        "bagging_freq": 10,
+        "lambda_l1": 0.0,
+        "lambda_l2": 0.000001,
+        "first_metric_only": False,
+        "verbose": -1,
+        "num_threads": 0,
+    }
+)
 
-LGBM_PARAMS_BY_TASK: dict[str, dict[str, Any]] = {
-    "regression": {"objective": "huber", "metric": ["huber", "mae", "mape"]},
-    "binary": {"objective": "binary", "metric": ["auc", "binary_logloss"]},
-    "multiclass": {"objective": "multiclass", "metric": ["auc_mu", "multi_logloss"]},
-}
+LGBM_PARAMS_BY_TASK: Mapping[str, Mapping[str, Any]] = _types.MappingProxyType(
+    {
+        "regression": _types.MappingProxyType(
+            {"objective": "huber", "metric": ["huber", "mae", "mape"]}
+        ),
+        "binary": _types.MappingProxyType(
+            {"objective": "binary", "metric": ["auc", "binary_logloss"]}
+        ),
+        "multiclass": _types.MappingProxyType(
+            {"objective": "multiclass", "metric": ["auc_mu", "multi_logloss"]}
+        ),
+    }
+)
 
 
 # ── Eval metrics catalogue (cached, thread-safe) ────────────

@@ -235,7 +235,8 @@ class TestCVDefaults:
         info = svc.set_task("regression")
         assert info["cv"]["strategy"] == "kfold"
         assert info["cv"]["n_splits"] == 3
-        assert info["cv"]["group_column"] is None
+        # group_column is preserved across task changes (H3 fix)
+        assert info["cv"]["group_column"] == "g"
 
 
 # ── Feature summary ──────────────────────────────────────────
