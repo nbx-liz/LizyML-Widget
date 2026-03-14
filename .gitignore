@@ -11,9 +11,12 @@ js/node_modules/
 *.tsbuildinfo
 .eslintcache
 
+# hatch-vcs generated version file
+src/lizyml_widget/_version.py
+
 # Built widget assets (esbuild output)
-src/lizyml_widget/static/widget.js
-src/lizyml_widget/static/widget.css
+# NOTE: widget.js and widget.css are tracked in git for PyPI distribution
+# (sdist consumers should not need Node.js/pnpm to install)
 
 # IDE
 .vscode/
@@ -36,9 +39,24 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+Untitled*.ipynb
+notebooks/verify_*.ipynb
+notebooks/*.png
+.ipython/
+.jupyter/
+.jupyter-runtime/
+.jupyter-logs/
+notebooks/outputs/
+scripts/jupyter-lab.sh
+scripts/jupyter-reset.sh
 
 # uv
 .python-version
+.uv-cache/
+
+# Temporary / working files
+.tmp/
+outputs/
 
 # AI & Automation
 .abstra/
@@ -54,3 +72,6 @@ GEMINI.md
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+.playwright-mcp/
+.audit_html/
+.chrome-home/
