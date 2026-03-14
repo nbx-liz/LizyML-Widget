@@ -36,9 +36,24 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+Untitled*.ipynb
+notebooks/verify_*.ipynb
+notebooks/*.png
+.ipython/
+.jupyter/
+.jupyter-runtime/
+.jupyter-logs/
+notebooks/outputs/
+scripts/jupyter-lab.sh
+scripts/jupyter-reset.sh
 
 # uv
 .python-version
+.uv-cache/
+
+# Temporary / working files
+.tmp/
+outputs/
 
 # AI & Automation
 .abstra/
@@ -54,3 +69,6 @@ GEMINI.md
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+.playwright-mcp/
+.audit_html/
+.chrome-home/
