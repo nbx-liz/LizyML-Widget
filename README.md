@@ -1,19 +1,34 @@
 # LizyML Widget
 
+[![PyPI](https://img.shields.io/pypi/v/lizyml-widget)](https://pypi.org/project/lizyml-widget/)
+[![Python](https://img.shields.io/pypi/pyversions/lizyml-widget)](https://pypi.org/project/lizyml-widget/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Interactive Jupyter widget for [LizyML](https://github.com/lizyml/lizyml) — fit, tune, and run inference on machine learning models without writing code.
 
 ## Features
 
 - **Data Tab** — Load a DataFrame, select target, configure columns and cross-validation
-- **Model Tab** — Edit LightGBM hyperparameters, configure tuning search space
+- **Config Tab** — Edit LightGBM hyperparameters, configure tuning search space
 - **Results Tab** — View scores, Plotly plots, feature importance, and inference results
 - **Config Import/Export** — Save and load configurations as YAML
 - **Python API** — Programmatic access to all widget functionality
+
+## Requirements
+
+- Python >= 3.10
+- Jupyter Notebook, JupyterLab, Google Colab, or VS Code Notebooks
 
 ## Installation
 
 ```bash
 pip install lizyml-widget
+```
+
+With the LizyML backend (required for Fit/Tune):
+
+```bash
+pip install lizyml-widget[lizyml]
 ```
 
 ## Quick Start
@@ -41,11 +56,17 @@ w.save_model("./model")
 w.save_config("config.yaml")
 ```
 
+### Version
+
+```python
+import lizyml_widget
+print(lizyml_widget.__version__)
+```
+
 ## Tutorials
 
 | Notebook | Task | Dataset |
 |----------|------|---------|
-| [Quick Start](notebooks/tutorial.ipynb) | Binary (synthetic) | Synthetic data |
 | [Regression](notebooks/tutorial_regression.ipynb) | Regression | California Housing (sklearn) |
 | [Binary Classification](notebooks/tutorial_binary.ipynb) | Binary | Breast Cancer Wisconsin (sklearn) |
 | [Multiclass Classification](notebooks/tutorial_multiclass.ipynb) | Multiclass | Wine (sklearn) |
@@ -57,11 +78,13 @@ w.save_config("config.yaml")
 - Google Colab
 - VS Code Notebooks
 
+Powered by [anywidget](https://anywidget.dev/) for cross-environment compatibility.
+
 ## Development
 
 ```bash
 # Python
-uv sync --all-extras
+uv sync --all-extras    # installs dev + lizyml dependencies
 uv run pytest
 uv run ruff check .
 uv run mypy src/lizyml_widget/

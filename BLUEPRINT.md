@@ -1307,6 +1307,56 @@ class LizyWidget(anywidget.AnyWidget):
 - ビルド済み JS を内包（ユーザーに Node.js 不要）
 - `pip install lizyml-widget` のみで利用可能
 
+### 8.5 バージョニング
+
+[Semantic Versioning 2.0.0](https://semver.org/) に準拠する。
+
+```
+MAJOR.MINOR.PATCH   例: 0.1.0, 0.2.0, 1.0.0
+```
+
+#### Alpha 期間 (`0.x.y`)
+
+`1.0.0` に達するまでは public API は安定保証しない。
+
+| バージョン変更 | 条件 | 例 |
+|---------------|------|-----|
+| `0.MINOR+1.0` | 機能追加・破壊的変更 | 新タブ追加、traitlets 変更、Adapter Protocol 変更 |
+| `0.MINOR.PATCH+1` | バグ修正・ドキュメント修正 | メトリクス修正、UI 調整 |
+
+#### Stable 期間 (`>=1.0.0`)
+
+| バージョン変更 | 条件 |
+|---------------|------|
+| `MAJOR+1.0.0` | 後方互換性を破る変更（破壊的変更） |
+| `MINOR+1.0` | 後方互換で機能追加 |
+| `PATCH+1` | 後方互換でバグ修正 |
+
+#### バージョン取得
+
+`hatch-vcs` が git タグから自動取得する。手動でのバージョン指定は不要。
+
+```python
+import lizyml_widget
+print(lizyml_widget.__version__)  # "0.1.0"
+```
+
+| 状態 | バージョン例 |
+|------|-------------|
+| タグ `v0.1.0` が HEAD | `0.1.0` |
+| タグから 3 コミット先 | `0.1.1.dev3+gabc1234` |
+
+#### リリースフロー
+
+1. develop → main にマージ
+2. GitHub Release を作成（タグ `vX.Y.Z`）
+3. `publish.yml` が自動起動 → TestPyPI → PyPI
+
+#### 破壊的変更ポリシー
+
+- Alpha 期間中でも HISTORY.md に Proposal を記録してから実施
+- Stable 期間では deprecation warning を 1 MINOR バージョン以上出してから削除
+
 ---
 
 ## 9. テスト戦略
