@@ -77,6 +77,10 @@ class LizyWidget(anywidget.AnyWidget):
             "capabilities": contract.capabilities,
         }
         self.config = self._service.initialize_config()
+        # Apply task defaults (metrics, search space) if task is known
+        task = df_info.get("task")
+        if task:
+            self.config = self._service.apply_task_params(dict(self.config), task)
         return self
 
     def set_target(self, col: str) -> LizyWidget:

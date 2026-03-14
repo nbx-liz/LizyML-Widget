@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -19,6 +20,17 @@ from lizyml_widget.types import (
     PredictionSummary,
     TuningSummary,
 )
+
+# ── Fixtures ─────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _reset_eval_metrics_cache() -> None:  # type: ignore[misc]
+    """Reset the class-level eval metrics cache between tests."""
+    LizyMLAdapter._eval_metrics_cache = None
+    yield  # type: ignore[misc]
+    LizyMLAdapter._eval_metrics_cache = None
+
 
 # ── Helpers ──────────────────────────────────────────────────
 
@@ -332,6 +344,110 @@ class TestTune:
         assert len(result.trials) == 1
         assert result.metric_name == "accuracy"
 
+    def test_tune_calls_on_progress_periodically(self) -> None:
+        """on_progress must be called during tune so cancel checks fire."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+
+        # Simulate a tune that takes ~1.5 seconds
+        def slow_tune() -> FakeTuningResult:
+            time.sleep(1.5)
+            return FakeTuningResult(
+                best_params={"lr": 0.01},
+                best_score=0.95,
+                trials=[FakeTrial(number=1, params={"lr": 0.01}, score=0.95, state="COMPLETE")],
+                metric_name="accuracy",
+                direction="maximize",
+            )
+
+        mock_model.tune.side_effect = slow_tune
+
+        progress_calls: list[tuple[int, int, str]] = []
+
+        def on_progress(current: int, total: int, message: str) -> None:
+            progress_calls.append((current, total, message))
+
+        result = adapter.tune(mock_model, on_progress=on_progress)
+        assert isinstance(result, TuningSummary)
+        # on_progress should have been called at least once during the 1.5s tune
+        assert len(progress_calls) >= 1
+
+    def test_tune_cancellation_via_on_progress(self) -> None:
+        """When on_progress raises InterruptedError, tune should stop."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+
+        # Simulate a long tune
+        def long_tune() -> FakeTuningResult:
+            time.sleep(10.0)
+            return FakeTuningResult(
+                best_params={},
+                best_score=0.0,
+                trials=[],
+                metric_name="acc",
+                direction="maximize",
+            )
+
+        mock_model.tune.side_effect = long_tune
+
+        call_count = 0
+
+        def on_progress_cancel(current: int, total: int, message: str) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise InterruptedError("Cancelled")
+
+        with pytest.raises(InterruptedError, match="Cancelled"):
+            adapter.tune(mock_model, on_progress=on_progress_cancel)
+
+    def test_fit_calls_on_progress_periodically(self) -> None:
+        """on_progress must be called during fit so cancel checks fire."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+
+        def slow_fit(params: Any = None) -> FakeFitResult:
+            time.sleep(1.5)
+            return FakeFitResult(
+                metrics={"rmse": 0.5},
+                splits=FakeOuter(outer=[1, 2, 3]),
+            )
+
+        mock_model.fit.side_effect = slow_fit
+        mock_model.params_table.return_value = pd.DataFrame()
+
+        progress_calls: list[tuple[int, int, str]] = []
+
+        def on_progress(current: int, total: int, message: str) -> None:
+            progress_calls.append((current, total, message))
+
+        result = adapter.fit(mock_model, on_progress=on_progress)
+        assert isinstance(result, FitSummary)
+        assert len(progress_calls) >= 1
+
+    def test_fit_cancellation_via_on_progress(self) -> None:
+        """When on_progress raises InterruptedError, fit should stop."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+
+        def long_fit(params: Any = None) -> FakeFitResult:
+            time.sleep(10.0)
+            return FakeFitResult(metrics={}, splits=FakeOuter(outer=[1]))
+
+        mock_model.fit.side_effect = long_fit
+        mock_model.params_table.return_value = pd.DataFrame()
+
+        call_count = 0
+
+        def on_progress_cancel(current: int, total: int, message: str) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise InterruptedError("Cancelled")
+
+        with pytest.raises(InterruptedError, match="Cancelled"):
+            adapter.fit(mock_model, on_progress=on_progress_cancel)
+
 
 # ── Predict ──────────────────────────────────────────────────
 
@@ -378,6 +494,18 @@ class TestPlot:
         assert isinstance(result, PlotData)
         assert result.plotly_json == '{"data": [], "layout": {}}'
 
+    @pytest.mark.parametrize("kind", ["split", "gain", "shap"])
+    def test_plot_feature_importance_variants(self, kind: str) -> None:
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_fig = MagicMock()
+        mock_fig.to_json.return_value = '{"data": [], "layout": {}}'
+        mock_model.importance_plot.return_value = mock_fig
+
+        result = adapter.plot(mock_model, f"feature-importance-{kind}")
+        assert isinstance(result, PlotData)
+        mock_model.importance_plot.assert_called_once_with(kind=kind)
+
     def test_plot_unknown_type_raises(self) -> None:
         adapter = LizyMLAdapter()
         mock_model = MagicMock()
@@ -400,7 +528,9 @@ class TestAvailablePlots:
         assert "residuals" in plots
         assert "roc-curve" not in plots
         assert "learning-curve" in plots
-        assert "feature-importance" in plots
+        assert "feature-importance-split" in plots
+        assert "feature-importance-gain" in plots
+        assert "feature-importance-shap" in plots
 
     def test_binary_with_calibration(self) -> None:
         adapter = LizyMLAdapter()
@@ -459,7 +589,9 @@ class TestAvailablePlots:
         assert "optimization-history" in plots
         assert "learning-curve" not in plots
         assert "oof-distribution" not in plots
-        assert "feature-importance" not in plots
+        assert "feature-importance-split" not in plots
+        assert "feature-importance-gain" not in plots
+        assert "feature-importance-shap" not in plots
         assert "roc-curve" not in plots
 
     def test_fitted_and_tuned_model_has_all_plots(self) -> None:
@@ -474,7 +606,9 @@ class TestAvailablePlots:
         plots = adapter.available_plots(mock_model)
         assert "optimization-history" in plots
         assert "learning-curve" in plots
-        assert "feature-importance" in plots
+        assert "feature-importance-split" in plots
+        assert "feature-importance-gain" in plots
+        assert "feature-importance-shap" in plots
         assert "roc-curve" in plots
 
 
@@ -580,7 +714,7 @@ class TestGetBackendContract:
             adapter = LizyMLAdapter()
             contract = adapter.get_backend_contract()
             section_keys = [s["key"] for s in contract.ui_schema["sections"]]
-            assert section_keys == ["model", "training", "evaluation", "calibration"]
+            assert section_keys == ["model", "training", "calibration", "evaluation"]
 
     def test_option_sets_all_tasks(self) -> None:
         with patch.dict("sys.modules", _mock_schema_modules()):
@@ -592,6 +726,39 @@ class TestGetBackendContract:
                 assert task in option_sets["metric"]
                 assert len(option_sets["objective"][task]) > 0
                 assert len(option_sets["metric"][task]) > 0
+
+    def test_model_metric_option_set_uses_lgbm_names(self) -> None:
+        """model_metric option set must contain LightGBM-native metric names, not LizyML eval names."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            option_sets = contract.ui_schema["option_sets"]
+            assert "model_metric" in option_sets, "option_sets must include model_metric"
+            for task in ("regression", "binary", "multiclass"):
+                assert task in option_sets["model_metric"]
+                assert len(option_sets["model_metric"][task]) > 0
+
+    def test_multiclass_model_metric_uses_multi_prefix(self) -> None:
+        """Multiclass model_metric must use multi_logloss/auc_mu, not logloss/auc."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            mc_metrics = contract.ui_schema["option_sets"]["model_metric"]["multiclass"]
+            # Must contain LightGBM multiclass-specific names
+            assert "multi_logloss" in mc_metrics
+            assert "auc_mu" in mc_metrics
+            # Must NOT contain bare names that fail with multiclass objective
+            assert "logloss" not in mc_metrics
+            assert "auc" not in mc_metrics
+
+    def test_parameter_hints_metric_uses_model_metric_kind(self) -> None:
+        """The metric parameter_hint must use kind='model_metric' to pick from model_metric option set."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            hints = contract.ui_schema["parameter_hints"]
+            metric_hint = next(h for h in hints if h["key"] == "metric")
+            assert metric_hint["kind"] == "model_metric"
 
     def test_parameter_hints_complete(self) -> None:
         with patch.dict("sys.modules", _mock_schema_modules()):
@@ -812,31 +979,33 @@ class TestApplyTaskDefaults:
         adapter.apply_task_defaults(config, task="binary")
         assert "objective" not in config["model"]["params"]
 
-    @pytest.mark.parametrize(
-        "task,expected_metrics",
-        [
-            (
-                "regression",
-                ["huber", "mae", "mape", "mse", "rmse", "quantile"],
-            ),
-            (
-                "binary",
-                ["auc", "binary_logloss", "binary_error", "average_precision"],
-            ),
-            (
-                "multiclass",
-                ["auc_mu", "multi_logloss", "multi_error"],
-            ),
-        ],
-    )
-    def test_all_eval_metrics_on_by_default(self, task: str, expected_metrics: list[str]) -> None:
+    @pytest.mark.parametrize("task", ["regression", "binary", "multiclass"])
+    def test_all_eval_metrics_on_by_default(self, task: str) -> None:
         adapter = LizyMLAdapter()
         config: dict[str, Any] = {
             "model": {"name": "lgbm", "params": {}},
             "evaluation": {"metrics": []},
         }
         result = adapter.apply_task_defaults(config, task=task)
-        assert result["evaluation"]["metrics"] == expected_metrics
+        expected = adapter._get_eval_metrics_by_task()[task]
+        assert result["evaluation"]["metrics"] == expected
+
+    def test_eval_metrics_are_lizyml_names_not_lgbm(self) -> None:
+        """Eval metrics must use LizyML registry names, not LightGBM training names."""
+        adapter = LizyMLAdapter()
+        eval_metrics = adapter._get_eval_metrics_by_task()
+        lgbm_only_names = {
+            "binary_logloss",
+            "binary_error",
+            "multi_logloss",
+            "multi_error",
+            "auc_mu",
+            "mse",
+            "quantile",
+        }
+        for task, metrics in eval_metrics.items():
+            overlap = set(metrics) & lgbm_only_names
+            assert not overlap, f"Task '{task}' has LightGBM-only metric names: {overlap}"
 
     def test_eval_metrics_not_overwritten_if_set(self) -> None:
         adapter = LizyMLAdapter()
@@ -853,11 +1022,11 @@ class TestApplyTaskDefaults:
         # Start with regression metrics
         config: dict[str, Any] = {
             "model": {"name": "lgbm", "params": {}},
-            "evaluation": {"metrics": ["mae", "mse", "rmse"]},
+            "evaluation": {"metrics": ["mae", "rmse", "r2"]},
         }
-        # Switch to binary → regression metrics are invalid
+        # Switch to binary → regression-only metrics are invalid
         result = adapter.apply_task_defaults(config, task="binary")
-        binary_valid = {"auc", "binary_logloss", "binary_error", "average_precision"}
+        binary_valid = set(adapter._get_eval_metrics_by_task()["binary"])
         actual = set(result["evaluation"]["metrics"])
         # All returned metrics must be valid for binary
         assert actual <= binary_valid
@@ -870,12 +1039,12 @@ class TestApplyTaskDefaults:
         # Config has mix of binary and invalid metrics
         config: dict[str, Any] = {
             "model": {"name": "lgbm", "params": {}},
-            "evaluation": {"metrics": ["auc", "mae", "binary_logloss"]},
+            "evaluation": {"metrics": ["auc", "mae", "logloss"]},
         }
         result = adapter.apply_task_defaults(config, task="binary")
-        # auc and binary_logloss are valid for binary; mae is not
+        # auc and logloss are valid for binary; mae is not
         assert "auc" in result["evaluation"]["metrics"]
-        assert "binary_logloss" in result["evaluation"]["metrics"]
+        assert "logloss" in result["evaluation"]["metrics"]
         assert "mae" not in result["evaluation"]["metrics"]
 
 
@@ -948,6 +1117,31 @@ class TestPrepareRunConfig:
         config = {"model": {"name": "lgbm", "params": {"a": 1}}}
         adapter.prepare_run_config(config, job_type="tune")
         assert "tuning" not in config
+
+    def test_evaluation_params_stripped_for_backend(self) -> None:
+        """evaluation.params is widget-only and must be stripped before backend submission."""
+        adapter = LizyMLAdapter()
+        config = {
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": ["auc"], "params": {"precision_at_k_k": 20}},
+        }
+        result = adapter.prepare_run_config(config, job_type="fit")
+        eval_section = result.get("evaluation", {})
+        assert "params" not in eval_section, "evaluation.params should be stripped"
+        assert eval_section["metrics"] == ["auc"]
+
+    def test_evaluation_params_survives_config_patch(self) -> None:
+        """evaluation.params should survive config patching (not stripped in patch)."""
+        adapter = LizyMLAdapter()
+        config = {
+            "config_version": 1,
+            "model": {"name": "lgbm", "params": {}},
+            "evaluation": {"metrics": ["auc"], "params": {"precision_at_k_k": 20}},
+        }
+        ops = [ConfigPatchOp(op="set", path="evaluation.metrics", value=["auc", "logloss"])]
+        result = adapter.apply_config_patch(config, ops)
+        assert result["evaluation"]["params"] == {"precision_at_k_k": 20}
+        assert result["evaluation"]["metrics"] == ["auc", "logloss"]
 
     def test_inner_valid_normalized_in_prepare(self) -> None:
         adapter = LizyMLAdapter()

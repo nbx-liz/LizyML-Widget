@@ -421,3 +421,27 @@
   - 回帰テストの検知能力
 - **対応先**:
   - PLAN.md Phase 11 に追補（11-7 / 11-8 / 11-9）
+
+---
+
+### P-007: `evaluation.params` フィールド追加（Widget-only, precision_at_k の k 値指定）
+
+- **日付**: 2026-03-14
+- **ステータス**: Approved（2026-03-14 承認）
+- **背景**:
+  - LizyML の `PrecisionAtK` メトリックは `k` パラメータ（デフォルト 10、範囲 1-100）を持つが、`EvaluationConfig` の schema は `metrics: list[str]` のみで `additionalProperties: false` のためパラメータ指定手段がない。
+  - LizyML の `get_metric()` は常に `cls()` で引数なしインスタンス化するため、ライブラリ側でのカスタマイズ不可。
+  - Widget ユーザーが k 値を指定できるようにするため、Widget-only の `evaluation.params` フィールドを追加する。
+- **提案内容**:
+  - Widget config の `evaluation` セクションに `params: dict` フィールドを追加（Widget-only、`strip_for_backend` で除去）。
+  - 初期対応: `params.precision_at_k_k: int`（デフォルト 10、範囲 1-100）。
+  - UI: Evaluation セクションで `precision_at_k` が選択されている場合のみ k 入力フィールドを表示。
+  - Score 表示: metric 名が `precision_at_k` の場合、表示名に `(k=N)` を併記。
+  - Score 表示: k 値は `precision_at_k (k=N)` として併記（表示のみ）。
+  - **制約**: LizyML の `get_metric()` は常に `cls()` で引数なしインスタンス化するため、現時点では常に k=10 で評価される。LizyML 側が custom k パラメータをサポートした際に adapter で k 値を forward する予定。
+- **影響範囲**:
+  - `evaluation` config フィールドの追加（Widget-only）
+  - `strip_for_backend` の更新
+  - ConfigTab Evaluation UI の更新
+  - ScoreTable の表示更新
+- **BLUEPRINT 更新**: §5.3 Evaluation セクションに `params` フィールドを追記

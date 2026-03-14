@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import logging
+import threading
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol
 
@@ -147,7 +148,7 @@ class LizyMLAdapter:
     def get_backend_contract(self) -> BackendContract:
         """Return the full backend contract with config schema, UI metadata, and capabilities."""
         config_schema = self.get_config_schema()
-        ui_schema = build_ui_schema(dict(self._ALL_METRICS_BY_TASK))
+        ui_schema = build_ui_schema(self._get_eval_metrics_by_task())
         capabilities = build_capabilities()
         return BackendContract(
             schema_version=1,
@@ -219,11 +220,43 @@ class LizyMLAdapter:
         result = normalize_inner_valid(result)
         return result
 
-    _ALL_METRICS_BY_TASK: dict[str, list[str]] = {
-        "regression": ["huber", "mae", "mape", "mse", "rmse", "quantile"],
-        "binary": ["auc", "binary_logloss", "binary_error", "average_precision"],
-        "multiclass": ["auc_mu", "multi_logloss", "multi_error"],
-    }
+    _eval_metrics_cache: dict[str, list[str]] | None = None
+    _eval_metrics_lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def _get_eval_metrics_by_task(cls) -> dict[str, list[str]]:
+        """Query LizyML's metric registry for available evaluation metrics per task."""
+        if cls._eval_metrics_cache is not None:
+            return cls._eval_metrics_cache
+        with cls._eval_metrics_lock:
+            # Double-checked locking
+            if cls._eval_metrics_cache is not None:
+                return cls._eval_metrics_cache
+            metrics: dict[str, list[str]]
+            try:
+                from lizyml.metrics.registry import _TASK_METRICS
+
+                metrics = {task: sorted(ms) for task, ms in _TASK_METRICS.items()}
+            except (ImportError, AttributeError, TypeError):
+                # Fallback for older LizyML versions without _TASK_METRICS
+                metrics = {
+                    "regression": sorted(["mae", "mape", "rmse", "huber", "r2", "rmsle"]),
+                    "binary": sorted(
+                        [
+                            "auc",
+                            "logloss",
+                            "auc_pr",
+                            "f1",
+                            "accuracy",
+                            "brier",
+                            "ece",
+                            "precision_at_k",
+                        ]
+                    ),
+                    "multiclass": sorted(["auc", "logloss", "auc_pr", "f1", "accuracy", "brier"]),
+                }
+            cls._eval_metrics_cache = metrics
+            return metrics
 
     def apply_task_defaults(self, config: dict[str, Any], *, task: str) -> dict[str, Any]:
         """Apply task-dependent default params to config via patch operations."""
@@ -237,7 +270,7 @@ class LizyMLAdapter:
 
         # Ensure evaluation metrics are valid for current task
         eval_metrics = (config.get("evaluation") or {}).get("metrics", [])
-        task_metrics = self._ALL_METRICS_BY_TASK.get(task, [])
+        task_metrics = self._get_eval_metrics_by_task().get(task, [])
         if task_metrics:
             valid_set = set(task_metrics)
             if not eval_metrics:
@@ -512,6 +545,49 @@ class LizyMLAdapter:
         model._widget_config = config  # type: ignore[attr-defined]  # noqa: SLF001
         return model
 
+    @staticmethod
+    def _run_with_cancel_polling(
+        target: Callable[[], Any],
+        on_progress: Callable[..., Any] | None,
+        poll_interval: float = 0.5,
+    ) -> Any:
+        """Run *target* in a daemon thread, polling on_progress for cancellation.
+
+        If *on_progress* raises ``InterruptedError`` the backend thread is
+        abandoned (daemon) and the exception propagates to the caller.
+        The abandoned thread will finish in the background.
+        """
+        if on_progress is None:
+            return target()
+
+        result_holder: dict[str, Any] = {}
+        error_holder: dict[str, Exception] = {}
+
+        def _worker() -> None:
+            try:
+                result_holder["value"] = target()
+            except Exception as exc:
+                error_holder["error"] = exc
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        try:
+            while thread.is_alive():
+                thread.join(timeout=poll_interval)
+                if thread.is_alive():
+                    # on_progress may raise InterruptedError → cancels the job
+                    on_progress(0, 0, "Processing...")
+        except InterruptedError:
+            _log.warning(
+                "Job cancelled; backend worker thread abandoned (will finish in background)."
+            )
+            raise
+
+        if "error" in error_holder:
+            raise error_holder["error"]
+        return result_holder["value"]
+
     def fit(
         self,
         model: Any,
@@ -519,7 +595,10 @@ class LizyMLAdapter:
         params: dict[str, Any] | None = None,
         on_progress: Callable[..., Any] | None = None,
     ) -> FitSummary:
-        result = model.fit(params=params)
+        result = self._run_with_cancel_polling(
+            lambda: model.fit(params=params),
+            on_progress,
+        )
         return FitSummary(
             metrics=result.metrics,
             fold_count=len(result.splits.outer),
@@ -534,7 +613,10 @@ class LizyMLAdapter:
     ) -> TuningSummary:
         from dataclasses import asdict
 
-        result = model.tune()
+        result = self._run_with_cancel_polling(
+            model.tune,
+            on_progress,
+        )
         return TuningSummary(
             best_params=result.best_params,
             best_score=result.best_score,
@@ -576,7 +658,9 @@ class LizyMLAdapter:
             "roc-curve": model.roc_curve_plot,
             "calibration": model.calibration_plot,
             "probability-histogram": model.probability_histogram_plot,
-            "feature-importance": lambda: model.importance_plot(kind="split"),
+            "feature-importance-split": lambda: model.importance_plot(kind="split"),
+            "feature-importance-gain": lambda: model.importance_plot(kind="gain"),
+            "feature-importance-shap": lambda: model.importance_plot(kind="shap"),
             "optimization-history": model.tuning_plot,
         }
         method = plot_methods.get(plot_type)
@@ -620,7 +704,13 @@ class LizyMLAdapter:
                     plots.append("probability-histogram")
             if task == "multiclass":
                 plots.append("roc-curve")
-            plots.append("feature-importance")
+            plots.extend(
+                [
+                    "feature-importance-split",
+                    "feature-importance-gain",
+                    "feature-importance-shap",
+                ]
+            )
 
         # Tune-dependent plots
         if has_tuning:

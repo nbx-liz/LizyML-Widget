@@ -117,6 +117,7 @@ export function App({ model }: AppProps) {
             onRequestPlot={requestPlot}
             sendAction={sendAction}
             onSwitchToFit={() => setActiveTab("Model")}
+            evaluationParams={config?.evaluation?.params}
           />
         )}
       </div>

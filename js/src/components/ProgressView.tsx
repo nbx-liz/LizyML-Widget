@@ -40,26 +40,40 @@ export function ProgressView({
         <span class="lzw-badge lzw-badge--running">Running</span>
       </div>
 
-      {total > 0 && (
-        <div class="lzw-progress__bar-wrap">
-          {current > 0 ? (
-            <div class="lzw-progress__bar" style={{ width: `${pct}%` }} />
-          ) : (
+      {jobType === "tune" ? (
+        <>
+          <div class="lzw-progress__bar-wrap">
             <div class="lzw-progress__bar lzw-progress__bar--indeterminate" />
+          </div>
+          <div class="lzw-progress__info">
+            <span>
+              {total > 0 ? `Tuning ${total} trials...` : "Tuning..."}{" "}
+              {progress.message ?? ""}
+            </span>
+            <span>Elapsed: {formatTime(elapsedSec)}</span>
+          </div>
+        </>
+      ) : (
+        <>
+          {total > 0 && (
+            <div class="lzw-progress__bar-wrap">
+              {current > 0 ? (
+                <div class="lzw-progress__bar" style={{ width: `${pct}%` }} />
+              ) : (
+                <div class="lzw-progress__bar lzw-progress__bar--indeterminate" />
+              )}
+            </div>
           )}
-        </div>
+          <div class="lzw-progress__info">
+            <span>
+              {total > 0
+                ? `Fold ${current} / ${total}${progress.message ? `  ${progress.message}` : ""}`
+                : progress.message ?? "Processing..."}
+            </span>
+            <span>Elapsed: {formatTime(elapsedSec)}</span>
+          </div>
+        </>
       )}
-
-      <div class="lzw-progress__info">
-        <span>
-          {jobType === "tune" && total > 0
-            ? `Trial ${current} / ${total}${progress.message ? `  ${progress.message}` : ""}`
-            : total > 0
-              ? `Fold ${current} / ${total}${progress.message ? `  ${progress.message}` : ""}`
-              : progress.message ?? "Processing..."}
-        </span>
-        <span>Elapsed: {formatTime(elapsedSec)}</span>
-      </div>
 
       {folds.length > 0 && (
         <div class="lzw-progress__folds">

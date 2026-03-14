@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -31,6 +32,7 @@ def _make_widget_with_adapter() -> tuple[Any, MagicMock]:
         adapter.prepare_run_config.side_effect = real_adapter.prepare_run_config
         adapter.get_backend_contract.side_effect = real_adapter.get_backend_contract
         adapter.canonicalize_config.side_effect = real_adapter.canonicalize_config
+        adapter.apply_task_defaults.side_effect = real_adapter.apply_task_defaults
 
         from lizyml_widget.widget import LizyWidget
 
@@ -307,6 +309,33 @@ class TestContractE2E:
         assert w.status == "failed"
 
 
+class TestLoadDefaults:
+    """Test that load() populates task-specific defaults in config."""
+
+    def test_load_populates_evaluation_metrics(self) -> None:
+        """evaluation.metrics should be populated with task defaults after load()."""
+        w, _adapter = _make_widget_with_adapter()
+        df = _sample_df()
+        w.load(df, target="y")
+
+        config = w.get_config()
+        metrics = config.get("evaluation", {}).get("metrics", [])
+        assert len(metrics) > 0, "evaluation.metrics should not be empty after load"
+        assert "auc" in metrics, "binary task should include 'auc' metric"
+
+    def test_load_populates_tune_search_space(self) -> None:
+        """tuning.optuna.space should be populated with defaults after load()."""
+        w, _adapter = _make_widget_with_adapter()
+        df = _sample_df()
+        w.load(df, target="y")
+
+        config = w.get_config()
+        tuning = config.get("tuning") or {}
+        optuna = tuning.get("optuna") or {}
+        space = optuna.get("space") or {}
+        assert len(space) > 0, "tune search space should not be empty after load"
+
+
 class TestCancelFlow:
     """Test job cancellation."""
 
@@ -338,3 +367,42 @@ class TestCancelFlow:
 
         if w._job_thread is not None:
             w._job_thread.join(timeout=5.0)
+
+    def test_cancel_during_tune(self) -> None:
+        w, adapter = _make_widget_with_adapter()
+
+        started = threading.Event()
+
+        # Simulate a long-running tune
+        def slow_tune(*args: Any, **kwargs: Any) -> TuningSummary:
+            started.set()
+            on_progress = kwargs.get("on_progress")
+            for i in range(20):
+                time.sleep(0.3)
+                if on_progress:
+                    on_progress(0, 0, f"Trial {i}...")
+            return TuningSummary(
+                best_params={},
+                best_score=0.0,
+                trials=[],
+                metric_name="auc",
+                direction="maximize",
+            )
+
+        mock_model = MagicMock()
+        adapter.create_model.return_value = mock_model
+        adapter.validate_config.return_value = []
+        adapter.tune.side_effect = slow_tune
+
+        w.load(_sample_df(), target="y")
+        w.action = {"type": "tune", "payload": {}}
+
+        # Wait for tune to actually start, then cancel
+        started.wait(timeout=5.0)
+        w.action = {"type": "cancel", "payload": {}}
+
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+
+        assert w.status == "failed"
+        assert w.error.get("code") == "CANCELLED"

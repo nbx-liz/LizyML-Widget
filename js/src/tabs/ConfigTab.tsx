@@ -66,7 +66,7 @@ function getSectionSchema(
   return resolveSchema(props[key], rootSchema);
 }
 
-type TypedParamKind = "objective" | "metric" | "integer" | "number" | "boolean";
+type TypedParamKind = "objective" | "model_metric" | "integer" | "number" | "boolean";
 interface TypedParamMeta { key: string; label: string; kind: TypedParamKind; step?: number; }
 
 function TypedParamsEditor({
@@ -114,8 +114,8 @@ function TypedParamsEditor({
           );
         }
 
-        if (kind === "metric") {
-          const opts = optionSets.metric?.[task] ?? [];
+        if (kind === "model_metric") {
+          const opts = optionSets.model_metric?.[task] ?? [];
           const selected: string[] = Array.isArray(current) ? current : [];
           return (
             <div key={key} class="lzw-form-row" style="align-items:flex-start">
@@ -384,7 +384,7 @@ export function ConfigTab({
 
   // Auto-set tune metric when task changes or metric is unset
   const task = dfInfo?.task ?? "";
-  const metricOpts = optionSets.metric?.[task] ?? [];
+  const metricOpts = optionSets.model_metric?.[task] ?? [];
   useEffect(() => {
     if (metricOpts.length === 0) return;
     const current = localConfig.tuning?.optuna?.params?.metric;
@@ -507,6 +507,10 @@ export function ConfigTab({
 
   // Calibration visibility from conditional_visibility
   const calibrationVisibleTasks: string[] = conditionalVisibility.calibration?.task ?? ["binary"];
+  const showCalibration = calibrationVisibleTasks.includes(task);
+  const calibrationSchema = showCalibration
+    ? getSectionSchema(configSchema, "calibration")
+    : null;
 
   return (
     <div class="lzw-config-tab">
@@ -564,9 +568,6 @@ export function ConfigTab({
 
             {/* Sections from backend contract */}
             {sections.map(({ key, title }) => {
-              // Calibration: conditional visibility from ui_schema
-              if (key === "calibration" && !calibrationVisibleTasks.includes(task)) return null;
-
               const sectionSchema = getSectionSchema(configSchema, key);
               if (!sectionSchema) return null;
 
@@ -588,10 +589,14 @@ export function ConfigTab({
                 );
               }
 
-              // Evaluation section: custom checkbox group for metrics
+              // Evaluation section: custom checkbox group for metrics + calibration
               if (key === "evaluation") {
-                const evalMetrics: string[] = (localConfig.evaluation as any)?.metrics ?? [];
+                const evalSection = (localConfig.evaluation as any) ?? {};
+                const evalMetrics: string[] = evalSection.metrics ?? [];
+                // evaluation.metrics use LizyML registry names (not LightGBM model_metric)
                 const evalMetricOpts = optionSets.metric?.[task] ?? [];
+                const evalParams = evalSection.params ?? {};
+                const hasPrecisionAtK = evalMetrics.includes("precision_at_k");
                 return (
                   <Accordion key="evaluation" title="Evaluation">
                     <div class="lzw-form-row" style="align-items:flex-start">
@@ -607,7 +612,7 @@ export function ConfigTab({
                                 ? evalMetrics.filter((v: string) => v !== opt)
                                 : [...evalMetrics, opt];
                               handleSectionChange("evaluation", {
-                                ...((localConfig.evaluation as any) ?? {}),
+                                ...evalSection,
                                 metrics: next,
                               });
                             }}
@@ -617,6 +622,57 @@ export function ConfigTab({
                         ))}
                       </div>
                     </div>
+                    {hasPrecisionAtK && (
+                      <div class="lzw-form-row">
+                        <label class="lzw-label">precision_at_k: k</label>
+                        <NumericStepper
+                          value={evalParams.precision_at_k_k ?? 10}
+                          min={1}
+                          max={100}
+                          step={1}
+                          onChange={(v) =>
+                            handleSectionChange("evaluation", {
+                              ...evalSection,
+                              params: { ...evalParams, precision_at_k_k: v ?? 10 },
+                            })
+                          }
+                        />
+                      </div>
+                    )}
+                  </Accordion>
+                );
+              }
+
+              // Calibration section: standalone Accordion (binary only)
+              // Toggle is inside the body (same layout as Early Stopping) for discoverability
+              if (key === "calibration") {
+                if (!showCalibration) return null;
+                return (
+                  <Accordion key="calibration" title="Calibration">
+                    <div class="lzw-form-row">
+                      <label class="lzw-label">Enable</label>
+                      <label class="lzw-toggle">
+                        <input
+                          type="checkbox"
+                          checked={calibrationEnabled}
+                          aria-label="Enable calibration"
+                          onChange={(e) =>
+                            handleCalibrationToggle(
+                              (e.target as HTMLInputElement).checked,
+                            )
+                          }
+                        />
+                        <span class="lzw-toggle__slider" />
+                      </label>
+                    </div>
+                    {calibrationEnabled && calibrationSchema && (
+                      <DynForm
+                        schema={calibrationSchema}
+                        rootSchema={configSchema}
+                        value={localConfig.calibration ?? {}}
+                        onChange={(v) => handleSectionChange("calibration", v)}
+                      />
+                    )}
                   </Accordion>
                 );
               }
@@ -727,38 +783,17 @@ export function ConfigTab({
                 );
               }
 
-              const calibrationToggle =
-                key === "calibration" ? (
-                  <label class="lzw-toggle">
-                    <input
-                      type="checkbox"
-                      checked={calibrationEnabled}
-                      onChange={(e) =>
-                        handleCalibrationToggle(
-                          (e.target as HTMLInputElement).checked,
-                        )
-                      }
-                    />
-                    <span class="lzw-toggle__slider" />
-                  </label>
-                ) : undefined;
-
               return (
                 <Accordion
                   key={key}
                   title={title}
-                  headerRight={calibrationToggle}
                 >
-                  {key === "calibration" && !calibrationEnabled ? (
-                    <p class="lzw-muted">Calibration is disabled.</p>
-                  ) : (
-                    <DynForm
-                      schema={sectionSchema}
-                      rootSchema={configSchema}
-                      value={localConfig[key] ?? {}}
-                      onChange={(v) => handleSectionChange(key, v)}
-                    />
-                  )}
+                  <DynForm
+                    schema={sectionSchema}
+                    rootSchema={configSchema}
+                    value={localConfig[key] ?? {}}
+                    onChange={(v) => handleSectionChange(key, v)}
+                  />
                 </Accordion>
               );
             })}
@@ -847,7 +882,7 @@ export function ConfigTab({
                 />
               </div>
               {(() => {
-                const tuneMetricOpts = optionSets.metric?.[task] ?? [];
+                const tuneMetricOpts = optionSets.model_metric?.[task] ?? [];
                 if (tuneMetricOpts.length === 0) return null;
                 const currentMetric = localConfig.tuning?.optuna?.params?.metric ?? tuneMetricOpts[0];
                 return (

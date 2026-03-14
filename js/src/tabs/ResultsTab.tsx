@@ -23,10 +23,18 @@ interface ResultsTabProps {
   onRequestPlot: (plotType: string) => void;
   sendAction: (type: string, payload?: Record<string, any>) => void;
   onSwitchToFit?: () => void;
+  /** Evaluation params for metric display annotations. */
+  evaluationParams?: Record<string, any>;
 }
 
 /** Format a plot type slug into a display label. */
 function plotLabel(slug: string): string {
+  // Feature importance variants: "feature-importance-split" → "Importance (Split)"
+  const importanceMatch = slug.match(/^feature-importance-(\w+)$/);
+  if (importanceMatch) {
+    const kind = importanceMatch[1].charAt(0).toUpperCase() + importanceMatch[1].slice(1);
+    return `Importance (${kind})`;
+  }
   return slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -46,6 +54,7 @@ export function ResultsTab({
   onRequestPlot,
   sendAction,
   onSwitchToFit,
+  evaluationParams,
 }: ResultsTabProps) {
   const [selectedPlot, setSelectedPlot] = useState<string | null>(null);
 
@@ -151,10 +160,24 @@ export function ResultsTab({
               {tuneSummary.metric_name}: {tuneSummary.best_score?.toFixed(4)}
             </span>
           </div>
-          <div class="lzw-form-row">
-            <span class="lzw-label">Trials</span>
-            <span>{tuneSummary.trials?.length ?? 0}</span>
-          </div>
+          {(() => {
+            const trials: any[] = tuneSummary.trials ?? [];
+            const stateOf = (t: any) => String(t.state ?? "").toUpperCase();
+            const complete = trials.filter((t: any) => stateOf(t) === "COMPLETE").length;
+            const pruned = trials.filter((t: any) => stateOf(t) === "PRUNED").length;
+            const failed = trials.filter((t: any) => stateOf(t) === "FAIL").length;
+            return (
+              <div class="lzw-form-row">
+                <span class="lzw-label">Trials</span>
+                <span>
+                  {trials.length} total
+                  {complete > 0 && ` / ${complete} complete`}
+                  {pruned > 0 && ` / ${pruned} pruned`}
+                  {failed > 0 && ` / ${failed} failed`}
+                </span>
+              </div>
+            );
+          })()}
         </Accordion>
       )}
 
@@ -162,7 +185,7 @@ export function ResultsTab({
       {hasFit && (
         <div style="margin-bottom: 12px;">
           <div style="font-weight: 600; margin-bottom: 8px;">Score</div>
-          <ScoreTable metrics={fitSummary.metrics} />
+          <ScoreTable metrics={fitSummary.metrics} evaluationParams={evaluationParams} />
         </div>
       )}
 
@@ -187,7 +210,7 @@ export function ResultsTab({
           </div>
           {activePlot && (
             <PlotViewer
-              availablePlots={[activePlot]}
+              plotType={activePlot}
               plots={plots}
               loading={plotLoading}
               onRequest={onRequestPlot}
@@ -302,7 +325,7 @@ function InferenceSection({
           <PredTable data={inferenceResult.data} />
           <Accordion title="Prediction Distribution" defaultOpen={false}>
             <PlotViewer
-              availablePlots={["prediction-distribution"]}
+              plotType="prediction-distribution"
               plots={plots}
               loading={plotLoading}
               onRequest={(pt) => sendAction("request_inference_plot", { plot_type: pt })}
@@ -311,7 +334,7 @@ function InferenceSection({
           {returnShap && (
             <Accordion title="SHAP Summary" defaultOpen={false}>
               <PlotViewer
-                availablePlots={["shap-summary"]}
+                plotType="shap-summary"
                 plots={plots}
                 loading={plotLoading}
                 onRequest={(pt) => sendAction("request_inference_plot", { plot_type: pt })}

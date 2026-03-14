@@ -158,6 +158,60 @@ class TestCVDefaults:
         assert info["auto_task"] == "binary"
         assert info["cv"]["strategy"] == "stratified_kfold"
 
+    def test_switch_target_preserves_previous_target_in_columns(self) -> None:
+        """Switching target should restore the previously excluded target column."""
+        df = pd.DataFrame(
+            {
+                "x": range(100),
+                "y": [0, 1] * 50,
+                "z": range(100),
+            }
+        )
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df)
+
+        # Set first target
+        info1 = svc.set_target("y")
+        cols1 = [c["name"] for c in info1["columns"]]
+        assert "y" not in cols1
+        assert "x" in cols1
+        assert "z" in cols1
+
+        # Switch to second target
+        info2 = svc.set_target("z")
+        cols2 = [c["name"] for c in info2["columns"]]
+        assert "z" not in cols2
+        assert "y" in cols2, "Previous target 'y' should be restored in columns"
+        assert "x" in cols2
+
+        # Re-select first target (must be possible)
+        info3 = svc.set_target("y")
+        cols3 = [c["name"] for c in info3["columns"]]
+        assert "y" not in cols3
+        assert "z" in cols3, "Previous target 'z' should be restored in columns"
+        assert "x" in cols3
+
+    def test_switch_target_preserves_column_settings(self) -> None:
+        """Manual column settings (excluded, col_type) should survive target switching."""
+        df = pd.DataFrame(
+            {
+                "x": range(100),
+                "y": [0, 1] * 50,
+                "z": range(100),
+            }
+        )
+        svc = WidgetService(adapter=_mock_adapter())
+        svc.load_data(df, target="y")
+
+        # Manually exclude column x
+        svc.update_column("x", excluded=True, col_type="numeric")
+        info_before = svc.set_target("z")
+        cols_before = {c["name"]: c for c in info_before["columns"]}
+        # x should be excluded AND y should be back
+        assert cols_before["x"]["excluded"] is True
+        assert "y" in cols_before
+        assert "z" not in cols_before  # new target
+
     def test_set_task_updates_strategy_to_stratified_for_classification(self) -> None:
         n = 100
         df = pd.DataFrame({"y": range(n), "x": [i % 10 for i in range(n)]})

@@ -68,3 +68,8 @@ mypy_path = "src"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[dependency-groups]
+dev = [
+    "vulture>=2.15",
+]
+

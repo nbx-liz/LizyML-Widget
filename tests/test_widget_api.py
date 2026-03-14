@@ -25,6 +25,7 @@ def _make_widget() -> Any:
         adapter.prepare_run_config.side_effect = real_adapter.prepare_run_config
         adapter.get_backend_contract.side_effect = real_adapter.get_backend_contract
         adapter.canonicalize_config.side_effect = real_adapter.canonicalize_config
+        adapter.apply_task_defaults.side_effect = real_adapter.apply_task_defaults
 
         from lizyml_widget.widget import LizyWidget
 
@@ -379,15 +380,17 @@ class TestTuneDefaults:
     """Regression tests for tuning default complement (P-004 R1)."""
 
     def test_tune_complements_missing_tuning_config(self) -> None:
-        """R1: tune() with no tuning config should auto-populate defaults."""
+        """R1: load() with target auto-populates tuning defaults; tune() uses them."""
         w = _make_widget()
         df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
-        # Config has no tuning section
-        assert w.config.get("tuning") is None or w.config.get("tuning") == {}
+        # Config should have tuning defaults populated after load()
+        tuning = w.config.get("tuning")
+        assert tuning is not None, "tuning should be populated after load with target"
+        space = (tuning.get("optuna") or {}).get("space", {})
+        assert len(space) > 0, "search space should be populated"
         # Trigger tune — should not fail with CONFIG_INVALID due to missing tuning
         w.action = {"type": "tune", "payload": {}}
-        # Status should be running (thread started) or completed, not failed due to missing tuning
         if w._job_thread is not None:
             w._job_thread.join(timeout=5.0)
         # Validation may still fail for other reasons (mock adapter returns []),

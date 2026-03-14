@@ -22,8 +22,8 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
         "sections": [
             {"key": "model", "title": "Model"},
             {"key": "training", "title": "Training"},
-            {"key": "evaluation", "title": "Evaluation"},
             {"key": "calibration", "title": "Calibration"},
+            {"key": "evaluation", "title": "Evaluation"},
         ],
         "option_sets": {
             "objective": {
@@ -32,10 +32,15 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "multiclass": ["multiclass", "softmax", "multiclassova"],
             },
             "metric": dict(all_metrics_by_task),
+            "model_metric": {
+                "regression": ["huber", "mae", "mape", "rmse", "r2", "rmsle"],
+                "binary": ["auc", "binary_logloss", "logloss", "auc_pr", "f1", "accuracy", "brier"],
+                "multiclass": ["multi_logloss", "auc_mu", "multi_error"],
+            },
         },
         "parameter_hints": [
             {"key": "objective", "label": "Objective", "kind": "objective"},
-            {"key": "metric", "label": "Metric", "kind": "metric"},
+            {"key": "metric", "label": "Metric", "kind": "model_metric"},
             {"key": "n_estimators", "label": "N Estimators", "kind": "integer", "step": 100},
             {"key": "learning_rate", "label": "Learning Rate", "kind": "number", "step": 0.001},
             {"key": "max_depth", "label": "Max Depth", "kind": "integer", "step": 1},

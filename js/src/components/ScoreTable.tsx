@@ -2,9 +2,11 @@
 
 interface ScoreTableProps {
   metrics: Record<string, any>;
+  /** Optional evaluation params for metric display (e.g. precision_at_k_k). */
+  evaluationParams?: Record<string, any>;
 }
 
-export function ScoreTable({ metrics }: ScoreTableProps) {
+export function ScoreTable({ metrics, evaluationParams }: ScoreTableProps) {
   if (!metrics || !Object.keys(metrics).length) {
     return <p class="lzw-muted">No metrics available.</p>;
   }
@@ -16,7 +18,7 @@ export function ScoreTable({ metrics }: ScoreTableProps) {
 
   return (
     <div class="lzw-table-wrap">
-      <table class="lzw-table">
+      <table class="lzw-table lzw-table--compact">
         <thead>
           <tr>
             <th>Metric</th>
@@ -30,9 +32,15 @@ export function ScoreTable({ metrics }: ScoreTableProps) {
             const isVal = metricData?.is;
             const oosVal = metricData?.oos;
             const oosStd = metricData?.oos_std;
+            // Annotate precision_at_k with k value
+            let displayName = metricName;
+            if (metricName === "precision_at_k") {
+              const k = evaluationParams?.precision_at_k_k ?? 10;
+              displayName = `precision_at_k (k=${k})`;
+            }
             return (
               <tr key={metricName}>
-                <td class="lzw-table__name">{metricName}</td>
+                <td class="lzw-table__name">{displayName}</td>
                 <td class="lzw-table__num">{formatValue(isVal)}</td>
                 <td class="lzw-table__num">{formatValue(oosVal)}</td>
                 {hasOosStd && (

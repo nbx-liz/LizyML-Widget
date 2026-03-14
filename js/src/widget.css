@@ -220,6 +220,10 @@
   font-size: 12px;
 }
 
+.lzw-table--compact {
+  width: auto;
+}
+
 /* ── Column Settings Grid ──────────────────────────────── */
 .lzw-columns-grid {
   display: grid;
@@ -307,6 +311,7 @@
 .lzw-table__num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .lzw-table__num--uniq {
@@ -315,11 +320,6 @@
 
 .lzw-table__cell--excl {
   text-align: center;
-}
-
-.lzw-table__type-select {
-  width: 100%;
-  min-width: 120px;
 }
 
 .lzw-row--excluded {
@@ -678,7 +678,7 @@
   border-top: 1px solid var(--jp-border-color2, #f0f0f0);
 }
 
-/* ── Calibration toggle ──────────────────────────────────── */
+/* ── Toggle ─────────────────────────────────────────────── */
 .lzw-toggle {
   position: relative;
   display: inline-block;

@@ -41,6 +41,15 @@ w.save_model("./model")
 w.save_config("config.yaml")
 ```
 
+## Tutorials
+
+| Notebook | Task | Dataset |
+|----------|------|---------|
+| [Quick Start](notebooks/tutorial.ipynb) | Binary (synthetic) | Synthetic data |
+| [Regression](notebooks/tutorial_regression.ipynb) | Regression | California Housing (sklearn) |
+| [Binary Classification](notebooks/tutorial_binary.ipynb) | Binary | Breast Cancer Wisconsin (sklearn) |
+| [Multiclass Classification](notebooks/tutorial_multiclass.ipynb) | Multiclass | Wine (sklearn) |
+
 ## Supported Environments
 
 - Jupyter Notebook
@@ -64,6 +73,19 @@ pnpm dev    # watch build
 pnpm build  # production build
 pnpm lint
 ```
+
+### Stable Notebook Launch
+
+If VS Code gets stuck reconnecting to an old kernel, prefer launching Jupyter with
+workspace-local runtime files instead of the default global runtime directory:
+
+```bash
+./scripts/jupyter-reset.sh
+./scripts/jupyter-lab.sh
+```
+
+This keeps runtime/config state under the repository and makes stale kernel/server
+state easier to clear than relying on `Reload Window` alone.
 
 ## License
 

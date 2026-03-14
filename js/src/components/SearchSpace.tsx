@@ -233,7 +233,7 @@ export function SearchSpace({ schema, rootSchema, value, onChange, modelConfig, 
               fakeSchema = {
                 title,
                 type: "array",
-                items: { enum: optionSets.metric?.[task ?? ""] ?? [] },
+                items: { enum: optionSets.model_metric?.[task ?? ""] ?? [] },
                 default: rawVal,
               };
               configFixed = rawVal; // keep as string[], not JSON.stringify

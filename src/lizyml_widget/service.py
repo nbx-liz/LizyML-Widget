@@ -94,11 +94,29 @@ class WidgetService:
 
         task = self._detect_task(col, n_rows, n_unique)
 
+        # Map existing column settings to detect manual overrides
+        existing_settings = {c["name"]: c for c in self._df_info["columns"]}
+
+        # Rebuild from original DataFrame columns to restore previously excluded targets
         updated_columns: list[dict[str, Any]] = []
-        for c in self._df_info["columns"]:
-            if c["name"] == target:
-                continue  # exclude target from feature columns
-            updated_columns.append(self._auto_configure_column(c, n_rows))
+        for col_name in df.columns:
+            if col_name == target:
+                continue  # exclude new target from feature columns
+            col_info = {
+                "name": str(col_name),
+                "dtype": str(df[col_name].dtype),
+                "unique_count": int(df[col_name].nunique()),
+            }
+            configured = self._auto_configure_column(col_info, n_rows)
+            # Preserve manual overrides from update_column()
+            prev = existing_settings.get(col_name)
+            if prev is not None:
+                if prev.get("excluded") != prev.get("suggested_excluded"):
+                    configured["excluded"] = prev["excluded"]
+                    configured["exclude_reason"] = prev.get("exclude_reason")
+                if prev.get("col_type") != prev.get("suggested_type"):
+                    configured["col_type"] = prev["col_type"]
+            updated_columns.append(configured)
 
         self._df_info.update(
             {

@@ -39,9 +39,17 @@ htmlcov/
 Untitled*.ipynb
 notebooks/verify_*.ipynb
 notebooks/*.png
+.ipython/
+.jupyter/
+.jupyter-runtime/
+.jupyter-logs/
+notebooks/outputs/
+scripts/jupyter-lab.sh
+scripts/jupyter-reset.sh
 
 # uv
 .python-version
+.uv-cache/
 
 # AI & Automation
 .abstra/

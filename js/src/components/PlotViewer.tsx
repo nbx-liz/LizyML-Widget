@@ -1,11 +1,11 @@
 /**
- * PlotViewer — plot selector + Plotly rendering.
+ * PlotViewer — renders a single Plotly chart.
  * Loads Plotly from CDN (or reuses window.Plotly if available).
  */
-import { useState, useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 
 interface PlotViewerProps {
-  availablePlots: string[];
+  plotType: string;
   plots: Record<string, any>;
   loading: Record<string, boolean>;
   onRequest: (plotType: string) => void;
@@ -22,29 +22,21 @@ async function getPlotly(): Promise<any> {
 }
 
 export function PlotViewer({
-  availablePlots,
+  plotType,
   plots,
   loading,
   onRequest,
 }: PlotViewerProps) {
-  const [selected, setSelected] = useState<string>("");
   const plotRef = useRef<HTMLDivElement>(null);
 
-  // Auto-select first plot
+  // Request plot data when plotType changes
   useEffect(() => {
-    if (!selected && availablePlots.length) {
-      setSelected(availablePlots[0]);
-    }
-  }, [availablePlots, selected]);
-
-  // Request plot when selected
-  useEffect(() => {
-    if (selected) onRequest(selected);
-  }, [selected, onRequest]);
+    if (plotType) onRequest(plotType);
+  }, [plotType, onRequest]);
 
   // Render with Plotly
   useEffect(() => {
-    const spec = plots[selected];
+    const spec = plots[plotType];
     const el = plotRef.current;
     if (!spec || !el) return;
 
@@ -60,31 +52,16 @@ export function PlotViewer({
     return () => {
       cancelled = true;
     };
-  }, [plots, selected]);
+  }, [plots, plotType]);
 
-  if (!availablePlots.length) {
-    return <p class="lzw-muted">No plots available.</p>;
+  if (!plotType) {
+    return <p class="lzw-muted">No plot selected.</p>;
   }
 
   return (
     <div class="lzw-plot-viewer">
-      <div class="lzw-form-row">
-        <label class="lzw-label">Plot</label>
-        <select
-          class="lzw-select"
-          value={selected}
-          onChange={(e) => setSelected((e.target as HTMLSelectElement).value)}
-        >
-          {availablePlots.map((p) => (
-            <option key={p} value={p}>
-              {p.replace(/-/g, " ")}
-            </option>
-          ))}
-        </select>
-      </div>
-
       <div class="lzw-plot-viewer__container">
-        {loading[selected] && (
+        {loading[plotType] && (
           <p class="lzw-muted">Loading plot...</p>
         )}
         <div ref={plotRef} class="lzw-plot-viewer__canvas" />
