@@ -760,15 +760,18 @@ export function ConfigTab({
                 trainingConfig={localConfig.training}
                 task={task}
                 uiSchema={uiSchema}
-                onSpaceChange={(space) => {
+                onChange={({ space, fixedModelParams: mp, fixedTraining: tr }) => {
                   const optuna = tuning.optuna ?? {};
                   handleChange({
                     ...localConfig,
-                    tuning: { ...tuning, optuna: { ...optuna, space } },
+                    tuning: {
+                      ...tuning,
+                      optuna: { ...optuna, space },
+                      model_params: mp,
+                      training: tr,
+                    },
                   });
                 }}
-                onFixedModelParamsChange={(mp) => handleTuningField("model_params", mp)}
-                onFixedTrainingChange={(tr) => handleTuningField("training", tr)}
               />
             </Accordion>
 

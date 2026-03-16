@@ -9,6 +9,13 @@
 import { useState } from "preact/hooks";
 import { NumericStepper } from "./NumericStepper";
 
+/** Atomic update payload — all three stores in one call to avoid stale-closure races. */
+export interface SearchSpaceUpdate {
+  space: Record<string, any>;
+  fixedModelParams: Record<string, any>;
+  fixedTraining: Record<string, any>;
+}
+
 interface SearchSpaceProps {
   schema: Record<string, any>;
   rootSchema?: Record<string, any>;
@@ -24,9 +31,8 @@ interface SearchSpaceProps {
   trainingConfig?: Record<string, any>;
   task?: string;
   uiSchema?: Record<string, any>;
-  onSpaceChange: (space: Record<string, any>) => void;
-  onFixedModelParamsChange: (params: Record<string, any>) => void;
-  onFixedTrainingChange: (training: Record<string, any>) => void;
+  /** Single atomic callback for all search space updates. */
+  onChange: (update: SearchSpaceUpdate) => void;
 }
 
 type Mode = "fixed" | "range" | "choice";
@@ -233,9 +239,7 @@ export function SearchSpace({
   trainingConfig,
   task,
   uiSchema,
-  onSpaceChange,
-  onFixedModelParamsChange,
-  onFixedTrainingChange,
+  onChange,
 }: SearchSpaceProps) {
   const [addedParams, setAddedParams] = useState<string[]>([]);
   const optionSets: Record<string, Record<string, string[]>> = uiSchema?.option_sets ?? {};
@@ -279,41 +283,44 @@ export function SearchSpace({
     return getFixedValue(entry);
   };
 
-  /** Update handler: routes to appropriate storage. */
+  /** Update handler: builds a single atomic update to avoid stale-closure races. */
   const handleUpdate = (entry: CatalogEntry, config: ParamConfig) => {
-    if (config.mode === "fixed") {
-      // Remove from space, store in fixed storage (immutable destructuring)
-      const { [entry.key]: _removed, ...newSpace } = spaceValue;
-      onSpaceChange(newSpace);
+    let newSpace = spaceValue;
+    let newFixedMP = fixedModelParams;
+    let newFixedTr = fixedTraining;
 
+    if (config.mode === "fixed") {
+      // Remove from space
+      const { [entry.key]: _removed, ...rest } = spaceValue;
+      newSpace = rest;
+
+      // Store in appropriate fixed storage
       if (entry.group === "training") {
         const parts = entry.key.split(".");
         if (parts.length === 1) {
-          onFixedTrainingChange({ ...fixedTraining, [entry.key]: config.fixed });
+          newFixedTr = { ...fixedTraining, [entry.key]: config.fixed };
         } else if (parts.length === 2) {
-          // Immutable 2-level: early_stopping.rounds → { early_stopping: { ..., rounds: val } }
           const [parent, child] = parts;
-          onFixedTrainingChange({
+          newFixedTr = {
             ...fixedTraining,
             [parent]: { ...(fixedTraining[parent] ?? {}), [child]: config.fixed },
-          });
-        } else {
-          // Unsupported dot-path depth > 2 — silently skip
+          };
         }
       } else {
-        onFixedModelParamsChange({ ...fixedModelParams, [entry.key]: config.fixed });
+        newFixedMP = { ...fixedModelParams, [entry.key]: config.fixed };
       }
     } else {
       // Range or Choice → store in space
-      const newSpace = { ...spaceValue };
+      newSpace = { ...spaceValue };
       if (config.mode === "range") {
         const spaceType = entry.paramType === "integer" ? "int" : "float";
         newSpace[entry.key] = { type: spaceType, low: config.low, high: config.high, log: config.log ?? false };
       } else {
         newSpace[entry.key] = { type: "categorical", choices: config.choices ?? [] };
       }
-      onSpaceChange(newSpace);
     }
+
+    onChange({ space: newSpace, fixedModelParams: newFixedMP, fixedTraining: newFixedTr });
   };
 
   /** Build ParamConfig for a catalog entry. */
@@ -403,11 +410,10 @@ export function SearchSpace({
                   style="margin-left: 4px; font-size: 10px; padding: 0 4px;"
                   onClick={() => {
                     setAddedParams(addedParams.filter((k) => k !== paramKey));
-                    // Remove from space and fixedModelParams (immutable)
+                    // Remove from space and fixedModelParams atomically
                     const { [paramKey]: _s, ...newSpace } = spaceValue;
-                    onSpaceChange(newSpace);
                     const { [paramKey]: _, ...restFixed } = fixedModelParams;
-                    onFixedModelParamsChange(restFixed);
+                    onChange({ space: newSpace, fixedModelParams: restFixed, fixedTraining });
                   }}
                 >
                   ×
@@ -485,8 +491,8 @@ export function SearchSpace({
                     const v = (e.target as HTMLSelectElement).value;
                     if (v) {
                       setAddedParams([...addedParams, v]);
-                      // Initialize with Fixed mode, value 0
-                      onFixedModelParamsChange({ ...fixedModelParams, [v]: 0 });
+                      // Initialize with Fixed mode, value 0 — atomic update
+                      onChange({ space: spaceValue, fixedModelParams: { ...fixedModelParams, [v]: 0 }, fixedTraining });
                     }
                   }}
                 >

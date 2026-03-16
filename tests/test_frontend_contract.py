@@ -267,6 +267,34 @@ class TestSearchSpaceAuditFixes:
         )
 
 
+class TestSearchSpaceAtomicUpdate:
+    """SearchSpace must use a single atomic onChange callback, not separate callbacks."""
+
+    def test_no_separate_callbacks(self) -> None:
+        """SearchSpace must NOT have onSpaceChange/onFixedModelParamsChange/onFixedTrainingChange."""
+        content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
+        for old_cb in ("onSpaceChange", "onFixedModelParamsChange", "onFixedTrainingChange"):
+            assert old_cb not in content, (
+                f"SearchSpace must use single atomic onChange, not {old_cb}"
+            )
+
+    def test_has_atomic_on_change(self) -> None:
+        """SearchSpace must expose SearchSpaceUpdate type and single onChange prop."""
+        content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
+        assert "SearchSpaceUpdate" in content, "SearchSpace must export SearchSpaceUpdate type"
+        assert "onChange: (update: SearchSpaceUpdate)" in content, (
+            "SearchSpace must accept onChange with SearchSpaceUpdate parameter"
+        )
+
+    def test_config_tab_uses_atomic_callback(self) -> None:
+        """ConfigTab must call SearchSpace with single onChange, not separate callbacks."""
+        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        assert "onFixedModelParamsChange" not in content, (
+            "ConfigTab must not pass onFixedModelParamsChange to SearchSpace"
+        )
+        assert "onChange={" in content, "ConfigTab must pass onChange to SearchSpace"
+
+
 class TestTuneCapabilitiesContract:
     """Phase 26: Tune button reads allow_empty_space from backend_contract.capabilities."""
 
