@@ -134,6 +134,22 @@ _eval_metrics_cache: dict[str, list[str]] | None = None
 _eval_metrics_lock: threading.Lock = threading.Lock()
 
 
+_PREFERRED_METRIC: dict[str, str] = {
+    "binary": "auc",
+    "regression": "rmse",
+    "multiclass": "auc",
+}
+
+
+def _sort_with_preferred(metrics: list[str], task: str) -> list[str]:
+    """Sort metrics alphabetically but place the preferred metric first."""
+    preferred = _PREFERRED_METRIC.get(task)
+    ordered = sorted(metrics)
+    if preferred and preferred in ordered:
+        ordered = [preferred, *(m for m in ordered if m != preferred)]
+    return ordered
+
+
 def get_eval_metrics_by_task() -> dict[str, list[str]]:
     """Query LizyML's metric registry for available evaluation metrics per task."""
     global _eval_metrics_cache  # noqa: PLW0603
@@ -148,12 +164,16 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
         try:
             from lizyml.metrics.registry import _TASK_METRICS
 
-            metrics = {task: sorted(ms) for task, ms in _TASK_METRICS.items()}
+            metrics = {
+                task: _sort_with_preferred(list(ms), task) for task, ms in _TASK_METRICS.items()
+            }
         except (ImportError, AttributeError, TypeError):
             # Fallback for older LizyML versions without _TASK_METRICS
             metrics = {
-                "regression": sorted(["mae", "mape", "rmse", "huber", "r2", "rmsle"]),
-                "binary": sorted(
+                "regression": _sort_with_preferred(
+                    ["mae", "mape", "rmse", "huber", "r2", "rmsle"], "regression"
+                ),
+                "binary": _sort_with_preferred(
                     [
                         "auc",
                         "logloss",
@@ -163,9 +183,12 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
                         "brier",
                         "ece",
                         "precision_at_k",
-                    ]
+                    ],
+                    "binary",
                 ),
-                "multiclass": sorted(["auc", "logloss", "auc_pr", "f1", "accuracy", "brier"]),
+                "multiclass": _sort_with_preferred(
+                    ["auc", "logloss", "auc_pr", "f1", "accuracy", "brier"], "multiclass"
+                ),
             }
         _eval_metrics_cache = metrics
         return metrics

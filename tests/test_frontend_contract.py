@@ -84,7 +84,8 @@ class TestSearchSpaceContract:
         """handleUpdate should set type, not mode, in the stored object."""
         content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
         handle_idx = content.index("handleUpdate")
-        handle_block = content[handle_idx : handle_idx + 600]
+        # P-014: function is larger with group routing; search 1500 chars
+        handle_block = content[handle_idx : handle_idx + 1500]
         # The block should reference "type:" for stored values, not "mode:"
         assert "type:" in handle_block or "type: spaceType" in handle_block
 
@@ -137,12 +138,13 @@ class TestChipButtonContract:
 
 
 class TestInnerValidDefaultContract:
-    """Phase 23: inner_valid should display 'Default' not 'auto'."""
+    """inner_valid should default to holdout, not show 'Default' or 'auto'."""
 
-    def test_inner_valid_shows_default(self) -> None:
+    def test_inner_valid_defaults_to_holdout(self) -> None:
         content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
-        assert ">Default<" in content, "inner_valid should show 'Default' label"
+        assert ">Default<" not in content, "inner_valid should not show 'Default' label"
         assert ">auto<" not in content, "inner_valid should not show 'auto'"
+        assert '"holdout"' in content, "inner_valid should default to holdout"
 
 
 class TestStepperWidthContract:
@@ -222,6 +224,46 @@ class TestInnerValidCanonicalContract:
         content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
         assert "fold_" not in content, (
             "ConfigTab should not generate fold_N options for inner_valid"
+        )
+
+
+class TestSearchSpaceAuditFixes:
+    """Audit fixes: feature_weights toggle, [+ Add] button, conditional visibility."""
+
+    def test_feature_weights_uses_toggle(self) -> None:
+        """feature_weights must render lzw-toggle, not text input."""
+        content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
+        assert "lzw-toggle" in content, "SearchSpace must use lzw-toggle for feature_weights"
+
+    def test_add_button_exists(self) -> None:
+        """SearchSpace must have a [+ Add] select for additional params."""
+        content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
+        assert "additional_params" in content or "additionalParamsList" in content, (
+            "SearchSpace must reference additional_params"
+        )
+        assert "+ Add" in content, "SearchSpace must contain '+ Add' label"
+
+    def test_conditional_visibility_referenced(self) -> None:
+        """SearchSpace must use conditional_visibility for num_leaves etc."""
+        content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
+        assert "conditional_visibility" in content or "conditionalVisibility" in content, (
+            "SearchSpace must use conditional_visibility"
+        )
+        assert "isParamVisible" in content, "SearchSpace must have isParamVisible helper"
+
+    def test_group_wrapper_uses_display_contents(self) -> None:
+        """Group wrappers must use display:contents CSS class for proper grid layout."""
+        content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
+        assert "lzw-search-space-grid__group-wrap" in content
+        css = (JS_SRC / "widget.css").read_text()
+        assert "lzw-search-space-grid__group-wrap" in css
+        assert "display: contents" in css
+
+    def test_catalog_entry_default_field_used(self) -> None:
+        """SearchSpace CatalogEntry interface must include default field."""
+        content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
+        assert "default?" in content or "default?:" in content, (
+            "CatalogEntry must have optional default field"
         )
 
 

@@ -8,6 +8,75 @@ from __future__ import annotations
 
 from typing import Any
 
+# Keys already covered by parameter_hints or search_space_catalog
+_KNOWN_PARAM_KEYS: frozenset[str] = frozenset(
+    {
+        "objective",
+        "metric",
+        "n_estimators",
+        "learning_rate",
+        "max_depth",
+        "max_bin",
+        "feature_fraction",
+        "bagging_fraction",
+        "bagging_freq",
+        "lambda_l1",
+        "lambda_l2",
+        "first_metric_only",
+        "verbose",
+        "num_threads",
+        "num_leaves",
+        # Smart params (in search_space_catalog)
+        "auto_num_leaves",
+        "num_leaves_ratio",
+        "min_data_in_leaf_ratio",
+        "min_data_in_bin_ratio",
+        "feature_weights",
+        "balanced",
+    }
+)
+
+# LightGBM parameters available as additional params (beyond hints/catalog).
+# Subset of commonly used LightGBM parameters.
+_LGBM_ADDITIONAL_PARAMS: list[str] = sorted(
+    [
+        "min_child_weight",
+        "min_child_samples",
+        "subsample",
+        "colsample_bytree",
+        "reg_alpha",
+        "reg_lambda",
+        "max_cat_threshold",
+        "cat_smooth",
+        "cat_l2",
+        "extra_trees",
+        "path_smooth",
+        "min_gain_to_split",
+        "min_data_in_leaf",
+        "min_data_in_bin",
+        "max_cat_to_onehot",
+        "top_k",
+        "min_sum_hessian_in_leaf",
+        "linear_tree",
+        "feature_pre_filter",
+        "force_col_wise",
+        "force_row_wise",
+        "histogram_pool_size",
+        "is_unbalance",
+        "scale_pos_weight",
+        "sigmoid",
+        "boost_from_average",
+        "bin_construct_sample_cnt",
+        "data_sample_strategy",
+        "interaction_constraints",
+    ]
+)
+
+
+def _build_additional_params() -> list[str]:
+    """Return LightGBM params not in parameter_hints or search_space_catalog."""
+    return [p for p in _LGBM_ADDITIONAL_PARAMS if p not in _KNOWN_PARAM_KEYS]
+
 
 def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]:
     """Build the full UI schema for the backend contract.
@@ -67,79 +136,199 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
             },
         ],
         "search_space_catalog": [
+            # ── Model Params group ──
             {
                 "key": "objective",
                 "title": "Objective",
                 "paramType": "string",
                 "modes": ["fixed", "choice"],
+                "group": "model_params",
             },
             {
                 "key": "metric",
                 "title": "Metric",
                 "paramType": "string",
                 "modes": ["fixed", "choice"],
+                "group": "model_params",
             },
             {
                 "key": "n_estimators",
                 "title": "N Estimators",
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
+                "group": "model_params",
             },
             {
                 "key": "learning_rate",
                 "title": "Learning Rate",
                 "paramType": "number",
                 "modes": ["fixed", "range"],
+                "group": "model_params",
             },
             {
                 "key": "max_depth",
                 "title": "Max Depth",
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
+                "group": "model_params",
             },
             {
                 "key": "max_bin",
                 "title": "Max Bin",
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
+                "group": "model_params",
             },
             {
                 "key": "feature_fraction",
                 "title": "Feature Fraction",
                 "paramType": "number",
                 "modes": ["fixed", "range"],
+                "group": "model_params",
             },
             {
                 "key": "bagging_fraction",
                 "title": "Bagging Fraction",
                 "paramType": "number",
                 "modes": ["fixed", "range"],
+                "group": "model_params",
             },
             {
                 "key": "bagging_freq",
                 "title": "Bagging Freq",
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
+                "group": "model_params",
             },
             {
                 "key": "lambda_l1",
                 "title": "Lambda L1",
                 "paramType": "number",
                 "modes": ["fixed", "range"],
+                "group": "model_params",
             },
             {
                 "key": "lambda_l2",
                 "title": "Lambda L2",
                 "paramType": "number",
                 "modes": ["fixed", "range"],
+                "group": "model_params",
             },
             {
                 "key": "first_metric_only",
                 "title": "First Metric Only",
                 "paramType": "boolean",
                 "modes": ["fixed", "choice"],
+                "group": "model_params",
+            },
+            {
+                "key": "verbose",
+                "title": "Log Output",
+                "paramType": "integer",
+                "modes": ["fixed", "range"],
+                "group": "model_params",
+                "default": -1,
+            },
+            # ── Smart Params group (Fit-only in resolve_smart_params) ──
+            {
+                "key": "auto_num_leaves",
+                "title": "Auto Num Leaves",
+                "paramType": "boolean",
+                "modes": ["fixed", "choice"],
+                "group": "smart_params",
+                "default": True,
+            },
+            {
+                "key": "num_leaves_ratio",
+                "title": "Num Leaves Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "smart_params",
+                "default": 1.0,
+            },
+            {
+                "key": "num_leaves",
+                "title": "Num Leaves",
+                "paramType": "integer",
+                "modes": ["fixed", "range", "choice"],
+                "group": "smart_params",
+                "default": 256,
+            },
+            {
+                "key": "min_data_in_leaf_ratio",
+                "title": "Min Data In Leaf Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "smart_params",
+                "default": 0.01,
+            },
+            {
+                "key": "min_data_in_bin_ratio",
+                "title": "Min Data In Bin Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "smart_params",
+                "default": 0.01,
+            },
+            {
+                "key": "feature_weights",
+                "title": "Feature Weights",
+                "paramType": "object",
+                "modes": ["fixed"],
+                "group": "smart_params",
+                "default": None,
+            },
+            {
+                "key": "balanced",
+                "title": "Balanced",
+                "paramType": "boolean",
+                "modes": ["fixed", "choice"],
+                "group": "smart_params",
+                "default": False,
+            },
+            # ── Training group ──
+            {
+                "key": "seed",
+                "title": "Seed",
+                "paramType": "integer",
+                "modes": ["fixed"],
+                "group": "training",
+                "default": 42,
+            },
+            {
+                "key": "early_stopping.enabled",
+                "title": "Early Stopping",
+                "paramType": "boolean",
+                "modes": ["fixed"],
+                "group": "training",
+                "default": True,
+            },
+            {
+                "key": "early_stopping.rounds",
+                "title": "Early Stopping Rounds",
+                "paramType": "integer",
+                "modes": ["fixed", "range"],
+                "group": "training",
+                "default": 150,
+            },
+            {
+                "key": "validation_ratio",
+                "title": "Validation Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "training",
+                "default": 0.1,
+            },
+            {
+                "key": "inner_valid",
+                "title": "Inner Validation",
+                "paramType": "string",
+                "modes": ["fixed"],
+                "group": "training",
+                "default": "holdout",
             },
         ],
+        "additional_params": _build_additional_params(),
         "step_map": {
             "n_estimators": 100,
             "learning_rate": 0.001,
@@ -152,11 +341,19 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
             "lambda_l2": 0.0001,
             "num_leaves_ratio": 0.05,
             "num_leaves": 1,
+            "min_data_in_leaf_ratio": 0.01,
+            "min_data_in_bin_ratio": 0.01,
+            "early_stopping.rounds": 50,
+            "validation_ratio": 0.05,
+            "seed": 1,
         },
         "conditional_visibility": {
             "calibration": {"task": ["binary"]},
             "num_leaves_ratio": {"auto_num_leaves": True},
             "num_leaves": {"auto_num_leaves": False},
+            "early_stopping.rounds": {"early_stopping.enabled": True},
+            "validation_ratio": {"early_stopping.enabled": True},
+            "inner_valid": {"early_stopping.enabled": True},
         },
         "defaults": {
             "calibration": {"method": "platt", "n_splits": 5, "params": {}},

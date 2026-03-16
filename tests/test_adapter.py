@@ -2252,3 +2252,508 @@ def _capture_log(logger: logging.Logger, level: int = logging.WARNING):
     finally:
         logger.removeHandler(handler)
         logger.setLevel(old_level)
+
+
+# ── P-014: Backend Contract extension ─────────────────────
+
+
+class TestP014SearchSpaceCatalogGroups:
+    """P-014: search_space_catalog must have group attributes and Training rows."""
+
+    def test_catalog_entries_have_group(self) -> None:
+        """All search_space_catalog entries must have a 'group' attribute."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            for entry in catalog:
+                assert "group" in entry, f"Entry {entry['key']} missing 'group'"
+
+    def test_catalog_has_model_params_group(self) -> None:
+        """Existing catalog entries must belong to 'model_params' group."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            model_entries = [e for e in catalog if e["group"] == "model_params"]
+            model_keys = {e["key"] for e in model_entries}
+            assert "objective" in model_keys
+            assert "n_estimators" in model_keys
+            assert "learning_rate" in model_keys
+
+    def test_catalog_has_smart_params_group(self) -> None:
+        """Search space catalog must include Smart Params group entries."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            smart_entries = [e for e in catalog if e["group"] == "smart_params"]
+            smart_keys = {e["key"] for e in smart_entries}
+            assert "auto_num_leaves" in smart_keys
+            assert "num_leaves_ratio" in smart_keys
+            assert "min_data_in_leaf_ratio" in smart_keys
+            assert "min_data_in_bin_ratio" in smart_keys
+            assert "balanced" in smart_keys
+
+    def test_feature_weights_is_fixed_only(self) -> None:
+        """feature_weights in smart_params group must be Fixed-only."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            fw = next((e for e in catalog if e["key"] == "feature_weights"), None)
+            assert fw is not None, "feature_weights missing from catalog"
+            assert fw["group"] == "smart_params"
+            assert fw["modes"] == ["fixed"]
+
+    def test_catalog_has_training_group(self) -> None:
+        """Search space catalog must include Training group entries."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            training_entries = [e for e in catalog if e["group"] == "training"]
+            training_keys = {e["key"] for e in training_entries}
+            expected = {
+                "seed",
+                "early_stopping.enabled",
+                "early_stopping.rounds",
+                "validation_ratio",
+                "inner_valid",
+            }
+            assert expected.issubset(training_keys), (
+                f"Missing training keys: {expected - training_keys}"
+            )
+
+    def test_training_fixed_only_constraints(self) -> None:
+        """seed, early_stopping.enabled, inner_valid must be Fixed-only."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            catalog_map = {e["key"]: e for e in catalog}
+            for key in ("seed", "early_stopping.enabled", "inner_valid"):
+                assert catalog_map[key]["modes"] == ["fixed"], (
+                    f"{key} must be Fixed-only, got {catalog_map[key]['modes']}"
+                )
+
+    def test_training_range_constraints(self) -> None:
+        """early_stopping.rounds and validation_ratio support Fixed/Range."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            catalog_map = {e["key"]: e for e in catalog}
+            for key in ("early_stopping.rounds", "validation_ratio"):
+                assert catalog_map[key]["modes"] == ["fixed", "range"], (
+                    f"{key} must support Fixed/Range, got {catalog_map[key]['modes']}"
+                )
+
+
+class TestP014AdditionalParams:
+    """P-014: ui_schema must include additional_params list."""
+
+    def test_additional_params_exists(self) -> None:
+        """Backend contract must include additional_params in ui_schema."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            assert "additional_params" in contract.ui_schema
+
+    def test_additional_params_excludes_hints_and_catalog(self) -> None:
+        """additional_params must not contain keys already in parameter_hints or catalog."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            hint_keys = {h["key"] for h in contract.ui_schema["parameter_hints"]}
+            catalog_keys = {e["key"] for e in contract.ui_schema["search_space_catalog"]}
+            additional = set(contract.ui_schema["additional_params"])
+            assert additional.isdisjoint(hint_keys), (
+                f"additional_params overlaps with parameter_hints: {additional & hint_keys}"
+            )
+            assert additional.isdisjoint(catalog_keys), (
+                f"additional_params overlaps with search_space_catalog: {additional & catalog_keys}"
+            )
+
+    def test_additional_params_is_nonempty(self) -> None:
+        """LightGBM has many params beyond hints; additional_params should not be empty."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            assert len(contract.ui_schema["additional_params"]) > 0
+
+
+class TestP014StripWidgetOnlyTuningFields:
+    """P-014: strip_for_backend must remove tuning.model_params/training/evaluation."""
+
+    def test_strips_tuning_model_params(self) -> None:
+        config = {
+            "tuning": {
+                "optuna": {"params": {"n_trials": 50}, "space": {}},
+                "model_params": {"n_estimators": 1000},
+            }
+        }
+        result = adapter_schema.strip_for_backend(config)
+        tuning = result.get("tuning", {})
+        assert "model_params" not in tuning
+
+    def test_strips_tuning_training(self) -> None:
+        config = {
+            "tuning": {
+                "optuna": {"params": {"n_trials": 50}, "space": {}},
+                "training": {"seed": 42},
+            }
+        }
+        result = adapter_schema.strip_for_backend(config)
+        tuning = result.get("tuning", {})
+        assert "training" not in tuning
+
+    def test_strips_tuning_evaluation(self) -> None:
+        config = {
+            "tuning": {
+                "optuna": {"params": {"n_trials": 50}, "space": {}},
+                "evaluation": {"metrics": ["auc"]},
+            }
+        }
+        result = adapter_schema.strip_for_backend(config)
+        tuning = result.get("tuning", {})
+        assert "evaluation" not in tuning
+
+    def test_preserves_optuna_section(self) -> None:
+        config = {
+            "tuning": {
+                "optuna": {"params": {"n_trials": 50}, "space": {}},
+                "model_params": {"n_estimators": 1000},
+                "training": {"seed": 42},
+                "evaluation": {"metrics": ["auc"]},
+            }
+        }
+        result = adapter_schema.strip_for_backend(config)
+        tuning = result.get("tuning", {})
+        assert "optuna" in tuning
+        assert tuning["optuna"]["params"]["n_trials"] == 50
+
+
+class TestP014PrepareRunConfigTuneNewFields:
+    """P-014: prepare_run_config(tune) uses tuning.model_params/training/evaluation."""
+
+    @staticmethod
+    def _base_config(adapter: LizyMLAdapter) -> dict[str, Any]:
+        config = adapter.initialize_config(task="binary")
+        config["task"] = "binary"
+        config["data"] = {"target": "y"}
+        config["features"] = {"exclude": [], "categorical": []}
+        config["split"] = {"method": "kfold", "n_splits": 5}
+        return config
+
+    def test_tuning_model_params_replaces_model_params(self) -> None:
+        """tuning.model_params should replace model.params in tune config."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["model"]["params"]["n_estimators"] = 1500  # Fit value
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+            "model_params": {"n_estimators": 800, "learning_rate": 0.01},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        # Tune's model_params should override Fit's
+        assert result["model"]["params"]["n_estimators"] == 800
+        assert result["model"]["params"]["learning_rate"] == 0.01
+
+    def test_tuning_model_params_preserves_unrelated_keys(self) -> None:
+        """tuning.model_params merges over model.params, preserving unrelated keys."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["model"]["params"]["n_estimators"] = 1500
+        config["model"]["params"]["verbose"] = -1
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+            "model_params": {"n_estimators": 800},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        assert result["model"]["params"]["n_estimators"] == 800
+        assert result["model"]["params"]["verbose"] == -1  # preserved
+
+    def test_tuning_training_replaces_training(self) -> None:
+        """tuning.training should replace training section in tune config."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["training"] = {"seed": 42, "early_stopping": {"enabled": True, "rounds": 150}}
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+            "training": {"seed": 99, "early_stopping": {"enabled": True, "rounds": 50}},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        assert result["training"]["seed"] == 99
+        assert result["training"]["early_stopping"]["rounds"] == 50
+
+    def test_tuning_evaluation_replaces_evaluation(self) -> None:
+        """tuning.evaluation should replace evaluation section in tune config."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["evaluation"] = {"metrics": ["auc", "logloss", "f1"]}
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+            "evaluation": {"metrics": ["f1", "accuracy"]},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        eval_metrics = result["evaluation"]["metrics"]
+        assert eval_metrics[0] == "f1"
+        assert "accuracy" in eval_metrics
+
+    def test_direction_from_tuning_evaluation_first_metric_maximize(self) -> None:
+        """Direction should be 'maximize' from tuning.evaluation.metrics[0]=auc."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+            "evaluation": {"metrics": ["auc", "logloss"]},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        direction = result["tuning"]["optuna"]["params"].get("direction")
+        assert direction == "maximize"
+
+    def test_direction_from_tuning_evaluation_first_metric_minimize(self) -> None:
+        """Direction should be 'minimize' from tuning.evaluation.metrics[0]=logloss."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+            "evaluation": {"metrics": ["logloss", "auc"]},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        direction = result["tuning"]["optuna"]["params"].get("direction")
+        assert direction == "minimize"
+
+    def test_fallback_to_fit_when_tuning_fields_absent(self) -> None:
+        """When tuning.model_params/training/evaluation are absent, use Fit values."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["model"]["params"]["n_estimators"] = 2000
+        config["training"] = {"seed": 42}
+        config["evaluation"] = {"metrics": ["auc", "logloss"]}
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        # Fit values should be preserved (fallback)
+        assert result["model"]["params"]["n_estimators"] == 2000
+        assert result["training"]["seed"] == 42
+
+    def test_smart_params_removed_for_tune(self) -> None:
+        """Smart params (auto_num_leaves etc.) and calibration must be removed for tune."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["model"]["auto_num_leaves"] = True
+        config["model"]["num_leaves_ratio"] = 0.8
+        config["model"]["min_data_in_leaf_ratio"] = 0.01
+        config["model"]["balanced"] = True
+        config["calibration"] = {"method": "platt", "n_splits": 5, "params": {}}
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+            "model_params": {"n_estimators": 800},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        # Smart params should not be in the output model section
+        assert "auto_num_leaves" not in result.get("model", {})
+        assert "num_leaves_ratio" not in result.get("model", {})
+        assert "min_data_in_leaf_ratio" not in result.get("model", {})
+        assert "balanced" not in result.get("model", {})
+        assert "calibration" not in result
+
+    def test_fit_job_not_affected(self) -> None:
+        """Fit job should not be affected by tuning.model_params etc."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["model"]["params"]["n_estimators"] = 1500
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+            "model_params": {"n_estimators": 800},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="fit", task="binary")
+
+        # Fit should use original model.params, not tuning.model_params
+        assert result["model"]["params"]["n_estimators"] == 1500
+
+    def test_widget_only_tuning_fields_stripped_from_output(self) -> None:
+        """tuning.model_params/training/evaluation must be stripped from final output."""
+        adapter = LizyMLAdapter()
+        config = self._base_config(adapter)
+        config["tuning"] = {
+            "optuna": {"params": {"n_trials": 10}, "space": {}},
+            "model_params": {"n_estimators": 800},
+            "training": {"seed": 99},
+            "evaluation": {"metrics": ["auc"]},
+        }
+
+        result = adapter.prepare_run_config(config, job_type="tune", task="binary")
+
+        tuning = result.get("tuning", {})
+        assert "model_params" not in tuning
+        assert "training" not in tuning
+        assert "evaluation" not in tuning
+
+
+class TestAuditCatalogVerboseAndNumLeaves:
+    """Audit Issue 7: verbose and num_leaves must be in search_space_catalog."""
+
+    def test_catalog_contains_verbose(self) -> None:
+        """verbose must appear in search_space_catalog under model_params group."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            verbose_entry = next((e for e in catalog if e["key"] == "verbose"), None)
+            assert verbose_entry is not None, "verbose missing from catalog"
+            assert verbose_entry["group"] == "model_params"
+            assert verbose_entry["paramType"] == "integer"
+            assert "fixed" in verbose_entry["modes"]
+            assert "range" in verbose_entry["modes"]
+
+    def test_catalog_contains_num_leaves(self) -> None:
+        """num_leaves must appear in search_space_catalog under smart_params group."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            entry = next((e for e in catalog if e["key"] == "num_leaves"), None)
+            assert entry is not None, "num_leaves missing from catalog"
+            assert entry["group"] == "smart_params"
+            assert entry["paramType"] == "integer"
+            assert entry["modes"] == ["fixed", "range", "choice"]
+
+
+class TestAuditCatalogDefaults:
+    """Audit Issue 5: catalog entries must have default values for Fixed initial display."""
+
+    def test_smart_params_have_defaults(self) -> None:
+        """Smart param entries must have 'default' field."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            expected_defaults = {
+                "auto_num_leaves": True,
+                "num_leaves_ratio": 1.0,
+                "min_data_in_leaf_ratio": 0.01,
+                "min_data_in_bin_ratio": 0.01,
+                "balanced": False,
+            }
+            for key, expected in expected_defaults.items():
+                entry = next((e for e in catalog if e["key"] == key), None)
+                assert entry is not None, f"{key} missing from catalog"
+                assert "default" in entry, f"{key} missing 'default' field"
+                assert entry["default"] == expected, (
+                    f"{key}: expected default={expected}, got {entry.get('default')}"
+                )
+
+    def test_training_params_have_defaults(self) -> None:
+        """Training param entries must have 'default' field."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            expected_defaults = {
+                "seed": 42,
+                "early_stopping.enabled": True,
+                "early_stopping.rounds": 150,
+                "validation_ratio": 0.1,
+            }
+            for key, expected in expected_defaults.items():
+                entry = next((e for e in catalog if e["key"] == key), None)
+                assert entry is not None, f"{key} missing from catalog"
+                assert "default" in entry, f"{key} missing 'default' field"
+                assert entry["default"] == expected, (
+                    f"{key}: expected default={expected}, got {entry.get('default')}"
+                )
+
+
+class TestAuditMetricOrdering:
+    """Audit Issue 6: binary task metrics must start with auc, not accuracy."""
+
+    def test_binary_eval_metrics_start_with_auc(self) -> None:
+        """option_sets.metric for binary must have auc as first element."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            binary_metrics = contract.ui_schema["option_sets"]["metric"]["binary"]
+            assert binary_metrics[0] == "auc", (
+                f"binary metrics should start with 'auc', got '{binary_metrics[0]}'"
+            )
+
+    def test_regression_eval_metrics_start_with_rmse(self) -> None:
+        """option_sets.metric for regression must have rmse as first element."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            reg_metrics = contract.ui_schema["option_sets"]["metric"]["regression"]
+            assert reg_metrics[0] == "rmse", (
+                f"regression metrics should start with 'rmse', got '{reg_metrics[0]}'"
+            )
+
+
+class TestAuditEarlyStoppingVisibility:
+    """Audit Issue 7: early_stopping.rounds and validation_ratio must hide when disabled."""
+
+    def test_early_stopping_rounds_conditional_visibility(self) -> None:
+        """early_stopping.rounds must have conditional_visibility on enabled=True."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            cv = contract.ui_schema["conditional_visibility"]
+            assert "early_stopping.rounds" in cv, (
+                "early_stopping.rounds must have conditional_visibility rule"
+            )
+            assert cv["early_stopping.rounds"] == {"early_stopping.enabled": True}
+
+    def test_validation_ratio_conditional_visibility(self) -> None:
+        """validation_ratio must have conditional_visibility on enabled=True."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            cv = contract.ui_schema["conditional_visibility"]
+            assert "validation_ratio" in cv, (
+                "validation_ratio must have conditional_visibility rule"
+            )
+            assert cv["validation_ratio"] == {"early_stopping.enabled": True}
+
+    def test_inner_valid_conditional_visibility(self) -> None:
+        """inner_valid must have conditional_visibility on enabled=True."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            cv = contract.ui_schema["conditional_visibility"]
+            assert "inner_valid" in cv
+
+
+class TestAuditInnerValidDefault:
+    """Audit Issue 2: inner_valid default must be holdout, not null."""
+
+    def test_inner_valid_catalog_default_is_holdout(self) -> None:
+        """Search space catalog inner_valid entry must default to 'holdout'."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            contract = adapter.get_backend_contract()
+            catalog = contract.ui_schema["search_space_catalog"]
+            entry = next((e for e in catalog if e["key"] == "inner_valid"), None)
+            assert entry is not None
+            assert entry.get("default") == "holdout", (
+                f"inner_valid default should be 'holdout', got {entry.get('default')}"
+            )

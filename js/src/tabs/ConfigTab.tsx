@@ -8,6 +8,8 @@ import { useState, useRef, useCallback, useEffect } from "preact/hooks";
 import { useCustomMsg } from "../hooks/useModel";
 import { Accordion } from "../components/Accordion";
 import { DynForm } from "../components/DynForm";
+import { ModelSection } from "../components/ModelEditors";
+import type { TypedParamMeta } from "../components/ModelEditors";
 import { SearchSpace } from "../components/SearchSpace";
 import { NumericStepper } from "../components/NumericStepper";
 
@@ -15,9 +17,6 @@ type SubTab = "fit" | "tune";
 
 /** Schema top-level keys managed by Data Tab — hidden from Config Tab. */
 const DATA_TAB_KEYS = ["data", "features", "split"];
-
-/** Model section fields handled by custom ModelSection (not delegated to DynForm). */
-const HANDLED_MODEL_FIELDS = new Set(["name", "auto_num_leaves", "num_leaves_ratio", "params"]);
 
 interface ConfigTabProps {
   backendContract: Record<string, any>;
@@ -64,242 +63,6 @@ function getSectionSchema(
   const props = resolved.properties ?? {};
   if (!props[key]) return null;
   return resolveSchema(props[key], rootSchema);
-}
-
-type TypedParamKind = "objective" | "model_metric" | "integer" | "number" | "boolean";
-interface TypedParamMeta { key: string; label: string; kind: TypedParamKind; step?: number; }
-
-function TypedParamsEditor({
-  task,
-  autoNumLeaves,
-  value,
-  onChange,
-  parameterHints,
-  optionSets,
-  stepMap,
-}: {
-  task: string;
-  autoNumLeaves: boolean;
-  value: Record<string, any>;
-  onChange: (v: Record<string, any>) => void;
-  parameterHints: TypedParamMeta[];
-  optionSets: Record<string, Record<string, string[]>>;
-  stepMap: Record<string, number>;
-}) {
-  const set = (k: string, v: any) => onChange({ ...value, [k]: v });
-
-  return (
-    <div>
-      {parameterHints.map(({ key, label, kind }) => {
-        const current = value[key];
-
-        if (kind === "objective") {
-          const opts = optionSets.objective?.[task] ?? [];
-          return (
-            <div key={key} class="lzw-form-row">
-              <label class="lzw-label">{label}</label>
-              <select
-                class="lzw-select"
-                value={current ?? ""}
-                onChange={(e) => set(key, (e.target as HTMLSelectElement).value)}
-              >
-                {current && !opts.includes(current) && (
-                  <option value={current}>{current}</option>
-                )}
-                {opts.map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
-                ))}
-              </select>
-            </div>
-          );
-        }
-
-        if (kind === "model_metric") {
-          const opts = optionSets.model_metric?.[task] ?? [];
-          const selected: string[] = Array.isArray(current) ? current : [];
-          return (
-            <div key={key} class="lzw-form-row" style="align-items:flex-start">
-              <label class="lzw-label">{label}</label>
-              <div class="lzw-chip-group">
-                {opts.map((opt) => (
-                  <button
-                    key={opt}
-                    type="button"
-                    class={`lzw-chip ${selected.includes(opt) ? "lzw-chip--active" : ""}`}
-                    onClick={() => {
-                      const next = selected.includes(opt)
-                        ? selected.filter((v) => v !== opt)
-                        : [...selected, opt];
-                      set(key, next);
-                    }}
-                  >
-                    {opt}
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        }
-
-        if (kind === "boolean") {
-          return (
-            <div key={key} class="lzw-form-row">
-              <label class="lzw-label">{label}</label>
-              <label class="lzw-toggle">
-                <input
-                  type="checkbox"
-                  checked={current ?? false}
-                  onChange={(e) => set(key, (e.target as HTMLInputElement).checked)}
-                />
-                <span class="lzw-toggle__slider" />
-              </label>
-            </div>
-          );
-        }
-
-        return (
-          <div key={key} class="lzw-form-row">
-            <label class="lzw-label">{label}</label>
-            <NumericStepper
-              value={current}
-              step={stepMap[key] ?? (kind === "integer" ? 1 : "any")}
-              onChange={(v) => set(key, v)}
-            />
-          </div>
-        );
-      })}
-
-      {!autoNumLeaves && (
-        <div class="lzw-form-row">
-          <label class="lzw-label">Num Leaves</label>
-          <NumericStepper
-            value={value.num_leaves ?? 256}
-            min={2}
-            step={1}
-            onChange={(v) => set("num_leaves", v ?? 256)}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Custom Model section with typed params, auto_num_leaves toggle, verbose at bottom. */
-function ModelSection({
-  schema,
-  rootSchema,
-  value,
-  onChange,
-  task,
-  parameterHints,
-  optionSets,
-  stepMap,
-}: {
-  schema: Record<string, any>;
-  rootSchema: Record<string, any>;
-  value: Record<string, any>;
-  onChange: (v: Record<string, any>) => void;
-  task: string;
-  parameterHints: TypedParamMeta[];
-  optionSets: Record<string, Record<string, string[]>>;
-  stepMap: Record<string, number>;
-}) {
-  const params = (value.params ?? {}) as Record<string, any>;
-  const autoNumLeaves = value.auto_num_leaves ?? true;
-
-  const setField = (k: string, v: any) => onChange({ ...value, [k]: v });
-  const setParam = (k: string, v: any) =>
-    onChange({ ...value, params: { ...params, [k]: v } });
-  const setParams = (newParams: Record<string, any>) =>
-    onChange({ ...value, params: newParams });
-
-  const filteredSchema = {
-    ...schema,
-    properties: Object.fromEntries(
-      Object.entries((schema.properties ?? {}) as Record<string, any>).filter(
-        ([k]) => !HANDLED_MODEL_FIELDS.has(k),
-      ),
-    ),
-  };
-
-  return (
-    <div>
-      {/* name: read-only const */}
-      <div class="lzw-form-row">
-        <label class="lzw-label">Model Type</label>
-        {value.name ? (
-          <span class="lzw-tag lzw-tag--muted">{value.name}</span>
-        ) : (
-          <span class="lzw-tag lzw-tag--warning">model.name missing</span>
-        )}
-      </div>
-
-      {/* auto_num_leaves toggle */}
-      <div class="lzw-form-row">
-        <label class="lzw-label">Auto Num Leaves</label>
-        <label class="lzw-toggle">
-          <input
-            type="checkbox"
-            checked={autoNumLeaves}
-            onChange={(e) => {
-              const v = (e.target as HTMLInputElement).checked;
-              const newParams = { ...params };
-              if (v) {
-                delete newParams.num_leaves;
-              } else {
-                newParams.num_leaves = newParams.num_leaves ?? 256;
-              }
-              onChange({ ...value, auto_num_leaves: v, params: newParams });
-            }}
-          />
-          <span class="lzw-toggle__slider" />
-        </label>
-      </div>
-
-      {/* num_leaves_ratio (auto ON only) — num_leaves is inside TypedParamsEditor */}
-      {autoNumLeaves && (
-        <div class="lzw-form-row">
-          <label class="lzw-label">Num Leaves Ratio</label>
-          <NumericStepper
-            value={value.num_leaves_ratio ?? 1.0}
-            step={0.05}
-            min={0.01}
-            max={1}
-            onChange={(v) => setField("num_leaves_ratio", v ?? 1.0)}
-          />
-        </div>
-      )}
-
-      {/* Remaining schema fields (min_data_in_leaf_ratio, etc.) */}
-      <DynForm
-        schema={filteredSchema}
-        rootSchema={rootSchema}
-        value={value}
-        onChange={onChange}
-      />
-
-      {/* Typed params (objective/metric/numerics/booleans + conditional num_leaves) */}
-      <TypedParamsEditor
-        task={task}
-        autoNumLeaves={autoNumLeaves}
-        value={params}
-        onChange={setParams}
-        parameterHints={parameterHints}
-        optionSets={optionSets}
-        stepMap={stepMap}
-      />
-
-      {/* Log Output (verbose) */}
-      <div class="lzw-form-row">
-        <label class="lzw-label">Log Output</label>
-        <NumericStepper
-          value={params.verbose ?? -1}
-          step={1}
-          onChange={(v) => setParam("verbose", v ?? -1)}
-        />
-      </div>
-    </div>
-  );
 }
 
 /** Get schema keys not in known sections or data tab keys. */
@@ -382,19 +145,23 @@ export function ConfigTab({
     };
   }, []);
 
-  // Auto-set tune metric when task changes or metric is unset
   const task = dfInfo?.task ?? "";
-  const metricOpts = optionSets.model_metric?.[task] ?? [];
+
+  // Auto-set tune evaluation metrics when task changes
+  const evalMetricOpts = optionSets.metric?.[task] ?? [];
+  const localConfigRef = useRef(localConfig);
+  localConfigRef.current = localConfig;
   useEffect(() => {
-    if (metricOpts.length === 0) return;
-    const current = localConfig.tuning?.optuna?.params?.metric;
-    if (!current || !metricOpts.includes(current)) {
-      const tuning = localConfig.tuning ?? {};
-      const optuna = tuning.optuna ?? {};
-      const params = optuna.params ?? {};
+    if (evalMetricOpts.length === 0) return;
+    const cur = localConfigRef.current;
+    const tuning = cur.tuning ?? {};
+    const tuneEval = tuning.evaluation ?? {};
+    const currentMetrics: string[] = tuneEval.metrics ?? [];
+    // If no tune evaluation metrics set, initialize with first metric
+    if (currentMetrics.length === 0) {
       const updated = {
-        ...localConfig,
-        tuning: { ...tuning, optuna: { ...optuna, params: { ...params, metric: metricOpts[0] } } },
+        ...cur,
+        tuning: { ...tuning, evaluation: { ...tuneEval, metrics: [evalMetricOpts[0]] } },
       };
       setLocalConfig(updated);
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -406,7 +173,7 @@ export function ConfigTab({
         }
       }, 300);
     }
-  }, [task]); // Intentionally depends only on task
+  }, [task]); // Depends on task; reads localConfig via ref to avoid stale closure
 
   // Debounced send to Python via patch_config
   const handleChange = useCallback(
@@ -452,6 +219,18 @@ export function ConfigTab({
       handleChange({
         ...localConfig,
         tuning: { ...tuning, optuna: { ...optuna, params: { ...params, [key]: value } } },
+      });
+    },
+    [localConfig, handleChange],
+  );
+
+  /** Update a tuning sub-section (model_params / training / evaluation). */
+  const handleTuningField = useCallback(
+    (field: string, value: any) => {
+      const tuning = localConfig.tuning ?? {};
+      handleChange({
+        ...localConfig,
+        tuning: { ...tuning, [field]: value },
       });
     },
     [localConfig, handleChange],
@@ -584,6 +363,8 @@ export function ConfigTab({
                       parameterHints={parameterHints}
                       optionSets={optionSets}
                       stepMap={stepMap}
+                      columns={dfInfo?.columns ?? []}
+                      additionalParams={uiSchema.additional_params ?? []}
                     />
                   </Accordion>
                 );
@@ -644,9 +425,11 @@ export function ConfigTab({
               }
 
               // Calibration section: standalone Accordion (binary only)
-              // Toggle is inside the body (same layout as Early Stopping) for discoverability
               if (key === "calibration") {
                 if (!showCalibration) return null;
+                const calValue = (localConfig.calibration ?? calibrationDefaults) as Record<string, any>;
+                const calMethodOpts = ["platt", "isotonic", "beta"];
+                const calParams = (calValue.params ?? {}) as Record<string, any>;
                 return (
                   <Accordion key="calibration" title="Calibration">
                     <div class="lzw-form-row">
@@ -665,13 +448,87 @@ export function ConfigTab({
                         <span class="lzw-toggle__slider" />
                       </label>
                     </div>
-                    {calibrationEnabled && calibrationSchema && (
-                      <DynForm
-                        schema={calibrationSchema}
-                        rootSchema={configSchema}
-                        value={localConfig.calibration ?? {}}
-                        onChange={(v) => handleSectionChange("calibration", v)}
-                      />
+                    {calibrationEnabled && (
+                      <>
+                        <div class="lzw-form-row">
+                          <label class="lzw-label">Method</label>
+                          <select
+                            class="lzw-select"
+                            value={calValue.method ?? "platt"}
+                            onChange={(e) =>
+                              handleSectionChange("calibration", {
+                                ...calValue,
+                                method: (e.target as HTMLSelectElement).value,
+                              })
+                            }
+                          >
+                            {calMethodOpts.map((opt) => (
+                              <option key={opt} value={opt}>{opt}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div class="lzw-form-row">
+                          <label class="lzw-label">N Splits</label>
+                          <NumericStepper
+                            value={calValue.n_splits ?? 5}
+                            min={2}
+                            step={1}
+                            onChange={(v) =>
+                              handleSectionChange("calibration", {
+                                ...calValue,
+                                n_splits: v ?? 5,
+                              })
+                            }
+                          />
+                        </div>
+                        <div class="lzw-dynform__section-title">Params</div>
+                        {Object.entries(calParams).map(([pKey, pVal]) => (
+                          <div key={pKey} class="lzw-form-row">
+                            <input
+                              class="lzw-input"
+                              type="text"
+                              value={pKey}
+                              style="width: 120px"
+                              readOnly
+                            />
+                            <NumericStepper
+                              value={pVal as number}
+                              onChange={(v) =>
+                                handleSectionChange("calibration", {
+                                  ...calValue,
+                                  params: { ...calParams, [pKey]: v },
+                                })
+                              }
+                            />
+                            <button
+                              type="button"
+                              class="lzw-tag__remove"
+                              aria-label={`Remove ${pKey}`}
+                              onClick={() => {
+                                const { [pKey]: _, ...rest } = calParams;
+                                handleSectionChange("calibration", {
+                                  ...calValue,
+                                  params: rest,
+                                });
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          class="lzw-btn"
+                          onClick={() =>
+                            handleSectionChange("calibration", {
+                              ...calValue,
+                              params: { ...calParams, new_param: 0 },
+                            })
+                          }
+                        >
+                          + Add
+                        </button>
+                      </>
                     )}
                   </Accordion>
                 );
@@ -759,19 +616,18 @@ export function ConfigTab({
                           <label class="lzw-label">Inner Validation</label>
                           <select
                             class="lzw-select"
-                            value={earlyStop.inner_valid?.method ?? ""}
+                            value={earlyStop.inner_valid?.method ?? "holdout"}
                             onChange={(e) => {
                               const v = (e.target as HTMLSelectElement).value;
                               handleSectionChange("training", {
                                 ...training,
                                 early_stopping: {
                                   ...earlyStop,
-                                  inner_valid: v ? { method: v } : null,
+                                  inner_valid: { method: v },
                                 },
                               });
                             }}
                           >
-                            <option value="">Default</option>
                             {innerValidOpts.map((opt: string) => (
                               <option key={opt} value={opt}>{opt}</option>
                             ))}
@@ -869,9 +725,19 @@ export function ConfigTab({
           </>
         )}
 
-        {subTab === "tune" && (
+        {subTab === "tune" && (() => {
+          const tuning = localConfig.tuning ?? {};
+          const tuneModelParams = tuning.model_params ?? {};
+          const tuneTraining = tuning.training ?? {};
+          const tuneEvaluation = tuning.evaluation ?? {};
+          const tuneMetrics: string[] = tuneEvaluation.metrics ?? [];
+          const evalMetricOpts = optionSets.metric?.[task] ?? [];
+          const optimizationMetric = tuneMetrics[0] ?? (evalMetricOpts[0] ?? "");
+          const additionalMetrics = tuneMetrics.slice(1);
+
+          return (
           <div class="lzw-tune-tab">
-            <Accordion title="Settings">
+            <Accordion title="Tuning Settings">
               <div class="lzw-form-row">
                 <label class="lzw-label">n_trials</label>
                 <NumericStepper
@@ -881,66 +747,84 @@ export function ConfigTab({
                   onChange={(v) => handleTuneParam("n_trials", v ?? 50)}
                 />
               </div>
-              {(() => {
-                const tuneMetricOpts = optionSets.model_metric?.[task] ?? [];
-                if (tuneMetricOpts.length === 0) return null;
-                const currentMetric = localConfig.tuning?.optuna?.params?.metric ?? tuneMetricOpts[0];
-                return (
-                  <div class="lzw-form-row">
-                    <label class="lzw-label">metric</label>
-                    <div class="lzw-segment">
-                      {tuneMetricOpts.map((opt) => (
-                        <button
-                          key={opt}
-                          type="button"
-                          class={`lzw-segment__btn ${currentMetric === opt ? "lzw-segment__btn--active" : ""}`}
-                          aria-pressed={currentMetric === opt}
-                          onClick={() => handleTuneParam("metric", opt)}
-                        >
-                          {opt}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
             </Accordion>
 
             <Accordion title="Search Space">
               <SearchSpace
                 schema={getSectionSchema(configSchema, "model") ?? {}}
                 rootSchema={configSchema}
-                value={tuneSpace}
+                spaceValue={tuneSpace}
+                fixedModelParams={tuneModelParams}
+                fixedTraining={tuneTraining}
                 modelConfig={localConfig.model}
+                trainingConfig={localConfig.training}
                 task={task}
                 uiSchema={uiSchema}
-                onChange={(space) => {
-                  const tuning = localConfig.tuning ?? {};
+                onSpaceChange={(space) => {
                   const optuna = tuning.optuna ?? {};
                   handleChange({
                     ...localConfig,
                     tuning: { ...tuning, optuna: { ...optuna, space } },
                   });
                 }}
+                onFixedModelParamsChange={(mp) => handleTuningField("model_params", mp)}
+                onFixedTrainingChange={(tr) => handleTuningField("training", tr)}
               />
             </Accordion>
 
-            {/* Log Output (verbose) — same treatment as Fit, BLUEPRINT §5.3 */}
-            <div class="lzw-form-row" style="padding: 4px 12px;">
-              <label class="lzw-label">Log Output</label>
-              <NumericStepper
-                value={(localConfig.model?.params as any)?.verbose ?? -1}
-                step={1}
-                onChange={(v) => {
-                  const mdl = localConfig.model ?? {};
-                  const prm = (mdl.params as any) ?? {};
-                  handleChange({
-                    ...localConfig,
-                    model: { ...mdl, params: { ...prm, verbose: v ?? -1 } },
-                  });
-                }}
-              />
-            </div>
+            <Accordion title="Evaluation">
+              {/* Optimization Metric — segment button (single select) */}
+              {evalMetricOpts.length > 0 && (
+                <div class="lzw-form-row" style="align-items:flex-start">
+                  <label class="lzw-label">Optimization Metric</label>
+                  <div class="lzw-segment">
+                    {evalMetricOpts.map((opt) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        class={`lzw-segment__btn ${optimizationMetric === opt ? "lzw-segment__btn--active" : ""}`}
+                        aria-pressed={optimizationMetric === opt}
+                        onClick={() => {
+                          // Set as first metric, preserve additional
+                          handleTuningField("evaluation", {
+                            ...tuneEvaluation,
+                            metrics: [opt, ...additionalMetrics.filter((m) => m !== opt)],
+                          });
+                        }}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Additional Metrics — chip (multi select) */}
+              <div class="lzw-form-row" style="align-items:flex-start">
+                <label class="lzw-label">Additional Metrics</label>
+                <div class="lzw-chip-group">
+                  {evalMetricOpts
+                    .filter((opt) => opt !== optimizationMetric)
+                    .map((opt) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        class={`lzw-chip ${additionalMetrics.includes(opt) ? "lzw-chip--active" : ""}`}
+                        onClick={() => {
+                          const next = additionalMetrics.includes(opt)
+                            ? additionalMetrics.filter((m) => m !== opt)
+                            : [...additionalMetrics, opt];
+                          handleTuningField("evaluation", {
+                            ...tuneEvaluation,
+                            metrics: [optimizationMetric, ...next],
+                          });
+                        }}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            </Accordion>
 
             <div class="lzw-config-tab__footer">
               <input
@@ -972,7 +856,8 @@ export function ConfigTab({
               </div>
             )}
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );

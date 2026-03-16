@@ -17,13 +17,13 @@ from .adapter_params import (
     LGBM_PARAMS_TASK_INDEPENDENT,
     MODEL_METRIC_TO_EVAL,
     get_eval_metrics_by_task,
-    resolve_direction,
 )
 from .adapter_params import classify_best_params as _classify_best_params_impl
 from .adapter_schema import (
     enforce_iv_exclusivity,
     get_default_search_space,
     normalize_inner_valid,
+    prepare_tune_overrides,
     strip_for_backend,
 )
 from .types import (
@@ -358,49 +358,8 @@ class LizyMLAdapter:
         # Enforce auto_num_leaves exclusivity
         result = {**result, "model": self._enforce_auto_num_leaves(model)}
 
-        # Tune defaults
         if job_type == "tune":
-            if not result.get("tuning"):
-                result = {**result, "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}}}
-            else:
-                existing_tuning = result["tuning"]
-                existing_optuna = existing_tuning.get("optuna") or {}
-                existing_params = existing_optuna.get("params") or {}
-                merged_optuna = {
-                    **existing_optuna,
-                    "params": {"n_trials": 50, **existing_params},
-                    "space": existing_optuna.get("space") or {},
-                }
-                result = {**result, "tuning": {**existing_tuning, "optuna": merged_optuna}}
-
-            # ── Map widget tune metric → eval metric + auto-set direction ──
-            cur_optuna = result["tuning"]["optuna"]
-            cur_params = dict(cur_optuna.get("params", {}))
-            widget_metric: str | None = cur_params.pop("metric", None)
-            if widget_metric is not None and widget_metric:
-                eval_metric: str = self._MODEL_METRIC_TO_EVAL.get(widget_metric, widget_metric)
-                # Place eval metric first in evaluation.metrics
-                existing = [
-                    m
-                    for m in (result.get("evaluation") or {}).get("metrics", [])
-                    if m != eval_metric
-                ]
-                result = {
-                    **result,
-                    "evaluation": {
-                        **result.get("evaluation", {}),
-                        "metrics": [eval_metric, *existing],
-                    },
-                }
-                # Auto-set direction from metric
-                cur_params["direction"] = resolve_direction(eval_metric)
-            result = {
-                **result,
-                "tuning": {
-                    **result["tuning"],
-                    "optuna": {**cur_optuna, "params": cur_params},
-                },
-            }
+            result = prepare_tune_overrides(result)
 
         result = normalize_inner_valid(result)
         result = enforce_iv_exclusivity(result)
