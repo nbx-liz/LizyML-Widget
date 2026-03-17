@@ -116,6 +116,12 @@ class BackendAdapter(Protocol):
 
     def model_info(self, model: Any) -> dict[str, Any]: ...
 
+    def classify_best_params(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]: ...
+
+    def plot_inference(self, predictions: pd.DataFrame, plot_type: str) -> PlotData: ...
+
 
 class LizyMLAdapter:
     """Adapter for the LizyML backend library."""

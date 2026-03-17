@@ -208,6 +208,16 @@ class BackendAdapter(Protocol):
     def export_model(self, model: Any, path: str) -> str: ...
     def load_model(self, path: str) -> Any: ...
     def model_info(self, model: Any) -> dict[str, Any]: ...
+
+    # P-013: best_params のカテゴリ分類
+    def classify_best_params(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]: ...
+
+    # P-015: 推論プロット生成
+    def plot_inference(
+        self, predictions: pd.DataFrame, plot_type: str
+    ) -> PlotData: ...
 ```
 
 `initialize_config()` / `apply_config_patch()` / `prepare_run_config()` により、backend 固有 default・可視性ルール・Tune 補完・legacy 正規化を Adapter へ一元化する。Service は Data タブ由来 state の保持と結合作業に専念し、UI は `BackendContract` の記述を generic に描画する。

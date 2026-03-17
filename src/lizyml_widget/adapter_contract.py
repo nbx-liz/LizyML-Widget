@@ -358,6 +358,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
         "defaults": {
             "calibration": {"method": "platt", "n_splits": 5, "params": {}},
         },
+        "calibration_methods": ["platt", "isotonic", "beta"],
         "inner_valid_options": ["holdout", "group_holdout", "time_holdout"],
     }
 
@@ -366,4 +367,12 @@ def build_capabilities() -> dict[str, Any]:
     """Return the capabilities dict for the backend contract."""
     return {
         "tune": {"allow_empty_space": True},
+        "cv_strategies": [
+            "kfold",
+            "stratified_kfold",
+            "time_series",
+            "group_time_series",
+            "purged_time_series",
+            "group_kfold",
+        ],
     }

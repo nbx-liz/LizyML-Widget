@@ -451,7 +451,7 @@
 ### P-013: `classify_best_params` を `BackendAdapter` Protocol に追加
 
 - **日付**: 2026-03-14
-- **ステータス**: Proposed
+- **ステータス**: Approved（2026-03-17 承認）
 - **背景**:
   - Tune 完了後の Apply to Fit で `best_params` を `model / smart / training` カテゴリに分類する `classify_best_params` メソッドが `LizyMLAdapter` に実装済み。
   - 現状 `WidgetService` は `getattr` による duck typing で呼び出しており、`BackendAdapter` Protocol に含まれていない。
@@ -723,3 +723,39 @@
   - Tune の最適化対象メトリックが `tuning.evaluation.metrics[0]` から決定される。
   - Apply to Fit（P-005）が引き続き正しく動作する。
   - 既存テスト 394 件が回帰なくパスする。
+
+---
+
+### P-015: `plot_inference` を `BackendAdapter` Protocol に追加
+
+- **日付**: 2026-03-17
+- **ステータス**: Approved（2026-03-17 承認）
+- **背景**:
+  - 推論結果のプロット生成（`prediction-distribution`, `shap-summary`）を行う `plot_inference` メソッドが `LizyMLAdapter` に実装済み。
+  - 現状 `WidgetService.get_inference_plot()` は `getattr(self._adapter, "plot_inference", None)` による duck typing で呼び出しており、`BackendAdapter` Protocol に含まれていない。
+  - 新規 Adapter 実装時に推論プロット生成の契約が不明瞭になるリスクがある。
+- **提案内容**:
+  - `BackendAdapter` Protocol に `plot_inference(predictions: pd.DataFrame, plot_type: str) -> PlotData` を追加。
+  - `WidgetService.get_inference_plot()` の `getattr` フォールバックを通常のメソッド呼び出しに変更。
+- **影響範囲**:
+  - `BackendAdapter` Protocol の変更（`adapter.py`）
+  - `WidgetService.get_inference_plot` の簡素化（`service.py`）
+  - 将来の Adapter 実装者への契約明示
+
+---
+
+### P-016: `cv_strategies` を `BackendContract` capabilities に追加
+
+- **日付**: 2026-03-17
+- **ステータス**: Approved（2026-03-17 承認）
+- **背景**:
+  - Widget の `_handle_update_cv` に CV strategy の有効値リストが `_VALID_STRATEGIES` として frozenset でハードコードされている。
+  - Widget はバックエンド固有の知識を持つべきではなく、有効な strategy 一覧は Backend Contract から取得すべきである。
+- **提案内容**:
+  - `BackendContract.capabilities` に `cv_strategies` リストを追加（例: `["kfold", "stratified_kfold", "time_series", "group_time_series", "purged_time_series", "group_kfold"]`）。
+  - Widget の `_handle_update_cv` は `self.backend_contract["capabilities"]["cv_strategies"]` から有効値を取得し、フォールバックとして現行のハードコード値を使用する。
+  - Widget の `_VALID_STRATEGIES` クラス属性を削除する。
+- **影響範囲**:
+  - `adapter_contract.py` の `build_capabilities()` に `cv_strategies` 追加
+  - `widget.py` の `_handle_update_cv` の strategy 検証ロジック変更
+  - `BackendContract` の capabilities 構造変更

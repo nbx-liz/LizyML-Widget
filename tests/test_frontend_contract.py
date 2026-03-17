@@ -11,6 +11,16 @@ from pathlib import Path
 JS_SRC = Path(__file__).resolve().parent.parent / "js" / "src"
 
 
+def _read_config_files() -> str:
+    """Read all Config tab files (coordinator + sub-tabs) as a single string."""
+    parts = []
+    for name in ("ConfigTab.tsx", "FitSubTab.tsx", "TuneSubTab.tsx"):
+        path = JS_SRC / "tabs" / name
+        if path.exists():
+            parts.append(path.read_text())
+    return "\n".join(parts)
+
+
 class TestLayoutContract:
     """Phase 15: Ensure .lzw-root is applied only once (in index.tsx)."""
 
@@ -91,7 +101,7 @@ class TestSearchSpaceContract:
 
     def test_tune_button_checks_type_format(self) -> None:
         """ConfigTab Tune button enablement should check type-based format."""
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        content = _read_config_files()
         # hasSearchParam should check p.type values
         assert 'p.type === "float"' in content or "p.type ==" in content
 
@@ -123,8 +133,8 @@ class TestChipButtonContract:
     """Phase 23: Metric selections should use chip buttons, not checkbox groups."""
 
     def test_config_tab_metric_uses_chip(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
-        assert "lzw-chip" in content, "ConfigTab metric should use chip buttons"
+        content = _read_config_files()
+        assert "lzw-chip" in content, "Config tab metric should use chip buttons"
 
     def test_search_space_choice_uses_chip(self) -> None:
         content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
@@ -141,7 +151,7 @@ class TestInnerValidDefaultContract:
     """inner_valid should default to holdout, not show 'Default' or 'auto'."""
 
     def test_inner_valid_defaults_to_holdout(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        content = _read_config_files()
         assert ">Default<" not in content, "inner_valid should not show 'Default' label"
         assert ">auto<" not in content, "inner_valid should not show 'auto'"
         assert '"holdout"' in content, "inner_valid should default to holdout"
@@ -160,26 +170,28 @@ class TestBackendContractMigration:
     """Phase 25: Frontend reads from backend_contract, not hardcoded constants."""
 
     def test_config_tab_no_hardcoded_objective_options(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        content = _read_config_files()
         assert "OBJECTIVE_OPTIONS" not in content, (
-            "ConfigTab should not have hardcoded OBJECTIVE_OPTIONS"
+            "Config tab should not have hardcoded OBJECTIVE_OPTIONS"
         )
 
     def test_config_tab_no_hardcoded_metric_options(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
-        assert "METRIC_OPTIONS" not in content, "ConfigTab should not have hardcoded METRIC_OPTIONS"
+        content = _read_config_files()
+        assert "METRIC_OPTIONS" not in content, (
+            "Config tab should not have hardcoded METRIC_OPTIONS"
+        )
 
     def test_config_tab_no_hardcoded_step_map(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
-        assert "STEP_MAP" not in content, "ConfigTab should not have hardcoded STEP_MAP"
+        content = _read_config_files()
+        assert "STEP_MAP" not in content, "Config tab should not have hardcoded STEP_MAP"
 
     def test_config_tab_no_hardcoded_typed_params(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
-        assert "TYPED_PARAMS" not in content, "ConfigTab should not have hardcoded TYPED_PARAMS"
+        content = _read_config_files()
+        assert "TYPED_PARAMS" not in content, "Config tab should not have hardcoded TYPED_PARAMS"
 
     def test_config_tab_no_hardcoded_fit_sections(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
-        assert "FIT_SECTIONS" not in content, "ConfigTab should not have hardcoded FIT_SECTIONS"
+        content = _read_config_files()
+        assert "FIT_SECTIONS" not in content, "Config tab should not have hardcoded FIT_SECTIONS"
 
     def test_search_space_no_hardcoded_constants(self) -> None:
         content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
@@ -187,8 +199,8 @@ class TestBackendContractMigration:
             assert const_name not in content, f"SearchSpace should not have hardcoded {const_name}"
 
     def test_config_tab_uses_patch_config(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
-        assert "patch_config" in content, "ConfigTab should use patch_config action"
+        content = _read_config_files()
+        assert "patch_config" in content, "Config tab should use patch_config action"
 
     def test_app_uses_backend_contract(self) -> None:
         content = (JS_SRC / "App.tsx").read_text()
@@ -203,27 +215,27 @@ class TestInnerValidCanonicalContract:
     """Phase 26: inner_valid sends canonical object/null, not bare strings."""
 
     def test_inner_valid_sends_method_object(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        content = _read_config_files()
         assert "method:" in content or '"method"' in content, (
             "inner_valid onChange should produce {method: ...} object"
         )
 
     def test_inner_valid_reads_method_field(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        content = _read_config_files()
         assert "inner_valid?.method" in content, (
             "inner_valid display value should read .method from object"
         )
 
     def test_inner_valid_options_from_ui_schema(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        content = _read_config_files()
         assert "inner_valid_options" in content, (
             "inner_valid options should come from uiSchema.inner_valid_options"
         )
 
     def test_no_fold_options_generated(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        content = _read_config_files()
         assert "fold_" not in content, (
-            "ConfigTab should not generate fold_N options for inner_valid"
+            "Config tab should not generate fold_N options for inner_valid"
         )
 
 
@@ -271,7 +283,7 @@ class TestSearchSpaceAtomicUpdate:
     """SearchSpace must use a single atomic onChange callback, not separate callbacks."""
 
     def test_no_separate_callbacks(self) -> None:
-        """SearchSpace must NOT have onSpaceChange/onFixedModelParamsChange/onFixedTrainingChange."""
+        """SearchSpace must NOT have separate onSpaceChange callbacks."""
         content = (JS_SRC / "components" / "SearchSpace.tsx").read_text()
         for old_cb in ("onSpaceChange", "onFixedModelParamsChange", "onFixedTrainingChange"):
             assert old_cb not in content, (
@@ -287,19 +299,85 @@ class TestSearchSpaceAtomicUpdate:
         )
 
     def test_config_tab_uses_atomic_callback(self) -> None:
-        """ConfigTab must call SearchSpace with single onChange, not separate callbacks."""
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        """Config tab must call SearchSpace with single onChange, not separate callbacks."""
+        content = _read_config_files()
         assert "onFixedModelParamsChange" not in content, (
-            "ConfigTab must not pass onFixedModelParamsChange to SearchSpace"
+            "Config tab must not pass onFixedModelParamsChange to SearchSpace"
         )
-        assert "onChange={" in content, "ConfigTab must pass onChange to SearchSpace"
+        assert "onChange={" in content, "Config tab must pass onChange to SearchSpace"
 
 
 class TestTuneCapabilitiesContract:
     """Phase 26: Tune button reads allow_empty_space from backend_contract.capabilities."""
 
     def test_tune_reads_allow_empty_space(self) -> None:
-        content = (JS_SRC / "tabs" / "ConfigTab.tsx").read_text()
+        content = _read_config_files()
         assert "allow_empty_space" in content, (
             "Tune condition should read allow_empty_space from capabilities"
         )
+
+
+class TestContractNewFields:
+    """M-1/M-2: backend contract exposes cv_strategies and calibration_methods."""
+
+    def test_capabilities_returns_cv_strategies(self) -> None:
+        """build_capabilities() must return cv_strategies list."""
+        from lizyml_widget.adapter_contract import build_capabilities
+
+        caps = build_capabilities()
+        strategies = caps["cv_strategies"]
+        assert isinstance(strategies, list)
+        assert len(strategies) >= 4
+        for expected in ("kfold", "stratified_kfold", "group_kfold", "time_series"):
+            assert expected in strategies, f"{expected} missing from cv_strategies"
+
+    def test_ui_schema_returns_calibration_methods(self) -> None:
+        """build_ui_schema() must return calibration_methods list."""
+        from lizyml_widget.adapter_contract import build_ui_schema
+        from lizyml_widget.adapter_params import get_eval_metrics_by_task
+
+        schema = build_ui_schema(get_eval_metrics_by_task())
+        methods = schema["calibration_methods"]
+        assert isinstance(methods, list)
+        assert len(methods) >= 2
+        for expected in ("platt", "isotonic", "beta"):
+            assert expected in methods, f"{expected} missing from calibration_methods"
+
+    def test_widget_update_cv_reads_strategies_from_contract(self) -> None:
+        """Widget._handle_update_cv should accept strategies from backend_contract."""
+        from unittest.mock import patch
+
+        from lizyml_widget.adapter import LizyMLAdapter
+        from lizyml_widget.adapter_contract import build_capabilities
+
+        real_adapter = LizyMLAdapter()
+        with patch("lizyml_widget.widget.LizyMLAdapter") as MockAdapter:
+            adapter = MockAdapter.return_value
+            adapter.info = real_adapter.info
+            adapter.get_config_schema.return_value = {}
+            adapter.initialize_config.side_effect = real_adapter.initialize_config
+            adapter.apply_config_patch.side_effect = real_adapter.apply_config_patch
+            adapter.prepare_run_config.side_effect = real_adapter.prepare_run_config
+            adapter.get_backend_contract.side_effect = real_adapter.get_backend_contract
+            adapter.canonicalize_config.side_effect = real_adapter.canonicalize_config
+            adapter.apply_task_defaults.side_effect = real_adapter.apply_task_defaults
+
+            from lizyml_widget.widget import LizyWidget
+
+            w = LizyWidget()
+
+        import pandas as pd
+
+        w.load(pd.DataFrame({"x": range(50), "y": [0, 1] * 25}), target="y")
+
+        # Verify backend_contract has cv_strategies
+        caps = build_capabilities()
+        contract_strategies = caps["cv_strategies"]
+        assert len(contract_strategies) > 0
+
+        # All contract strategies should be accepted by _handle_update_cv
+        for strategy in contract_strategies:
+            w.action = {"op": "update_cv", "strategy": strategy, "n_splits": 3}
+            assert w.error == {} or w.error.get("code") != "CV_ERROR", (
+                f"Strategy {strategy!r} from contract was rejected"
+            )

@@ -133,7 +133,7 @@ function TypedParamsEditor({
 }
 
 /** Feature Weights editor: toggle + column select + stepper rows. */
-export function FeatureWeightsEditor({
+function FeatureWeightsEditor({
   value,
   onChange,
   columns,
@@ -216,7 +216,7 @@ export function FeatureWeightsEditor({
 }
 
 /** Additional Params: param name select + stepper + delete. */
-export function AdditionalParamsEditor({
+function AdditionalParamsEditor({
   value,
   onChange,
   additionalParams,

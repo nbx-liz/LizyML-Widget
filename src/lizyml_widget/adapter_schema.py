@@ -313,7 +313,10 @@ def prepare_tune_overrides(result: dict[str, Any]) -> dict[str, Any]:
         existing_params = result.get("model", {}).get("params", {})
         result = {
             **result,
-            "model": {**result.get("model", {}), "params": {**existing_params, **tune_model_params}},
+            "model": {
+                **result.get("model", {}),
+                "params": {**existing_params, **tune_model_params},
+            },
         }
     if isinstance(tune_training, dict) and tune_training:
         result = {**result, "training": dict(tune_training)}

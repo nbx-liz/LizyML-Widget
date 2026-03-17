@@ -62,7 +62,7 @@ function TagInput({ value, onChange }: { value: string[]; onChange: (v: string[]
 }
 
 /** Key-value editor for object fields with additionalProperties (e.g. model.params). */
-export function KVEditor({
+function KVEditor({
   value,
   onChange,
 }: {
