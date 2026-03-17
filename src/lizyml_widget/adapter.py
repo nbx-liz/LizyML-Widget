@@ -550,7 +550,7 @@ class LizyMLAdapter:
             except BaseException as exc:
                 error_holder["error"] = exc
 
-        thread = threading.Thread(target=_worker, daemon=True)
+        thread = threading.Thread(target=_worker, daemon=False)
         self._last_worker_thread = thread
         thread.start()
 
