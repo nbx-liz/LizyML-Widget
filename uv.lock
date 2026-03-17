@@ -1262,7 +1262,7 @@ wheels = [
 
 [[package]]
 name = "lizyml"
-version = "0.1.2"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "joblib" },
@@ -1276,9 +1276,9 @@ dependencies = [
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a3/91/eb21115847e7b74bdc740790390db87224d4b07e8f128101e01ba070bb26/lizyml-0.1.2.tar.gz", hash = "sha256:79814dc8370ec406078602ee120737d821222fec9f4eea483981dadcad133f4e", size = 425891, upload-time = "2026-03-09T15:48:53.39Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/94/3842868209d5caace168acc9bfdf1c180b7ba14c99b90058cd04d78b424f/lizyml-0.2.0.tar.gz", hash = "sha256:c25ba6914a21d34465960f55e3b96c4060ef0c973bbd2b50b7262f56b149f4ee", size = 496689, upload-time = "2026-03-17T12:20:54.397Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/ee/99a55e02cecfbfc9fd12648af82790e9f201cf44579b1ada38beae02c45e/lizyml-0.1.2-py3-none-any.whl", hash = "sha256:b1da68fbf7c93a1602fc2feab3c5ebbafb57b2267f47a93cc8181ef47cb34e25", size = 117942, upload-time = "2026-03-09T15:48:51.993Z" },
+    { url = "https://files.pythonhosted.org/packages/82/a4/fe19f9ba181dac70513f43305c9d6bb1a92f5b93af4ea96d3345964c69c2/lizyml-0.2.0-py3-none-any.whl", hash = "sha256:eb18706c4c4620456f65df40bcfe0d9553bd7f620a236ca195e42b18dd4f538b", size = 123636, upload-time = "2026-03-17T12:20:53.006Z" },
 ]
 
 [package.optional-dependencies]
@@ -1334,7 +1334,7 @@ requires-dist = [
     { name = "anywidget", specifier = ">=0.9" },
     { name = "jupyterlab", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], marker = "extra == 'dev'" },
-    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], marker = "extra == 'lizyml'" },
+    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], marker = "extra == 'lizyml'", specifier = ">=0.2.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pandas", specifier = ">=1.5" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.0" },

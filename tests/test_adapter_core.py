@@ -230,13 +230,52 @@ class TestTune:
         assert len(result.trials) == 1
         assert result.metric_name == "accuracy"
 
-    def test_tune_calls_on_progress_periodically(self) -> None:
+    def test_tune_passes_progress_callback_to_model(self) -> None:
+        """Adapter should pass a progress_callback to model.tune() (LizyML v0.2.0+)."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_model.tune.return_value = FakeTuningResult(
+            best_params={"lr": 0.01},
+            best_score=0.95,
+            trials=[FakeTrial(number=1, params={"lr": 0.01}, score=0.95, state="COMPLETE")],
+            metric_name="accuracy",
+            direction="maximize",
+        )
+
+        progress_calls: list[tuple[int, int, str]] = []
+
+        def on_progress(current: int, total: int, message: str) -> None:
+            progress_calls.append((current, total, message))
+
+        adapter.tune(mock_model, on_progress=on_progress)
+        # model.tune should have been called with progress_callback kwarg
+        mock_model.tune.assert_called_once()
+        call_kwargs = mock_model.tune.call_args.kwargs
+        assert "progress_callback" in call_kwargs
+        assert call_kwargs["progress_callback"] is not None
+
+    def test_tune_direct_call_invokes_progress_callback(self) -> None:
+        """With LizyML v0.2.0+, tune runs directly (no daemon thread) and
+        the progress_callback fires on_progress with trial info."""
+        from lizyml.core.types.tuning_result import TuneProgressInfo
+
         adapter = LizyMLAdapter()
         mock_model = MagicMock()
 
-        # Simulate a tune that takes ~1.5 seconds
-        def slow_tune() -> FakeTuningResult:
-            time.sleep(1.5)
+        def tune_with_callback(**kwargs: Any) -> FakeTuningResult:
+            # Simulate LizyML firing progress_callback after each trial
+            cb = kwargs.get("progress_callback")
+            if cb is not None:
+                cb(
+                    TuneProgressInfo(
+                        current_trial=1,
+                        total_trials=3,
+                        elapsed_seconds=0.5,
+                        best_score=0.95,
+                        latest_score=0.95,
+                        latest_state="complete",
+                    )
+                )
             return FakeTuningResult(
                 best_params={"lr": 0.01},
                 best_score=0.95,
@@ -245,7 +284,7 @@ class TestTune:
                 direction="maximize",
             )
 
-        mock_model.tune.side_effect = slow_tune
+        mock_model.tune.side_effect = tune_with_callback
 
         progress_calls: list[tuple[int, int, str]] = []
 
@@ -254,36 +293,10 @@ class TestTune:
 
         result = adapter.tune(mock_model, on_progress=on_progress)
         assert isinstance(result, TuningSummary)
-        # on_progress should have been called at least once during the 1.5s tune
         assert len(progress_calls) >= 1
-
-    def test_tune_cancellation_via_on_progress(self) -> None:
-        adapter = LizyMLAdapter()
-        mock_model = MagicMock()
-
-        # Simulate a long tune
-        def long_tune() -> FakeTuningResult:
-            time.sleep(10.0)
-            return FakeTuningResult(
-                best_params={},
-                best_score=0.0,
-                trials=[],
-                metric_name="acc",
-                direction="maximize",
-            )
-
-        mock_model.tune.side_effect = long_tune
-
-        call_count = 0
-
-        def on_progress_cancel(current: int, total: int, message: str) -> None:
-            nonlocal call_count
-            call_count += 1
-            if call_count >= 2:
-                raise InterruptedError("Cancelled")
-
-        with pytest.raises(InterruptedError, match="Cancelled"):
-            adapter.tune(mock_model, on_progress=on_progress_cancel)
+        assert progress_calls[0][0] == 1  # current_trial
+        assert progress_calls[0][1] == 3  # total_trials
+        assert "best: 0.9500" in progress_calls[0][2]
 
     def test_fit_calls_on_progress_periodically(self) -> None:
         adapter = LizyMLAdapter()

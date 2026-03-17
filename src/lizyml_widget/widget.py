@@ -553,10 +553,13 @@ class LizyWidget(anywidget.AnyWidget):
             self.status = "failed"
             return
 
+        # Use non-daemon thread to avoid OpenMP thread degradation.
+        # Daemon threads cause libgomp to use single-threaded execution,
+        # resulting in 50x slowdown for LightGBM on WSL2/Linux.
         thread = threading.Thread(
             target=self._job_worker,
             args=(job_type, full_config),
-            daemon=True,
+            daemon=False,
         )
         self._job_thread = thread
         thread.start()

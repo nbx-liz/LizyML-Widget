@@ -759,3 +759,31 @@
   - `adapter_contract.py` の `build_capabilities()` に `cv_strategies` 追加
   - `widget.py` の `_handle_update_cv` の strategy 検証ロジック変更
   - `BackendContract` の capabilities 構造変更
+
+---
+
+### P-017: LizyML v0.2.0 対応（TuneProgressCallback 統合 + stratified_group_kfold + calibration n_splits 非推奨）
+
+- **日付**: 2026-03-18
+- **ステータス**: Approved（2026-03-18 承認）
+- **背景**:
+  - LizyML v0.2.0 が `TuneProgressCallback` を導入し、Tune 中の trial ごとの進捗情報（`current_trial`, `total_trials`, `best_score`, `latest_score`）をコールバックで提供する。
+  - 現状 Widget の Tune 進捗は `_run_with_cancel_polling` による 0.5 秒間隔のポーリングで、進捗メッセージが不正確（常に `"Processing..."`）。
+  - LizyML v0.2.0 が新 split method `stratified_group_kfold` を追加。
+  - LizyML v0.2.0 が `calibration.n_splits` を非推奨化（outer CV splits を再利用）。
+  - LizyML v0.2.0 が `default_space()` の import パスを変更。
+  - LizyML v0.2.0 の `TuningResult` が `best_model_params` / `best_smart_params` / `best_training_params` に 3分割（`best_params` property で backward compat 維持）。
+- **提案内容**:
+  - Adapter `tune()` 内で `TuneProgressCallback` を作成し `model.tune(progress_callback=...)` に渡す。Widget の `on_progress` コールバックへのブリッジとして機能。
+  - `capabilities.cv_strategies` に `stratified_group_kfold` を追加。
+  - `build_config` の split フィールド条件に `stratified_group_kfold` を追加。
+  - `default_space()` の import パスを `lizyml.estimators.lgbm.defaults` に変更（旧パスを fallback）。
+  - `calibration.n_splits` の UI に非推奨表示を追加。
+  - `oof_coverage` を `FitSummary.metrics` dict 内に pass through（型変更なし）。
+- **影響範囲**:
+  - `adapter.py`: `tune()` 内の progress callback ブリッジ実装
+  - `adapter_schema.py`: `default_space()` import パス変更
+  - `adapter_contract.py`: `cv_strategies` に `stratified_group_kfold` 追加
+  - `service.py`: `build_config` の split フィールド条件追加
+  - `FitSubTab.tsx`: calibration `n_splits` の非推奨表示
+  - `pyproject.toml`: `lizyml>=0.2.0` バージョンピン

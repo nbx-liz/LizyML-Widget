@@ -374,5 +374,6 @@ def build_capabilities() -> dict[str, Any]:
             "group_time_series",
             "purged_time_series",
             "group_kfold",
+            "stratified_group_kfold",
         ],
     }
