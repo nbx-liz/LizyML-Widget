@@ -243,9 +243,12 @@ def get_default_search_space(task: str) -> dict[str, Any]:
     Returns empty dict for unknown tasks.
     """
     try:
-        from lizyml.tuning.search_space import default_space
+        from lizyml.estimators.lgbm.defaults import default_space
     except ImportError:
-        return {}
+        try:
+            from lizyml.tuning.search_space import default_space  # v0.1.x fallback
+        except ImportError:
+            return {}
 
     try:
         dims = default_space(task)

@@ -230,12 +230,36 @@ class TestTune:
         assert len(result.trials) == 1
         assert result.metric_name == "accuracy"
 
+    def test_tune_passes_progress_callback_to_model(self) -> None:
+        """Adapter should pass a progress_callback to model.tune() (LizyML v0.2.0+)."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_model.tune.return_value = FakeTuningResult(
+            best_params={"lr": 0.01},
+            best_score=0.95,
+            trials=[FakeTrial(number=1, params={"lr": 0.01}, score=0.95, state="COMPLETE")],
+            metric_name="accuracy",
+            direction="maximize",
+        )
+
+        progress_calls: list[tuple[int, int, str]] = []
+
+        def on_progress(current: int, total: int, message: str) -> None:
+            progress_calls.append((current, total, message))
+
+        adapter.tune(mock_model, on_progress=on_progress)
+        # model.tune should have been called with progress_callback kwarg
+        mock_model.tune.assert_called_once()
+        call_kwargs = mock_model.tune.call_args.kwargs
+        assert "progress_callback" in call_kwargs
+        assert call_kwargs["progress_callback"] is not None
+
     def test_tune_calls_on_progress_periodically(self) -> None:
         adapter = LizyMLAdapter()
         mock_model = MagicMock()
 
         # Simulate a tune that takes ~1.5 seconds
-        def slow_tune() -> FakeTuningResult:
+        def slow_tune(**kwargs: Any) -> FakeTuningResult:
             time.sleep(1.5)
             return FakeTuningResult(
                 best_params={"lr": 0.01},
@@ -262,7 +286,7 @@ class TestTune:
         mock_model = MagicMock()
 
         # Simulate a long tune
-        def long_tune() -> FakeTuningResult:
+        def long_tune(**kwargs: Any) -> FakeTuningResult:
             time.sleep(10.0)
             return FakeTuningResult(
                 best_params={},

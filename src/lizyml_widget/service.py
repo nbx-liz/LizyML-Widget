@@ -258,9 +258,9 @@ class WidgetService:
         }
 
         # Strategy-dependent split fields per BLUEPRINT §5.2
-        if strategy in ("kfold", "stratified_kfold"):
+        if strategy in ("kfold", "stratified_kfold", "stratified_group_kfold"):
             split_section["random_state"] = cv.get("random_state", 42)
-        if strategy == "kfold":
+        if strategy in ("kfold", "stratified_group_kfold"):
             split_section["shuffle"] = cv.get("shuffle", True)
         if strategy in ("time_series", "group_time_series"):
             split_section["gap"] = cv.get("gap", 0)

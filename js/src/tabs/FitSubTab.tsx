@@ -181,8 +181,8 @@ export function FitSubTab({
                       ))}
                     </select>
                   </div>
-                  <div class="lzw-form-row">
-                    <label class="lzw-label">N Splits</label>
+                  <div class="lzw-form-row" style="opacity: 0.5">
+                    <label class="lzw-label">N Splits <span style="font-size:0.75em">(deprecated)</span></label>
                     <NumericStepper
                       value={calValue.n_splits ?? 5}
                       min={2}

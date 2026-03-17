@@ -595,8 +595,23 @@ class LizyMLAdapter:
     ) -> TuningSummary:
         from dataclasses import asdict
 
+        # Bridge Widget's on_progress to LizyML's TuneProgressCallback (v0.2.0+)
+        progress_cb = None
+        if on_progress is not None:
+            try:
+                from lizyml.core.types.tuning_result import TuneProgressInfo  # noqa: F811
+
+                def progress_cb(info: TuneProgressInfo) -> None:
+                    msg = f"Trial {info.current_trial}/{info.total_trials}"
+                    if info.best_score is not None:
+                        msg += f" (best: {info.best_score:.4f})"
+                    on_progress(info.current_trial, info.total_trials, msg)
+
+            except ImportError:
+                pass  # LizyML < 0.2.0: no callback support
+
         result = self._run_with_cancel_polling(
-            model.tune,
+            lambda: model.tune(progress_callback=progress_cb),
             on_progress,
         )
         return TuningSummary(

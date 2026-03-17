@@ -244,6 +244,42 @@ class TestSetTargetPreservesOverrides:
         assert col_b["col_type"] == "categorical"
 
 
+class TestStratifiedGroupKfold:
+    """stratified_group_kfold CV strategy support (LizyML v0.2.0)."""
+
+    def test_build_config_includes_random_state_and_shuffle(self) -> None:
+        svc = WidgetService(adapter=_mock_adapter())
+        df = pd.DataFrame({"x": range(50), "g": [0, 1] * 25, "y": [0, 1] * 25})
+        svc.load_data(df, target="y")
+        svc.update_cv(
+            "stratified_group_kfold",
+            n_splits=3,
+            group_column="g",
+            random_state=123,
+            shuffle=False,
+        )
+        config = svc.build_config({"model": {"name": "lgbm"}})
+        split = config["split"]
+        assert split["method"] == "stratified_group_kfold"
+        assert split["n_splits"] == 3
+        assert split["random_state"] == 123
+        assert split["shuffle"] is False
+
+    def test_build_config_group_col_in_data(self) -> None:
+        svc = WidgetService(adapter=_mock_adapter())
+        df = pd.DataFrame({"x": range(50), "g": [0, 1] * 25, "y": [0, 1] * 25})
+        svc.load_data(df, target="y")
+        svc.update_cv("stratified_group_kfold", n_splits=3, group_column="g")
+        config = svc.build_config({"model": {"name": "lgbm"}})
+        assert config["data"]["group_col"] == "g"
+
+    def test_capabilities_includes_strategy(self) -> None:
+        from lizyml_widget.adapter_contract import build_capabilities
+
+        caps = build_capabilities()
+        assert "stratified_group_kfold" in caps["cv_strategies"]
+
+
 class TestZeroFeatureGuard:
     """build_config should raise ValueError when all features are excluded."""
 
