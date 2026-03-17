@@ -595,11 +595,17 @@ class LizyMLAdapter:
     ) -> TuningSummary:
         from dataclasses import asdict
 
-        # Bridge Widget's on_progress to LizyML's TuneProgressCallback (v0.2.0+)
+        # LizyML v0.2.0+ provides TuneProgressCallback fired after each trial.
+        # When available, run model.tune() directly (not in daemon thread) to
+        # avoid OpenMP thread degradation (12x slowdown on WSL2 daemon threads).
+        # Cancel-polling via daemon thread is the fallback for LizyML < 0.2.0.
         progress_cb = None
+        use_direct_call = False
         if on_progress is not None:
             try:
                 from lizyml.core.types.tuning_result import TuneProgressInfo  # noqa: F811
+
+                use_direct_call = True
 
                 def progress_cb(info: TuneProgressInfo) -> None:
                     msg = f"Trial {info.current_trial}/{info.total_trials}"
@@ -610,10 +616,19 @@ class LizyMLAdapter:
             except ImportError:
                 pass  # LizyML < 0.2.0: no callback support
 
-        result = self._run_with_cancel_polling(
-            lambda: model.tune(progress_callback=progress_cb),
-            on_progress,
-        )
+        if use_direct_call:
+            # Direct call on current thread — full OpenMP utilization.
+            # Cancel via on_progress(InterruptedError) is caught by LizyML's
+            # except Exception and emitted as RuntimeWarning; tune runs to
+            # completion. This trade-off is acceptable: 12x CPU improvement
+            # outweighs the loss of immediate cancellation during tune.
+            result = model.tune(progress_callback=progress_cb)
+        else:
+            # Legacy path: daemon thread + cancel-polling for LizyML < 0.2.0
+            result = self._run_with_cancel_polling(
+                model.tune,
+                on_progress,
+            )
         return TuningSummary(
             best_params=result.best_params,
             best_score=result.best_score,
