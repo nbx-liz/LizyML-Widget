@@ -1,7 +1,7 @@
 """Schema-based config utilities for LizyML adapter.
 
 Provides thread-safe schema caching, recursive field stripping,
-and default search space extraction from LizyML's Pydantic schema.
+default search space extraction, and Tune config preparation.
 """
 
 from __future__ import annotations
@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import threading
 from typing import Any
+
+from .adapter_params import MODEL_METRIC_TO_EVAL, resolve_direction
 
 _log = logging.getLogger(__name__)
 
@@ -200,15 +202,34 @@ def enforce_iv_exclusivity(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+# Widget-only fields inside the tuning section (not recognized by LizyML)
+_WIDGET_ONLY_TUNING_KEYS: frozenset[str] = frozenset(
+    {
+        "model_params",
+        "training",
+        "evaluation",
+    }
+)
+
+
 def strip_for_backend(config: dict[str, Any]) -> dict[str, Any]:
     """Strip fields not recognized by LizyML schema.
 
     Uses the Pydantic JSON schema to whitelist allowed fields at each
     nesting level. Prevents 'Extra inputs are not permitted' errors.
+    Also removes Widget-only tuning fields (P-014).
     """
     schema = get_schema()
     defs = schema.get("$defs", {})
-    return _strip_to_schema(config, schema, defs)
+    result = _strip_to_schema(config, schema, defs)
+
+    # Remove Widget-only tuning fields before sending to backend
+    tuning = result.get("tuning")
+    if isinstance(tuning, dict):
+        stripped_tuning = {k: v for k, v in tuning.items() if k not in _WIDGET_ONLY_TUNING_KEYS}
+        result = {**result, "tuning": stripped_tuning}
+
+    return result
 
 
 # ── Default search space ──────────────────────────────────
@@ -252,3 +273,94 @@ def get_default_search_space(task: str) -> dict[str, Any]:
                 "choices": list(d.choices),
             }
     return space
+
+
+# ── Tune config preparation (extracted from adapter.py) ────
+
+SMART_PARAM_KEYS: frozenset[str] = frozenset(
+    {
+        "auto_num_leaves",
+        "num_leaves_ratio",
+        "min_data_in_leaf_ratio",
+        "min_data_in_bin_ratio",
+        "feature_weights",
+        "balanced",
+    }
+)
+
+
+def prepare_tune_overrides(result: dict[str, Any]) -> dict[str, Any]:
+    """Apply Tune-specific overrides: defaults, P-014 fields, direction."""
+    if not result.get("tuning"):
+        result = {**result, "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}}}
+    else:
+        existing_tuning = result["tuning"]
+        existing_optuna = existing_tuning.get("optuna") or {}
+        existing_params = existing_optuna.get("params") or {}
+        merged_optuna = {
+            **existing_optuna,
+            "params": {"n_trials": 50, **existing_params},
+            "space": existing_optuna.get("space") or {},
+        }
+        result = {**result, "tuning": {**existing_tuning, "optuna": merged_optuna}}
+
+    tune_section = result.get("tuning", {})
+    tune_model_params = tune_section.get("model_params")
+    tune_training = tune_section.get("training")
+    tune_evaluation = tune_section.get("evaluation")
+
+    if isinstance(tune_model_params, dict) and tune_model_params:
+        existing_params = result.get("model", {}).get("params", {})
+        result = {
+            **result,
+            "model": {
+                **result.get("model", {}),
+                "params": {**existing_params, **tune_model_params},
+            },
+        }
+    if isinstance(tune_training, dict) and tune_training:
+        result = {**result, "training": dict(tune_training)}
+    if isinstance(tune_evaluation, dict) and tune_evaluation:
+        result = {**result, "evaluation": dict(tune_evaluation)}
+
+    # Remove Smart Params and calibration (Tune non-referenced)
+    cleaned_model = {k: v for k, v in result.get("model", {}).items() if k not in SMART_PARAM_KEYS}
+    result = {k: v for k, v in result.items() if k != "calibration"}
+    result = {**result, "model": cleaned_model}
+
+    return _resolve_tune_direction(result, tune_evaluation)
+
+
+def _resolve_tune_direction(
+    result: dict[str, Any], tune_evaluation: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Set tuning direction from evaluation metrics or legacy widget metric."""
+    eval_metrics = (result.get("evaluation") or {}).get("metrics", [])
+    cur_optuna = result["tuning"]["optuna"]
+    raw_params = cur_optuna.get("params", {})
+    widget_metric: str | None = raw_params.get("metric")
+    cur_params = {k: v for k, v in raw_params.items() if k != "metric"}
+
+    if tune_evaluation is None and widget_metric is not None and widget_metric:
+        eval_metric_name: str = MODEL_METRIC_TO_EVAL.get(widget_metric, widget_metric)
+        existing = [
+            m for m in (result.get("evaluation") or {}).get("metrics", []) if m != eval_metric_name
+        ]
+        result = {
+            **result,
+            "evaluation": {
+                **result.get("evaluation", {}),
+                "metrics": [eval_metric_name, *existing],
+            },
+        }
+        cur_params = {**cur_params, "direction": resolve_direction(eval_metric_name)}
+    elif eval_metrics:
+        cur_params = {**cur_params, "direction": resolve_direction(eval_metrics[0])}
+
+    return {
+        **result,
+        "tuning": {
+            **result["tuning"],
+            "optuna": {**cur_optuna, "params": cur_params},
+        },
+    }

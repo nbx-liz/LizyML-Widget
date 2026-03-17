@@ -418,11 +418,11 @@ class WidgetService:
 
     def get_inference_plot(self, predictions: pd.DataFrame, plot_type: str) -> PlotData:
         """Generate an inference plot (prediction-distribution or shap-summary)."""
-        plot_fn = getattr(self._adapter, "plot_inference", None)
-        if plot_fn is None:
+        try:
+            return self._adapter.plot_inference(predictions, plot_type)
+        except AttributeError:
             msg = "Inference plots not supported by this adapter"
-            raise TypeError(msg)
-        return plot_fn(predictions, plot_type)  # type: ignore[no-any-return]
+            raise TypeError(msg) from None
 
     def get_available_plots(self) -> list[str]:
         if self._model is None:
@@ -447,20 +447,59 @@ class WidgetService:
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         """Classify best_params into (model, smart, training) categories.
 
-        Delegates to the adapter. Falls back to treating all params as model
-        category if the adapter does not support classification.
+        Delegates to the adapter (part of BackendAdapter Protocol per P-013).
         """
-        # classify_best_params is an adapter extension (not in BackendAdapter Protocol).
-        # Adapters without it fall back to treating all params as model-category.
-        # Adding to Protocol requires a HISTORY.md Proposal (change gate).
-        classify = getattr(self._adapter, "classify_best_params", None)
-        if callable(classify):
-            result = classify(params)
-            if isinstance(result, tuple) and len(result) == 3:
-                return result
-            _log.warning("classify_best_params returned unexpected type/length; falling back")
-            return dict(params), {}, {}
-        return dict(params), {}, {}
+        return self._adapter.classify_best_params(params)
+
+    def apply_best_params(
+        self,
+        params: dict[str, Any],
+        current_config: dict[str, Any],
+        *,
+        tune_snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Apply best_params from Tune to config, routing by category.
+
+        Returns a canonicalized config with best params applied.
+        Uses tune_snapshot as base if available, otherwise current_config.
+        """
+        if not params:
+            return self.canonicalize_config(copy.deepcopy(current_config))
+
+        # 1. Choose base config
+        if tune_snapshot is not None:
+            base = copy.deepcopy(tune_snapshot)
+            for key in ("data", "features", "split", "task"):
+                base.pop(key, None)
+        else:
+            base = copy.deepcopy(current_config)
+
+        # 2. Classify params
+        model_p, smart_p, training_p = self.classify_best_params(params)
+
+        # 3. Merge model params → model.params
+        model_section = dict(base.get("model", {}))
+        model_params = {**dict(model_section.get("params", {})), **model_p}
+        model_section = {**model_section, "params": model_params}
+
+        # 4. Merge smart params → model.* level
+        # smart_p already contains only smart-category keys (classified by adapter)
+        base = {**base, "model": {**model_section, **smart_p}}
+
+        # 5. Merge training params → training.early_stopping.*
+        if training_p:
+            training = dict(base.get("training", {}))
+            es = dict(training.get("early_stopping", {}))
+            es_updates: dict[str, Any] = {}
+            if "early_stopping_rounds" in training_p:
+                es_updates["rounds"] = training_p["early_stopping_rounds"]
+            if "validation_ratio" in training_p:
+                es_updates["validation_ratio"] = training_p["validation_ratio"]
+                es_updates["inner_valid"] = None
+            new_es = {**es, **es_updates}
+            base = {**base, "training": {**training, "early_stopping": new_es}}
+
+        return self.canonicalize_config(base)
 
     def save_model(self, path: str) -> str:
         """Persist the current trained model using the active adapter."""

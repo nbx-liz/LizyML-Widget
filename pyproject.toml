@@ -79,6 +79,7 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
+    "pytest-cov>=7.0.0",
     "vulture>=2.15",
 ]
 

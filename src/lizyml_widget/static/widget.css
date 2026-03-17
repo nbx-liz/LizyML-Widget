@@ -279,6 +279,21 @@
   color: var(--jp-ui-font-color2, #666);
 }
 
+.lzw-search-space-grid__group-wrap {
+  display: contents;
+}
+
+.lzw-search-space-grid__group {
+  display: contents;
+}
+
+.lzw-search-space-grid__group > div {
+  grid-column: 1 / -1;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--lzw-border, #e0e0e0);
+}
+
 .lzw-search-space-grid__row {
   display: contents;
 }
