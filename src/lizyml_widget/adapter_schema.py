@@ -242,13 +242,21 @@ def get_default_search_space(task: str) -> dict[str, Any]:
     ``{"type": "int"|"float"|"categorical", ...}``.
     Returns empty dict for unknown tasks.
     """
+    _default_space_fn = None
     try:
-        from lizyml.estimators.lgbm.defaults import default_space
+        from lizyml.estimators.lgbm.defaults import default_space as _ds
+
+        _default_space_fn = _ds
     except ImportError:
         try:
-            from lizyml.tuning.search_space import default_space  # v0.1.x fallback
+            from lizyml.tuning import search_space as _ss  # v0.1.x fallback
+
+            _default_space_fn = getattr(_ss, "default_space", None)
         except ImportError:
-            return {}
+            pass
+    if _default_space_fn is None:
+        return {}
+    default_space = _default_space_fn
 
     try:
         dims = default_space(task)
