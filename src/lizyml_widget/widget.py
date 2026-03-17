@@ -101,31 +101,17 @@ class LizyWidget(anywidget.AnyWidget):
 
         Raises RuntimeError if the job fails.
         """
-        done = threading.Event()
-
-        def _watch(change: dict[str, Any]) -> None:
-            if change["new"] in ("completed", "failed"):
-                done.set()
-
-        self.observe(_watch, names=["status"])
-        self._run_job("fit")
-        # Validation failure sets status synchronously before thread starts
-        if self.status in ("completed", "failed"):
-            done.set()
-        finished = done.wait(timeout=timeout)
-        self.unobserve(_watch, names=["status"])
-        if not finished and timeout is not None:
-            raise TimeoutError(f"fit() timed out after {timeout}s")
-        if self.status == "failed":
-            msg = self.error.get("message", "Fit failed")
-            raise RuntimeError(msg)
-        return self
+        return self._run_blocking_job("fit", timeout=timeout)
 
     def tune(self, *, timeout: float | None = None) -> LizyWidget:
         """Run Tune in a background thread and block until complete.
 
         Raises RuntimeError if the job fails.
         """
+        return self._run_blocking_job("tune", timeout=timeout)
+
+    def _run_blocking_job(self, job_type: str, *, timeout: float | None) -> LizyWidget:
+        """Run a job in a background thread and block until complete."""
         done = threading.Event()
 
         def _watch(change: dict[str, Any]) -> None:
@@ -133,15 +119,15 @@ class LizyWidget(anywidget.AnyWidget):
                 done.set()
 
         self.observe(_watch, names=["status"])
-        self._run_job("tune")
+        self._run_job(job_type)
         if self.status in ("completed", "failed"):
             done.set()
         finished = done.wait(timeout=timeout)
         self.unobserve(_watch, names=["status"])
         if not finished and timeout is not None:
-            raise TimeoutError(f"tune() timed out after {timeout}s")
+            raise TimeoutError(f"{job_type}() timed out after {timeout}s")
         if self.status == "failed":
-            msg = self.error.get("message", "Tune failed")
+            msg = self.error.get("message", f"{job_type.title()} failed")
             raise RuntimeError(msg)
         return self
 
@@ -307,7 +293,8 @@ class LizyWidget(anywidget.AnyWidget):
         except Exception as e:
             self.error = {"code": "COLUMN_ERROR", "message": str(e)}
 
-    _VALID_STRATEGIES: frozenset[str] = frozenset(
+    # Fallback strategies when backend_contract is not yet loaded
+    _FALLBACK_STRATEGIES: frozenset[str] = frozenset(
         {
             "kfold",
             "stratified_kfold",
@@ -320,7 +307,9 @@ class LizyWidget(anywidget.AnyWidget):
 
     def _handle_update_cv(self, payload: dict[str, Any]) -> None:
         strategy = payload.get("strategy", "kfold")
-        if strategy not in self._VALID_STRATEGIES:
+        valid = self.backend_contract.get("capabilities", {}).get("cv_strategies")
+        valid_set = frozenset(valid) if valid else self._FALLBACK_STRATEGIES
+        if strategy not in valid_set:
             self.error = {"code": "CV_ERROR", "message": f"Invalid strategy: {strategy!r}"}
             return
         n_splits = int(payload.get("n_splits", 5))
@@ -465,49 +454,10 @@ class LizyWidget(anywidget.AnyWidget):
         params = payload.get("params", {})
         if not params:
             return
-
         try:
-            # Restore tune-time config snapshot if available (P-005)
-            if self._tune_config_snapshot is not None:
-                current = copy.deepcopy(self._tune_config_snapshot)
-                # Strip data/features/split/task — managed by df_info/service
-                for key in ("data", "features", "split", "task"):
-                    current.pop(key, None)
-            else:
-                current = copy.deepcopy(dict(self.config))
-
-            # Classify params by category (model / smart / training)
-            model_p, smart_p, training_p = self._service.classify_best_params(params)
-
-            # Model params → model.params
-            model_section = dict(current.get("model", {}))
-            model_params = {**dict(model_section.get("params", {})), **model_p}
-            model_section = {**model_section, "params": model_params}
-
-            # Smart params → model.* level (e.g. model.num_leaves_ratio)
-            # Filter to known smart param keys to prevent overwriting model.name etc.
-            from .adapter_params import SMART_PARAMS
-
-            safe_smart = {k: v for k, v in smart_p.items() if k in SMART_PARAMS}
-            current = {**current, "model": {**model_section, **safe_smart}}
-
-            # Training params → training.early_stopping.*
-            if training_p:
-                training = dict(current.get("training", {}))
-                es = dict(training.get("early_stopping", {}))
-                es_updates: dict[str, Any] = {}
-                if "early_stopping_rounds" in training_p:
-                    es_updates["rounds"] = training_p["early_stopping_rounds"]
-                if "validation_ratio" in training_p:
-                    es_updates["validation_ratio"] = training_p["validation_ratio"]
-                    # Nullify inner_valid so deep-merge with defaults won't
-                    # re-add the default dict.  enforce_iv_exclusivity in
-                    # prepare_run_config strips this None before backend call.
-                    es_updates["inner_valid"] = None
-                new_es = {**es, **es_updates}
-                current = {**current, "training": {**training, "early_stopping": new_es}}
-
-            self.config = self._service.canonicalize_config(current)
+            self.config = self._service.apply_best_params(
+                params, dict(self.config), tune_snapshot=self._tune_config_snapshot
+            )
         except Exception as e:
             self.error = {"code": "APPLY_ERROR", "message": str(e)}
 
@@ -603,10 +553,13 @@ class LizyWidget(anywidget.AnyWidget):
             self.status = "failed"
             return
 
+        # Use non-daemon thread to avoid OpenMP thread degradation.
+        # Daemon threads cause libgomp to use single-threaded execution,
+        # resulting in 50x slowdown for LightGBM on WSL2/Linux.
         thread = threading.Thread(
             target=self._job_worker,
             args=(job_type, full_config),
-            daemon=True,
+            daemon=False,
         )
         self._job_thread = thread
         thread.start()

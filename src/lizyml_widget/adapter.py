@@ -17,13 +17,13 @@ from .adapter_params import (
     LGBM_PARAMS_TASK_INDEPENDENT,
     MODEL_METRIC_TO_EVAL,
     get_eval_metrics_by_task,
-    resolve_direction,
 )
 from .adapter_params import classify_best_params as _classify_best_params_impl
 from .adapter_schema import (
     enforce_iv_exclusivity,
     get_default_search_space,
     normalize_inner_valid,
+    prepare_tune_overrides,
     strip_for_backend,
 )
 from .types import (
@@ -115,6 +115,12 @@ class BackendAdapter(Protocol):
     def load_model(self, path: str) -> Any: ...
 
     def model_info(self, model: Any) -> dict[str, Any]: ...
+
+    def classify_best_params(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]: ...
+
+    def plot_inference(self, predictions: pd.DataFrame, plot_type: str) -> PlotData: ...
 
 
 class LizyMLAdapter:
@@ -358,49 +364,8 @@ class LizyMLAdapter:
         # Enforce auto_num_leaves exclusivity
         result = {**result, "model": self._enforce_auto_num_leaves(model)}
 
-        # Tune defaults
         if job_type == "tune":
-            if not result.get("tuning"):
-                result = {**result, "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}}}
-            else:
-                existing_tuning = result["tuning"]
-                existing_optuna = existing_tuning.get("optuna") or {}
-                existing_params = existing_optuna.get("params") or {}
-                merged_optuna = {
-                    **existing_optuna,
-                    "params": {"n_trials": 50, **existing_params},
-                    "space": existing_optuna.get("space") or {},
-                }
-                result = {**result, "tuning": {**existing_tuning, "optuna": merged_optuna}}
-
-            # ── Map widget tune metric → eval metric + auto-set direction ──
-            cur_optuna = result["tuning"]["optuna"]
-            cur_params = dict(cur_optuna.get("params", {}))
-            widget_metric: str | None = cur_params.pop("metric", None)
-            if widget_metric is not None and widget_metric:
-                eval_metric: str = self._MODEL_METRIC_TO_EVAL.get(widget_metric, widget_metric)
-                # Place eval metric first in evaluation.metrics
-                existing = [
-                    m
-                    for m in (result.get("evaluation") or {}).get("metrics", [])
-                    if m != eval_metric
-                ]
-                result = {
-                    **result,
-                    "evaluation": {
-                        **result.get("evaluation", {}),
-                        "metrics": [eval_metric, *existing],
-                    },
-                }
-                # Auto-set direction from metric
-                cur_params["direction"] = resolve_direction(eval_metric)
-            result = {
-                **result,
-                "tuning": {
-                    **result["tuning"],
-                    "optuna": {**cur_optuna, "params": cur_params},
-                },
-            }
+            result = prepare_tune_overrides(result)
 
         result = normalize_inner_valid(result)
         result = enforce_iv_exclusivity(result)
@@ -585,7 +550,7 @@ class LizyMLAdapter:
             except BaseException as exc:
                 error_holder["error"] = exc
 
-        thread = threading.Thread(target=_worker, daemon=True)
+        thread = threading.Thread(target=_worker, daemon=False)
         self._last_worker_thread = thread
         thread.start()
 
@@ -630,10 +595,40 @@ class LizyMLAdapter:
     ) -> TuningSummary:
         from dataclasses import asdict
 
-        result = self._run_with_cancel_polling(
-            model.tune,
-            on_progress,
-        )
+        # LizyML v0.2.0+ provides TuneProgressCallback fired after each trial.
+        # When available, run model.tune() directly (not in daemon thread) to
+        # avoid OpenMP thread degradation (12x slowdown on WSL2 daemon threads).
+        # Cancel-polling via daemon thread is the fallback for LizyML < 0.2.0.
+        progress_cb = None
+        use_direct_call = False
+        if on_progress is not None:
+            try:
+                from lizyml.core.types.tuning_result import TuneProgressInfo  # noqa: F811
+
+                use_direct_call = True
+
+                def progress_cb(info: TuneProgressInfo) -> None:
+                    msg = f"Trial {info.current_trial}/{info.total_trials}"
+                    if info.best_score is not None:
+                        msg += f" (best: {info.best_score:.4f})"
+                    on_progress(info.current_trial, info.total_trials, msg)
+
+            except ImportError:
+                pass  # LizyML < 0.2.0: no callback support
+
+        if use_direct_call:
+            # Direct call on current thread — full OpenMP utilization.
+            # Cancel via on_progress(InterruptedError) is caught by LizyML's
+            # except Exception and emitted as RuntimeWarning; tune runs to
+            # completion. This trade-off is acceptable: 12x CPU improvement
+            # outweighs the loss of immediate cancellation during tune.
+            result = model.tune(progress_callback=progress_cb)
+        else:
+            # Legacy path: daemon thread + cancel-polling for LizyML < 0.2.0
+            result = self._run_with_cancel_polling(
+                model.tune,
+                on_progress,
+            )
         return TuningSummary(
             best_params=result.best_params,
             best_score=result.best_score,

@@ -36,7 +36,7 @@ Homepage = "https://github.com/nbx-liz/LizyML-Widget"
 Repository = "https://github.com/nbx-liz/LizyML-Widget"
 
 [project.optional-dependencies]
-lizyml = ["lizyml[plots,tuning,calibration,explain]"]
+lizyml = ["lizyml[plots,tuning,calibration,explain]>=0.2.0"]
 dev = [
     "pytest>=7.0",
     "ruff>=0.4",
@@ -79,6 +79,7 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
+    "pytest-cov>=7.0.0",
     "vulture>=2.15",
 ]
 

@@ -451,7 +451,7 @@
 ### P-013: `classify_best_params` を `BackendAdapter` Protocol に追加
 
 - **日付**: 2026-03-14
-- **ステータス**: Proposed
+- **ステータス**: Approved（2026-03-17 承認）
 - **背景**:
   - Tune 完了後の Apply to Fit で `best_params` を `model / smart / training` カテゴリに分類する `classify_best_params` メソッドが `LizyMLAdapter` に実装済み。
   - 現状 `WidgetService` は `getattr` による duck typing で呼び出しており、`BackendAdapter` Protocol に含まれていない。
@@ -465,3 +465,325 @@
   - `BackendAdapter` Protocol の変更（`adapter.py`）
   - `WidgetService.classify_best_params` の簡素化（`service.py`）
   - 将来の Adapter 実装者への契約明示
+
+---
+
+### P-014: Fit/Tune タブ再設計（Fit 欠落項目修正 + Tune 独立設定 + 対応関係の明示）
+
+- **日付**: 2026-03-15
+- **ステータス**: Approved（2026-03-15 承認）
+- **関連**: BLUEPRINT.md §5.3, §3.3, §3.4, §6.3
+- **背景**:
+  - Fit タブに LizyML `LGBMConfig` の 4 つの nullable フィールド（`balanced`, `feature_weights`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`）が存在するが、DynForm の `anyOf` 解決が非 null バリアントを展開するだけで **null トグルを提供しない**ため、ユーザーが null（自動判定 / 無効）に設定できない。
+  - `model.params` は `additionalProperties: true` だが、`TypedParamsEditor` に定義済みの項目（`parameter_hints` の 12 項目）以外を追加する UI がなく、LightGBM が受け付ける多数のパラメータを設定できない。
+  - Tune タブは `tuning.optuna` 固有の設定（`n_trials`, `metric`, `space`）のみを表示し、`model.params`・`training`・`evaluation` は Fit タブの設定に**暗黙的に依存**している。ユーザーからは Tune がどの設定で実行されるか見えない。
+  - LizyML 仕様上、Tune は以下を**非参照**: `model.auto_num_leaves`, `model.num_leaves_ratio`, `model.min_data_in_leaf_ratio`, `model.min_data_in_bin_ratio`, `model.feature_weights`, `model.balanced`, `calibration.*`。これらは Fit 専用パス（`resolve_smart_params`）でのみ使用される。
+  - Tune Settings の `metric`（`tuning.optuna.params.metric`）は実質的に `evaluation.metrics` の先頭要素を選ぶ操作であり、Adapter 内で `MODEL_METRIC_TO_EVAL` 変換 + `evaluation.metrics` 並べ替えを行っているだけで独立した概念ではない。
+- **提案内容**:
+
+  **A. Fit タブ欠落修正**
+
+  1. nullable フィールドを以下の UI で操作可能にする:
+     - `min_data_in_leaf_ratio` / `min_data_in_bin_ratio`: `lzw-stepper` を常に表示する。値は常に数値。
+     - `feature_weights`: `lzw-toggle` で ON/OFF。OFF = `null`。ON 時は列名セレクト（`df_info.columns` から `<select>` で選択）+ `lzw-stepper`（重み値）のペアを複数行追加できる構造化入力。
+     - `balanced`: `lzw-toggle` で ON/OFF。OFF = `null`（自動判定）、ON = `true`。
+  2. `TypedParamsEditor` の末尾に **Additional Params** セクションを配置する。パラメーター名は `<select>`（`backend_contract.ui_schema.additional_params` から候補を供給）、値は `lzw-stepper` で入力する。各行に `×` 削除ボタン。[+ Add] で行追加。`TypedParamsEditor` で描画済みのキーは選択肢から除外する。
+
+  **Fit タブ UI（P-014 改訂後）:**
+
+  ```
+  ┌──────────────────────────────────────────────────┐
+  │ [▶ Fit]  [ Tune]                  [━━ Fit ━━]   │  ← sticky
+  ├──────────────────────────────────────────────────┤
+  │ ▸ Model ─────────────────────────────────────── │
+  │   Model Type     lgbm （読み取り専用）            │
+  │                                                  │
+  │   ── Smart Params（Fit 専用）──                   │
+  │   Auto Num Leaves  [●──]  ← lzw-toggle           │
+  │   Num Leaves Ratio  [ - 1.00 + ]  ← auto=ON 時  │
+  │   (auto=OFF 時: Num Leaves [ - 256 + ] に切替)  │
+  │   Min Data In Leaf Ratio  [ - 0.01 + ]           │  ← 常に表示
+  │   Min Data In Bin Ratio   [ - 0.01 + ]           │  ← 常に表示
+  │   Feature Weights  [──●]  ← lzw-toggle           │
+  │   (ON 時:)                                       │
+  │     ┌────────────────┬──────────────┬───┐        │
+  │     │ [col_a      ▼] │ [ - 1.5 + ]  │ × │        │  ← 列名セレクト + stepper
+  │     │ [col_b      ▼] │ [ - 2.0 + ]  │ × │        │
+  │     └────────────────┴──────────────┴───┘        │
+  │     [+ Add]                                      │
+  │   Balanced  [──●]  ← lzw-toggle (OFF=null,ON=true)│
+  │                                                  │
+  │   ── Model Params ──                             │
+  │   Objective    [binary           ▼]  ← select    │
+  │   Metric       [auc][binary_logloss][...]        │  ← chip (multi)
+  │   N Estimators [ - 1500 + ]                      │
+  │   Learning Rate[ - 0.001 + ]                     │
+  │   Max Depth    [ - 5 + ]                         │
+  │   Max Bin      [ - 511 + ]                       │
+  │   Feature Frac [ - 0.7 + ]                       │
+  │   Bagging Frac [ - 0.7 + ]                       │
+  │   Bagging Freq [ - 10 + ]                        │
+  │   Lambda L1    [ - 0.0 + ]                       │
+  │   Lambda L2    [ - 0.0 + ]                       │
+  │   First Metric Only  [●──]  ← toggle             │
+  │   Log Output (verbose)  [-1       ]              │
+  │                                                  │
+  │   ── Additional Params ──                        │
+  │   ┌──────────────────────┬──────────────┬───┐    │
+  │   │ [min_child_weight ▼] │ [ - 0.001 +] │ × │    │  ← パラメーター名セレクト + stepper
+  │   │ [extra_trees      ▼] │ [ - 1 +    ] │ × │    │
+  │   └──────────────────────┴──────────────┴───┘    │
+  │   [+ Add]                                        │
+  │                                                  │
+  │ ▸ Training ──────────────────────────────────── │
+  │   seed               [ - 42 + ]                 │
+  │   Early Stopping     [●──]                       │
+  │   (ON 時:)                                       │
+  │     Rounds           [ - 150 + ]                 │
+  │     Validation Ratio [ - 0.1 + ]                 │
+  │     Inner Validation [Default   ▼]               │
+  │                                                  │
+  │ ▸ Evaluation ────────────────────────────────── │
+  │   metrics  [auc][logloss][f1][accuracy][...]    │  ← chip (multi)
+  │                                                  │
+  │ ▸ Calibration [●──] ────────────────────────── │  ← binary のみ。トグル左寄せ
+  │   (ON 時:)                                       │
+  │     method   [platt             ▼]               │
+  │     n_splits [5               ]                  │
+  │                                                  │
+  │ [Import YAML]  [Export YAML]  [Raw Config]       │
+  └──────────────────────────────────────────────────┘
+  ```
+
+  Smart Params の各フィールド挙動:
+  - `auto_num_leaves`: 既存どおり。ON = ratio モード、OFF = num_leaves 直接指定。
+  - `min_data_in_leaf_ratio` / `min_data_in_bin_ratio`: `lzw-stepper` を常に表示。初期値 `0.01`。
+  - `feature_weights`: `lzw-toggle` で ON/OFF。OFF = `null`（無効）。ON 時は列名（`df_info.columns` から `<select>` で選択）+ 重み（`lzw-stepper`、初期値 `1.0`）のペアを複数行追加できる。各行に `×` 削除ボタン。[+ Add] で行追加。
+  - `balanced`: `lzw-toggle` で ON/OFF。OFF = `null`（task に応じて自動判定）、ON = `true`（強制バランシング）。
+
+  Additional Params の挙動:
+  - `TypedParamsEditor` が描画するキー（`parameter_hints` 定義済み + `verbose`）を除外した `model.params` の残りを表示する。
+  - パラメーター名は `<select>` で選択する。候補は `backend_contract.ui_schema.additional_params` から供給される（LightGBM が受け付けるパラメーター名のうち、`parameter_hints` に含まれないもの）。
+  - 値は `lzw-stepper` で入力する。
+  - 各行に `×` 削除ボタン。[+ Add] で行追加。
+
+  **B. Tune タブ独立設定化**
+
+  1. `config` traitlet の `tuning` セクションを拡張し、Tune 専用の共通設定を格納する:
+     - `tuning.model_params: dict` — Search Space の Fixed model param 値を格納する。
+     - `tuning.training: dict` — Search Space の Fixed training 値を格納する。
+     - `tuning.evaluation: dict` — Tune 用 evaluation 設定（`metrics` 配列。先頭 = 最適化対象）
+     - これらは Widget-only フィールドであり、`strip_for_backend()` で LizyML への送信前に除去される。
+  2. Tune タブに以下の **3 セクション**を表示する:
+     - **Tuning Settings** — `n_trials`
+     - **Search Space** — Model Params と Training Params のベースライン値 + 探索空間を**統合管理**する。Fixed 行の Config 列がベースライン値、Range/Choice 行が探索空間。[+ Add] で任意パラメータを行追加可能。
+     - **Evaluation** — Optimization Metric（セグメントボタン、単一選択）+ Additional Metrics（チップ、複数選択、任意）
+  3. Tune タブから以下を**除外**する:
+     - 独立した Model Params セクション（Search Space に統合）
+     - 独立した Training セクション（Search Space に統合）
+     - Smart Params / Calibration（Tune 非参照）
+     - Tune Settings の standalone `metric`（Evaluation セクションに統合）
+  4. `tuning.optuna.params.metric` フィールドを**廃止**する。最適化対象メトリックは `tuning.evaluation.metrics[0]` から決定する。Tune の Evaluation が LizyML registry metric 名を直接使用するため、Adapter の `MODEL_METRIC_TO_EVAL` 変換は Tune 経路では不要になる。
+
+  **Tune タブ UI（P-014 改訂後）:**
+
+  ```
+  ┌──────────────────────────────────────────────────┐
+  │ [ Fit]  [▶ Tune]                  [━━ Tune ━━]  │  ← sticky
+  ├──────────────────────────────────────────────────┤
+  │ ▸ Tuning Settings ──────────────────────────── │
+  │   n_trials      [ - 50 + ]                       │
+  │                                                  │
+  │ ▸ Search Space ──────────────────────────────── │
+  │   ┌──────────────────┬────────────────┬──────────────────┐
+  │   │ Param            │ Mode           │ Config           │
+  │   ├──────────────────┼────────────────┼──────────────────┤
+  │   │ ── Model Params ─┼────────────────┼──────────────────┤
+  │   │ objective        │ [Fixed|Choice] │ [binary       ▼] │  ← Fixed: select
+  │   │ metric           │ [Fixed|Choice] │ [auc][bin_l][..] │  ← Fixed: chip(multi)
+  │   │ n_estimators     │ [Fixed|Range ] │ [ - 1500 +     ] │  ← Fixed: stepper
+  │   │ learning_rate    │ [Fixed|Range ] │ [ - 0.001 +    ] │
+  │   │ max_depth        │ [Fixed|Range ] │ [ - 5 +        ] │
+  │   │ max_bin          │ [Fixed|Range ] │ [ - 511 +      ] │
+  │   │ feature_fraction │ [Fixed|Range ] │ [ - 0.7 +      ] │
+  │   │ bagging_fraction │ [Fixed|Range ] │ [ - 0.7 +      ] │
+  │   │ bagging_freq     │ [Fixed|Range ] │ [ - 10 +       ] │
+  │   │ lambda_l1        │ [Fixed|Range ] │ [ - 0.0 +      ] │
+  │   │ lambda_l2        │ [Fixed|Range ] │ [ - 0.000001 + ] │
+  │   │ first_metric_only│ [Fixed|Choice] │ [●──]            │
+  │   │ verbose          │ [Fixed|Range ] │ [ - -1 +       ] │
+  │   │ auto_num_leaves  │ [Fixed|Choice] │ [●──]            │
+  │   │ num_leaves_ratio │ [Fixed|Range ] │ [ - 1.0 +      ] │
+  │   │ min_data_in_l... │ [Fixed|Range ] │ [ - 0.01 +     ] │
+  │   │ min_data_in_b... │ [Fixed|Range ] │ [ - 0.01 +     ] │
+  │   │ balanced         │ [Fixed|Choice] │ [──●]            │
+  │   │                  │                │                  │
+  │   │ ── Training ─────┼────────────────┼──────────────────┤
+  │   │ seed             │ Fixed          │ [ - 42 +       ] │
+  │   │ early_stop.enable│ Fixed          │ [●──]            │
+  │   │ early_stop.rounds│ [Fixed|Range ] │ [ - 150 +      ] │
+  │   │ validation_ratio │ [Fixed|Range ] │ [ - 0.1 +      ] │
+  │   │ inner_valid      │ Fixed          │ [Default     ▼]  │
+  │   │                  │                │                  │
+  │   │ (Range に切り替えた場合:)                             │
+  │   │ n_estimators     │ [Fixed|▶Range] │[-600+] ~ [-2500+]│
+  │   │                  │                │                  │
+  │   │ (Choice に切り替えた場合:)                            │
+  │   │ objective        │[Fixed|▶Choice] │ ☑bin ☑cross      │
+  │   ├──────────────────┼────────────────┼──────────────────┤
+  │   │ [+ Add ▼]        │                │                  │
+  │   └──────────────────┴────────────────┴──────────────────┘
+  │                                                  │
+  │ ▸ Evaluation ────────────────────────────────── │
+  │   Optimization Metric                            │
+  │     [ auc | logloss | f1 | accuracy | ...]      │  ← segment (single)
+  │   Additional Metrics                             │
+  │     [logloss][f1][accuracy][...]                 │  ← chip (multi, 任意)
+  │                                                  │
+  │ [Import YAML]  [Export YAML]  [Raw Config]       │
+  └──────────────────────────────────────────────────┘
+  ```
+
+  Tune タブ各セクションの挙動:
+
+  **Tuning Settings:**
+  - `n_trials`: `lzw-stepper`（min=1）。Optuna の試行回数。
+
+  **Search Space（Model Params + Training 統合）:**
+  - Search Space は Tune における **model params と training params のベースライン値 + 探索空間の統合管理場所**となる。
+  - `backend_contract.ui_schema.search_space_catalog` から pre-populate された行を **Model Params** グループと **Training** グループのサブ見出しで視覚的に区切る。
+  - [+ Add] で任意パラメータ（`backend_contract.ui_schema.additional_params` から `<select>` で選択）を行追加できる。
+  - 各行の **Mode** 列によって Config 列の UI が変わる:
+    - **Fixed**: パラメータの型に応じた入力コントロール（stepper / select / toggle / chip）で値を直接編集する。model params の Fixed 値は `tuning.model_params` に、training の Fixed 値は `tuning.training` に格納する。
+    - **Range**: `low` / `high` の `lzw-stepper` ペアで探索範囲を指定する。`tuning.optuna.space` に格納される。
+    - **Choice**: チップボタン（複数選択）で候補値を指定する。`tuning.optuna.space` に格納される。
+  - Training 行の Mode 制約:
+    - `seed` / `early_stopping.enabled` / `inner_valid`: **Fixed のみ**（Mode セグメント非表示）。
+    - `early_stopping.rounds` / `validation_ratio`: Fixed / Range を選択可能。
+  - Fixed 値の初期値は `initialize_config` 時に Fit の現在値（`model.params` / `training`）からコピーする。以降は Fit と独立。
+  - Search Space に含まれないパラメータは Tune 実行時に backend default を使用する（Fit の値にはフォールバックしない）。
+
+  **Evaluation:**
+  - **Optimization Metric**: セグメントボタン（単一選択）。`tuning.evaluation.metrics[0]` に格納する。候補は `backend_contract.ui_schema.option_sets.metric[task]`（LizyML registry metric 名）。初期値は task 別の先頭 metric。`direction`（maximize / minimize）は選択されたメトリックに応じて Adapter が自動決定する。
+  - **Additional Metrics**: チップボタン（複数選択、任意）。`tuning.evaluation.metrics[1..]` に格納する。候補は Optimization Metric と同じ option set から、選択済みの Optimization Metric を除いたもの。空でもよい。LizyML は全メトリックを計算するが、Optuna objective には使用しない。
+
+  Fit / Tune タブ対応関係:
+
+  | セクション | Fit タブ | Tune タブ | 備考 |
+  |-----------|---------|----------|------|
+  | Smart Params | `model.auto_num_leaves` 等 | ─ | Fit 専用。Tune は Search Space の探索行で代替 |
+  | Model Params | `model.params`（TypedParamsEditor + Additional Params） | Search Space 内 Model Params グループ | Fit は専用フォーム、Tune は Search Space 内で Fixed/Range/Choice 管理 |
+  | Training | `training`（専用セクション） | Search Space 内 Training グループ | Fit は専用フォーム、Tune は Search Space 内で Fixed/Range 管理 |
+  | Evaluation | `evaluation`（chip multi） | `tuning.evaluation`（segment + chip） | Tune は Optimization Metric を明示的に分離 |
+  | Calibration | `calibration` | ─ | Fit 専用。Tune 非参照 |
+  | Tuning Settings | ─ | `tuning.optuna.params` | Tune 専用 |
+
+  **C. 対応関係の明示**
+
+  1. Fit の Model Params / Training の各項目と、Tune の Search Space 内の**同名パラメータ行**が対応する。Search Space 内の Model Params / Training サブグループ見出しが、Fit タブのセクション構成と視覚的に対応する。
+  2. Fit 専用セクション（Smart Params / Calibration）は Fit タブのみ、Tune 専用セクション（Tuning Settings / Search Space / Evaluation）は Tune タブのみに表示する。
+  3. Search Space の Fixed 値と `tuning.evaluation` の**初期値は Fit の現在値からコピー**する（`initialize_config` 時）。以降は独立して編集可能。
+
+  **D. Adapter `prepare_run_config(job_type="tune")` の変更**
+
+  1. `tuning.model_params`（Search Space の Fixed model param 値）を `model.params` に置換する（Fit の `model.params` は参照しない）
+  2. `tuning.training`（Search Space の Fixed training 値）を `training` に置換する
+  3. `tuning.evaluation` を `evaluation` に置換する
+  4. Smart params（`auto_num_leaves` 等）・calibration を除去する
+  5. `evaluation.metrics[0]` を最適化対象メトリックとし、`direction` を自動設定する
+  6. `tuning.model_params` / `tuning.training` / `tuning.evaluation` が未設定の既存 config では、Fit 側の値にフォールバックする（後方互換）
+
+  **E. Backend Contract 拡張**
+
+  - `ui_schema.additional_params`: LightGBM が受け付けるパラメーター名のうち `parameter_hints` および `search_space_catalog` に含まれないものを候補として供給する。Fit タブの Additional Params セクションおよび Tune タブの Search Space [+ Add] の `<select>` が使用する。
+  - `ui_schema.search_space_catalog` に Training パラメータ行を追加する（`seed`, `early_stopping.enabled`, `early_stopping.rounds`, `validation_ratio`, `inner_valid`）。各行に `modes` と `group` 属性を持たせ、Training グループの表示とMode 制約（Fixed のみ / Fixed+Range）を制御する。
+
+- **影響範囲**:
+  - `config` traitlet 構造変更（`tuning` セクションに `model_params` / `training` / `evaluation` を追加）
+  - `BackendAdapter.prepare_run_config()` の tune 処理変更
+  - `BackendAdapter.initialize_config()` の tuning デフォルト生成
+  - `adapter_schema.strip_for_backend()` に Widget-only `tuning` フィールドの除去を追加
+  - DynForm の nullable 型サポート追加（null トグル UI）
+  - ConfigTab.tsx の Fit / Tune 両サブタブの UI 再構成
+  - `tuning.optuna.params.metric` の廃止
+  - Apply to Fit（P-005）のスナップショット復元ロジック更新
+- **互換性**:
+  - Python API（`fit()`, `tune()`, `set_config()`, `load_config()`）の既存インターフェースを維持する。
+  - `tuning.optuna.params.metric` を含む既存 config の import 時は、Adapter が `tuning.evaluation.metrics` に変換する legacy 互換を提供する。
+  - `tuning.model_params` / `tuning.training` / `tuning.evaluation` が未設定の既存 config は、`prepare_run_config()` で Fit 側の値にフォールバックする。
+- **代替案**:
+  - Fit / Tune で `config` traitlet を完全に 2 つに分離する案。LizyML の単一 config 構造と乖離が大きくなるため不採用。
+  - 共通設定を別タブ（Common タブ）に移す案。タブ数が増え操作コストが上がるため不採用。
+  - Tune タブに Fit の値を読み取り表示のみ行う案。Tune 独立設定の要件を満たさないため不採用。
+- **受け入れ条件**:
+  - Fit タブで `balanced`, `feature_weights`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio` が null ↔ 具体値で切り替え可能。
+  - Fit タブで `model.params` に任意パラメータを追加・削除可能。
+  - Tune タブに Model Params / Training / Evaluation セクションが表示され、Fit と独立して編集可能。
+  - Tune 実行が Tune タブ + Data タブの設定のみで完結し、Fit タブの設定に依存しない。
+  - Tune の最適化対象メトリックが `tuning.evaluation.metrics[0]` から決定される。
+  - Apply to Fit（P-005）が引き続き正しく動作する。
+  - 既存テスト 394 件が回帰なくパスする。
+
+---
+
+### P-015: `plot_inference` を `BackendAdapter` Protocol に追加
+
+- **日付**: 2026-03-17
+- **ステータス**: Approved（2026-03-17 承認）
+- **背景**:
+  - 推論結果のプロット生成（`prediction-distribution`, `shap-summary`）を行う `plot_inference` メソッドが `LizyMLAdapter` に実装済み。
+  - 現状 `WidgetService.get_inference_plot()` は `getattr(self._adapter, "plot_inference", None)` による duck typing で呼び出しており、`BackendAdapter` Protocol に含まれていない。
+  - 新規 Adapter 実装時に推論プロット生成の契約が不明瞭になるリスクがある。
+- **提案内容**:
+  - `BackendAdapter` Protocol に `plot_inference(predictions: pd.DataFrame, plot_type: str) -> PlotData` を追加。
+  - `WidgetService.get_inference_plot()` の `getattr` フォールバックを通常のメソッド呼び出しに変更。
+- **影響範囲**:
+  - `BackendAdapter` Protocol の変更（`adapter.py`）
+  - `WidgetService.get_inference_plot` の簡素化（`service.py`）
+  - 将来の Adapter 実装者への契約明示
+
+---
+
+### P-016: `cv_strategies` を `BackendContract` capabilities に追加
+
+- **日付**: 2026-03-17
+- **ステータス**: Approved（2026-03-17 承認）
+- **背景**:
+  - Widget の `_handle_update_cv` に CV strategy の有効値リストが `_VALID_STRATEGIES` として frozenset でハードコードされている。
+  - Widget はバックエンド固有の知識を持つべきではなく、有効な strategy 一覧は Backend Contract から取得すべきである。
+- **提案内容**:
+  - `BackendContract.capabilities` に `cv_strategies` リストを追加（例: `["kfold", "stratified_kfold", "time_series", "group_time_series", "purged_time_series", "group_kfold"]`）。
+  - Widget の `_handle_update_cv` は `self.backend_contract["capabilities"]["cv_strategies"]` から有効値を取得し、フォールバックとして現行のハードコード値を使用する。
+  - Widget の `_VALID_STRATEGIES` クラス属性を削除する。
+- **影響範囲**:
+  - `adapter_contract.py` の `build_capabilities()` に `cv_strategies` 追加
+  - `widget.py` の `_handle_update_cv` の strategy 検証ロジック変更
+  - `BackendContract` の capabilities 構造変更
+
+---
+
+### P-017: LizyML v0.2.0 対応（TuneProgressCallback 統合 + stratified_group_kfold + calibration n_splits 非推奨）
+
+- **日付**: 2026-03-18
+- **ステータス**: Approved（2026-03-18 承認）
+- **背景**:
+  - LizyML v0.2.0 が `TuneProgressCallback` を導入し、Tune 中の trial ごとの進捗情報（`current_trial`, `total_trials`, `best_score`, `latest_score`）をコールバックで提供する。
+  - 現状 Widget の Tune 進捗は `_run_with_cancel_polling` による 0.5 秒間隔のポーリングで、進捗メッセージが不正確（常に `"Processing..."`）。
+  - LizyML v0.2.0 が新 split method `stratified_group_kfold` を追加。
+  - LizyML v0.2.0 が `calibration.n_splits` を非推奨化（outer CV splits を再利用）。
+  - LizyML v0.2.0 が `default_space()` の import パスを変更。
+  - LizyML v0.2.0 の `TuningResult` が `best_model_params` / `best_smart_params` / `best_training_params` に 3分割（`best_params` property で backward compat 維持）。
+- **提案内容**:
+  - Adapter `tune()` 内で `TuneProgressCallback` を作成し `model.tune(progress_callback=...)` に渡す。Widget の `on_progress` コールバックへのブリッジとして機能。
+  - `capabilities.cv_strategies` に `stratified_group_kfold` を追加。
+  - `build_config` の split フィールド条件に `stratified_group_kfold` を追加。
+  - `default_space()` の import パスを `lizyml.estimators.lgbm.defaults` に変更（旧パスを fallback）。
+  - `calibration.n_splits` の UI に非推奨表示を追加。
+  - `oof_coverage` を `FitSummary.metrics` dict 内に pass through（型変更なし）。
+- **影響範囲**:
+  - `adapter.py`: `tune()` 内の progress callback ブリッジ実装
+  - `adapter_schema.py`: `default_space()` import パス変更
+  - `adapter_contract.py`: `cv_strategies` に `stratified_group_kfold` 追加
+  - `service.py`: `build_config` の split フィールド条件追加
+  - `FitSubTab.tsx`: calibration `n_splits` の非推奨表示
+  - `pyproject.toml`: `lizyml>=0.2.0` バージョンピン

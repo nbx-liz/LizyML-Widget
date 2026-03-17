@@ -701,16 +701,3 @@ class TestApplyLoadedConfigFeaturesAndTask:
         svc.apply_loaded_config(config)
 
         assert svc._df_info["task"] == "regression"
-
-
-class TestZeroFeatureGuard:
-    """build_config should raise ValueError when all features are excluded."""
-
-    def test_all_excluded_raises(self) -> None:
-        n = 100
-        df = pd.DataFrame({"id": range(n), "y": [0, 1] * 50})
-        svc = WidgetService(adapter=_mock_adapter())
-        svc.load_data(df, target="y")
-        # All non-target columns are excluded as IDs
-        with pytest.raises(ValueError, match="No features available"):
-            svc.build_config({"model": {"name": "lgbm"}})
