@@ -441,6 +441,20 @@ class TestAvailablePlots:
         assert "roc-curve" in plots
         assert "calibration" not in plots
 
+    def test_multiclass_includes_roc_curve(self) -> None:
+        """adapter.py:736-737: multiclass fitted model includes roc-curve."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_model._cfg.task = "multiclass"
+        mock_model.fit_result.calibrator = None
+        del mock_model._tuning_result
+
+        plots = adapter.available_plots(mock_model)
+        assert "roc-curve" in plots
+        assert "calibration" not in plots
+        assert "probability-histogram" not in plots
+        assert "residuals" not in plots
+
     def test_tuning_plot_when_tuned(self) -> None:
         adapter = LizyMLAdapter()
         mock_model = MagicMock()
@@ -801,3 +815,22 @@ class TestPlotInference:
         df = pd.DataFrame({"pred": [0.1, 0.5]})
         with pytest.raises(ValueError, match="Unknown inference plot type"):
             adapter.plot_inference(df, "nonexistent")
+
+    def test_plotly_not_installed_raises_import_error(self) -> None:
+        """adapter.py:755-757: ImportError when plotly is not available."""
+        import builtins
+
+        original_import = builtins.__import__
+
+        def _block_plotly(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "plotly.graph_objects" or name == "plotly":
+                raise ImportError("No module named 'plotly'")
+            return original_import(name, *args, **kwargs)
+
+        adapter = LizyMLAdapter()
+        df = pd.DataFrame({"pred": [0.1, 0.5]})
+        with (
+            patch.object(builtins, "__import__", side_effect=_block_plotly),
+            pytest.raises(ImportError, match="plotly is required"),
+        ):
+            adapter.plot_inference(df, "prediction-distribution")

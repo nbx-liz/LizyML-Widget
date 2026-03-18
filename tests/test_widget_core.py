@@ -144,6 +144,25 @@ class TestNormalizeMetrics:
         w = _make_widget()
         assert w._normalize_metrics([]) == {}
 
+    def test_normalize_metrics_skips_empty_name(self) -> None:
+        """widget.py:664-666: records with empty metric name are skipped."""
+        w = _make_widget()
+        records = [
+            {"index": "", "if_mean": 0.5, "oof": 0.6},
+            {"index": "rmse", "if_mean": 0.3},
+        ]
+        result = w._normalize_metrics(records)
+        assert "rmse" in result
+        assert "" not in result
+        assert len(result) == 1
+
+    def test_normalize_metrics_skips_missing_name_keys(self) -> None:
+        """widget.py:664-666: records with no 'index' or 'metric' key are skipped."""
+        w = _make_widget()
+        records = [{"if_mean": 0.5}]
+        result = w._normalize_metrics(records)
+        assert result == {}
+
 
 class TestDfInfoChangeDetection:
     """Verify traitlet change notification fires on every df_info update."""

@@ -280,6 +280,85 @@ class TestStratifiedGroupKfold:
         assert "stratified_group_kfold" in caps["cv_strategies"]
 
 
+class TestBuildConfigCVStrategySplitFields:
+    """Cover CV strategy-dependent split field logic (service.py lines 260-274)."""
+
+    def _make_service(self, cv_strategy: str, **cv_kwargs: Any) -> WidgetService:
+        adapter = _mock_adapter()
+        adapter.classify_best_params = MagicMock(side_effect=LizyMLAdapter().classify_best_params)
+        svc = WidgetService(adapter=adapter)
+        df = pd.DataFrame({"x": range(50), "t": range(50), "g": [0, 1] * 25, "y": [0, 1] * 25})
+        svc.load_data(df, target="y")
+        svc.update_cv(cv_strategy, n_splits=3, **cv_kwargs)
+        return svc
+
+    def test_purged_time_series_includes_purge_gap_embargo(self) -> None:
+        """service.py:267-269: purged_time_series adds purge_gap, embargo."""
+        svc = self._make_service(
+            "purged_time_series",
+            time_column="t",
+            purge_gap=10,
+            embargo=5,
+            train_size_max=100,
+            test_size_max=50,
+        )
+        config = svc.build_config({"model": {"name": "lgbm"}})
+        split = config["split"]
+        assert split["method"] == "purged_time_series"
+        assert split["purge_gap"] == 10
+        assert split["embargo"] == 5
+        assert split["train_size_max"] == 100
+        assert split["test_size_max"] == 50
+        assert "gap" not in split
+        assert "random_state" not in split
+
+    def test_time_series_includes_gap(self) -> None:
+        """service.py:265-266: time_series adds gap."""
+        svc = self._make_service("time_series", time_column="t", gap=3)
+        config = svc.build_config({"model": {"name": "lgbm"}})
+        split = config["split"]
+        assert split["method"] == "time_series"
+        assert split["gap"] == 3
+        assert "purge_gap" not in split
+        assert "embargo" not in split
+
+    def test_group_time_series_includes_gap_and_size_limits(self) -> None:
+        """service.py:265-266,271-274: group_time_series adds gap + size limits."""
+        svc = self._make_service(
+            "group_time_series",
+            time_column="t",
+            group_column="g",
+            gap=2,
+            train_size_max=200,
+        )
+        config = svc.build_config({"model": {"name": "lgbm"}})
+        split = config["split"]
+        assert split["method"] == "group_time_series"
+        assert split["gap"] == 2
+        assert split["train_size_max"] == 200
+        assert config["data"]["group_col"] == "g"
+        assert config["data"]["time_col"] == "t"
+
+    def test_kfold_includes_random_state_and_shuffle(self) -> None:
+        """service.py:260-264: kfold adds random_state and shuffle."""
+        svc = self._make_service("kfold", random_state=99, shuffle=False)
+        config = svc.build_config({"model": {"name": "lgbm"}})
+        split = config["split"]
+        assert split["random_state"] == 99
+        assert split["shuffle"] is False
+        assert "gap" not in split
+        assert "purge_gap" not in split
+
+    def test_stratified_kfold_has_random_state_no_shuffle(self) -> None:
+        """service.py:261-264: stratified_kfold adds random_state but not shuffle."""
+        svc = self._make_service("stratified_kfold", random_state=42)
+        config = svc.build_config({"model": {"name": "lgbm"}})
+        split = config["split"]
+        assert split["random_state"] == 42
+        assert "shuffle" not in split
+        assert "gap" not in split
+
+
 class TestZeroFeatureGuard:
     """build_config should raise ValueError when all features are excluded."""
 
