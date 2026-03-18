@@ -412,6 +412,61 @@ class TestNormalizeInnerValidExclusivity:
         assert "inner_valid" not in es
         assert "validation_ratio" not in es
 
+    def test_prepare_run_config_holdout_preserves_all(self) -> None:
+        """holdout via prepare_run_config preserves ratio, random_state, stratify."""
+        adapter = LizyMLAdapter()
+        config = adapter.initialize_config(task="binary")
+        config = {
+            **config,
+            "task": "binary",
+            "data": {"target": "y"},
+            "features": {"exclude": [], "categorical": []},
+            "split": {"method": "kfold", "n_splits": 5},
+            "training": {
+                "early_stopping": {
+                    "inner_valid": {
+                        "method": "holdout",
+                        "ratio": 0.1,
+                        "random_state": 42,
+                        "stratify": True,
+                    }
+                }
+            },
+        }
+        result = adapter.prepare_run_config(config, job_type="fit", task="binary")
+        iv = result.get("training", {}).get("early_stopping", {}).get("inner_valid", {})
+        assert iv["method"] == "holdout"
+        assert iv["ratio"] == 0.1
+        assert iv["random_state"] == 42
+        assert iv["stratify"] is True
+
+    def test_prepare_run_config_group_holdout_strips_stratify(self) -> None:
+        """group_holdout via prepare_run_config strips stratify, keeps random_state."""
+        adapter = LizyMLAdapter()
+        config = adapter.initialize_config(task="binary")
+        config = {
+            **config,
+            "task": "binary",
+            "data": {"target": "y"},
+            "features": {"exclude": [], "categorical": []},
+            "split": {"method": "kfold", "n_splits": 5},
+            "training": {
+                "early_stopping": {
+                    "inner_valid": {
+                        "method": "group_holdout",
+                        "ratio": 0.1,
+                        "random_state": 42,
+                        "stratify": True,
+                    }
+                }
+            },
+        }
+        result = adapter.prepare_run_config(config, job_type="fit", task="binary")
+        iv = result.get("training", {}).get("early_stopping", {}).get("inner_valid", {})
+        assert iv["method"] == "group_holdout"
+        assert iv["random_state"] == 42
+        assert "stratify" not in iv
+
     def test_validation_ratio_only_no_inner_valid_key_unchanged(self) -> None:
         """When only validation_ratio is present (no inner_valid key at all), unchanged."""
         from lizyml_widget.adapter_schema import enforce_iv_exclusivity

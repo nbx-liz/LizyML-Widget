@@ -708,6 +708,130 @@ class TestValidationDiagnostics:
         assert errors[0]["type"] == "unknown"
 
 
+class TestEnforceAutoNumLeavesFalse:
+    """Cover auto_num_leaves=False path (adapter.py lines 186-187, 306-318)."""
+
+    def test_enforce_false_inserts_default_256(self) -> None:
+        """auto_num_leaves=False with no num_leaves → inserts 256."""
+        result = LizyMLAdapter._enforce_auto_num_leaves({"auto_num_leaves": False, "params": {}})
+        assert result["params"]["num_leaves"] == 256
+
+    def test_enforce_false_preserves_existing_num_leaves(self) -> None:
+        """auto_num_leaves=False with existing num_leaves → preserves value."""
+        result = LizyMLAdapter._enforce_auto_num_leaves(
+            {"auto_num_leaves": False, "params": {"num_leaves": 128}}
+        )
+        assert result["params"]["num_leaves"] == 128
+
+
+class TestExtractDefaultsSchemaResolution:
+    """Cover allOf + $ref schema resolution (adapter.py lines 420-423)."""
+
+    def test_allof_single_ref_resolved(self) -> None:
+        """allOf with a single $ref should be resolved and defaults extracted."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "allOf": [{"$ref": "#/$defs/ModelConfig"}],
+                },
+            },
+            "$defs": {
+                "ModelConfig": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "default": "lgbm"},
+                        "depth": {"type": "integer", "default": 5},
+                    },
+                },
+            },
+        }
+        result = LizyMLAdapter._extract_defaults(schema)
+        assert result["model"]["name"] == "lgbm"
+        assert result["model"]["depth"] == 5
+
+    def test_simple_ref_resolved(self) -> None:
+        """Plain $ref should be resolved and defaults extracted."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "training": {"$ref": "#/$defs/TrainConfig"},
+            },
+            "$defs": {
+                "TrainConfig": {
+                    "type": "object",
+                    "properties": {
+                        "seed": {"type": "integer", "default": 42},
+                    },
+                },
+            },
+        }
+        result = LizyMLAdapter._extract_defaults(schema)
+        assert result["training"]["seed"] == 42
+
+
+class TestVersionFallbackPaths:
+    """Cover LizyML version fallback paths for import failures."""
+
+    def test_search_space_fallback_returns_empty(self) -> None:
+        """adapter_schema.py:250-258: when all imports fail, returns {}."""
+        adapter_schema.reset_schema_cache()
+        old_cache = adapter_schema._schema_cache
+        try:
+            with patch.dict(
+                "sys.modules",
+                {
+                    "lizyml.estimators.lgbm.defaults": None,
+                    "lizyml.estimators.lgbm": None,
+                    "lizyml.estimators": None,
+                    "lizyml.tuning": None,
+                },
+            ):
+                result = adapter_schema.get_default_search_space("binary")
+                assert result == {}
+        finally:
+            adapter_schema._schema_cache = old_cache
+
+    def test_resolve_direction_import_error_returns_minimize(self) -> None:
+        """adapter_params.py:83-84: when metric registry unavailable, returns minimize."""
+        from lizyml_widget.adapter_params import resolve_direction
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "lizyml.metrics.registry": None,
+                "lizyml.metrics": None,
+                "lizyml.core.exceptions": None,
+                "lizyml.core": None,
+            },
+        ):
+            result = resolve_direction("auc")
+            assert result == "minimize"
+
+    def test_eval_metrics_fallback_uses_hardcoded(self) -> None:
+        """adapter_params.py:170-172: fallback metrics when _TASK_METRICS unavailable."""
+        from lizyml_widget.adapter_params import get_eval_metrics_by_task
+
+        adapter_params._eval_metrics_cache = None
+        try:
+            # Mock _TASK_METRICS to raise AttributeError
+            mock_registry = MagicMock(spec=[])  # no _TASK_METRICS attribute
+            with patch.dict(
+                "sys.modules",
+                {
+                    "lizyml.metrics.registry": mock_registry,
+                    "lizyml.metrics": MagicMock(),
+                },
+            ):
+                result = get_eval_metrics_by_task()
+                assert "binary" in result
+                assert "regression" in result
+                assert "multiclass" in result
+                assert len(result["binary"]) > 0
+        finally:
+            adapter_params._eval_metrics_cache = None
+
+
 class TestPrepareRunConfigImmutability:
     """prepare_run_config must not mutate the input config dict."""
 
