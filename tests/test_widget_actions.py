@@ -647,6 +647,56 @@ class TestPatchConfigOpValidation:
             assert w.error.get("code") != "INVALID_PATCH", f"op={op!r} should be valid"
 
 
+class TestActionHandlerExceptionBranches:
+    """Cover except branches in action handlers (widget.py lines 260-335)."""
+
+    def test_set_target_service_error_sets_target_error(self) -> None:
+        """widget.py:260-261: service.set_target raises → TARGET_ERROR."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df)
+        w._service.set_target = MagicMock(side_effect=ValueError("column not found"))
+        w.action = {"type": "set_target", "payload": {"target": "y"}}
+        assert w.error["code"] == "TARGET_ERROR"
+        assert "column not found" in w.error["message"]
+
+    def test_set_task_service_error_sets_task_error(self) -> None:
+        """widget.py:272-273: service.set_task raises → TASK_ERROR."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w._service.set_task = MagicMock(side_effect=ValueError("Invalid task"))
+        w.action = {"type": "set_task", "payload": {"task": "bad"}}
+        assert w.error["code"] == "TASK_ERROR"
+        assert "Invalid task" in w.error["message"]
+
+    def test_update_column_service_error_sets_column_error(self) -> None:
+        """widget.py:293-294: service.update_column raises → COLUMN_ERROR."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w._service.update_column = MagicMock(side_effect=RuntimeError("db error"))
+        w.action = {
+            "type": "update_column",
+            "payload": {"name": "x", "excluded": True, "col_type": "numeric"},
+        }
+        assert w.error["code"] == "COLUMN_ERROR"
+        assert "db error" in w.error["message"]
+
+    def test_update_cv_service_error_sets_cv_error(self) -> None:
+        """widget.py:334-335: service.update_cv raises → CV_ERROR."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+        w._service.update_cv = MagicMock(side_effect=ValueError("bad cv config"))
+        w.action = {
+            "type": "update_cv",
+            "payload": {"strategy": "kfold", "n_splits": 5},
+        }
+        assert w.error["code"] == "CV_ERROR"
+        assert "bad cv config" in w.error["message"]
+
+
 class TestPatchConfigExceptionHandling:
     """apply_config_patch errors should be caught, not propagated."""
 

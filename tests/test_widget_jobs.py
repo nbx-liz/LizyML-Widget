@@ -310,6 +310,112 @@ class TestRunJobConfigError:
         assert "still bad" in w.error.get("message", "")
 
 
+class TestRunBlockingJob:
+    """Cover _run_blocking_job status→exception paths (widget.py lines 119-132)."""
+
+    def test_immediate_completion_returns(self) -> None:
+        """widget.py:123-124: job completes synchronously before observer fires."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        def _instant_complete(job_type: str) -> None:
+            w.status = "completed"
+
+        w._run_job = _instant_complete  # type: ignore[assignment]
+        result = w.fit()
+        assert result is w
+
+    def test_failed_status_raises_runtime_error(self) -> None:
+        """widget.py:129-131: status=='failed' → RuntimeError with message."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        def _instant_fail(job_type: str) -> None:
+            w.error = {"code": "BACKEND_ERROR", "message": "boom"}
+            w.status = "failed"
+
+        w._run_job = _instant_fail  # type: ignore[assignment]
+        with pytest.raises(RuntimeError, match="boom"):
+            w.fit()
+
+    def test_failed_status_default_message(self) -> None:
+        """widget.py:130: fallback message when error dict has no 'message'."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        def _instant_fail(job_type: str) -> None:
+            w.error = {"code": "INTERNAL_ERROR"}
+            w.status = "failed"
+
+        w._run_job = _instant_fail  # type: ignore[assignment]
+        with pytest.raises(RuntimeError, match="Fit failed"):
+            w.fit()
+
+
+class TestJobWorkerErrorClassification:
+    """Cover BACKEND_ERROR vs INTERNAL_ERROR classification (widget.py:635-639)."""
+
+    def test_lizyml_exception_gets_backend_error(self) -> None:
+        """Exceptions from lizyml module → BACKEND_ERROR."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        class FakeLizyMLError(Exception):
+            pass
+
+        FakeLizyMLError.__module__ = "lizyml.core.exceptions"
+
+        w._service.fit = MagicMock(side_effect=FakeLizyMLError("backend crash"))
+        w._service.validate_config = MagicMock(return_value=[])
+
+        w._run_job("fit")
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+
+        assert w.error["code"] == "BACKEND_ERROR"
+        assert "backend crash" in w.error["message"]
+
+    def test_generic_exception_gets_internal_error(self) -> None:
+        """Non-lizyml exceptions → INTERNAL_ERROR."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        w._service.fit = MagicMock(side_effect=RuntimeError("oops"))
+        w._service.validate_config = MagicMock(return_value=[])
+
+        w._run_job("fit")
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+
+        assert w.error["code"] == "INTERNAL_ERROR"
+        assert "oops" in w.error["message"]
+
+    def test_exception_with_none_module_gets_internal_error(self) -> None:
+        """Exception with __module__=None → INTERNAL_ERROR (the `or ''` fallback)."""
+        w = _make_widget()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        class WeirdError(Exception):
+            pass
+
+        WeirdError.__module__ = None  # type: ignore[assignment]
+
+        w._service.fit = MagicMock(side_effect=WeirdError("weird"))
+        w._service.validate_config = MagicMock(return_value=[])
+
+        w._run_job("fit")
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+
+        assert w.error["code"] == "INTERNAL_ERROR"
+
+
 class TestBlockingHelperTimeout:
     """fit()/tune() must raise TimeoutError when timeout expires."""
 

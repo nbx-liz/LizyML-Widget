@@ -336,6 +336,79 @@ class TestLoadDefaults:
         assert len(space) > 0, "tune search space should not be empty after load"
 
 
+class TestMulticlassE2E:
+    """Full multiclass workflow: load → fit → tune → inference → plot."""
+
+    def test_multiclass_fit_tune_inference(self) -> None:
+        w, adapter = _make_widget_with_adapter()
+        # 3-class target → multiclass (x has repeated values to avoid ID auto-exclusion)
+        df = pd.DataFrame({"x": [i % 10 for i in range(51)], "y": [0, 1, 2] * 17})
+
+        mock_model = MagicMock()
+        adapter.create_model.return_value = mock_model
+        adapter.fit.return_value = FitSummary(
+            metrics={"multi_logloss": {"is": 0.5, "oos": 0.6}},
+            fold_count=5,
+            params=[],
+        )
+        adapter.evaluate_table.return_value = [
+            {"index": "multi_logloss", "if_mean": 0.5, "oof": 0.6}
+        ]
+        adapter.split_summary.return_value = [{"fold": 0, "n_train": 40, "n_valid": 11}]
+        adapter.available_plots.return_value = [
+            "learning-curve",
+            "roc-curve",
+            "feature-importance-split",
+        ]
+        adapter.predict.return_value = PredictionSummary(
+            predictions=pd.DataFrame(
+                {
+                    "pred": [0, 1, 2],
+                    "proba_0": [0.7, 0.1, 0.1],
+                    "proba_1": [0.2, 0.8, 0.1],
+                    "proba_2": [0.1, 0.1, 0.8],
+                }
+            ),
+            warnings=[],
+        )
+        adapter.classify_best_params = MagicMock(side_effect=LizyMLAdapter().classify_best_params)
+
+        # Load & verify multiclass detection
+        w.load(df, target="y")
+        assert w.df_info["task"] == "multiclass"
+
+        # Fit
+        w.action = {"type": "fit", "payload": {}}
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+        assert w.status == "completed"
+        assert w.fit_summary["fold_count"] == 5
+
+        # Tune
+        adapter.tune.return_value = TuningSummary(
+            best_params={"learning_rate": 0.01},
+            best_score=0.45,
+            trials=[],
+            metric_name="multi_logloss",
+            direction="minimize",
+        )
+        w.action = {"type": "tune", "payload": {}}
+        if w._job_thread is not None:
+            w._job_thread.join(timeout=5.0)
+        assert w.status == "completed"
+        assert w.tune_summary["best_score"] == 0.45
+
+        # Inference
+        test_df = pd.DataFrame({"x": [10, 20, 30]})
+        w.load_inference(test_df)
+        w.action = {"type": "run_inference", "payload": {"return_shap": False}}
+        assert w.inference_result["status"] == "completed"
+        assert w.inference_result["rows"] == 3
+
+        # Available plots should include roc-curve for multiclass
+        assert "roc-curve" in w.available_plots
+
+
 class TestCancelFlow:
     """Test job cancellation."""
 
