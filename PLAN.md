@@ -33,6 +33,8 @@
 | 24 | Widget / Service 疎結合化 | config 初期化・実行準備を Service に集約し、Widget から private 境界越えを除去する | ✅ 完了 |
 | 25 | Backend Contract 駆動の完全疎結合化 | backend 固有 UI/Config 知識を Adapter contract へ集約し、UI を generic renderer 化する | 📝 設計完了（未実装） |
 | 26 | Canonical Config 経路統一 + `inner_valid` 契約整合化 | config canonicalization の単一路線化、Validation 診断改善、Phase 25 残課題の追補 | ⚠️ 部分実装（追補要） |
+| 27 | Google Colab 互換ポーリング | BG スレッド traitlet 同期の Colab 制約を JS ポーリングで回避 | 📝 計画済み |
+| 28 | ダークモード対応 | CSS 変数化 + `prefers-color-scheme` 対応 + Plotly テーマ追従 | 📝 計画済み |
 
 各フェーズ末尾に **完了条件** を定義する。フェーズは順番に実施する（前フェーズの成果物が後フェーズの前提）。
 
@@ -1748,3 +1750,200 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
 - Validation error details に根因 path/type が含まれる
 - Service から backend 固有 constant が除去される
 - Phase 25 の完了条件と Phase 26 の canonical invariant を CI で継続検証できる
+
+---
+
+### Phase 27: Google Colab 互換のジョブ進捗ポーリング機構（P-018）
+
+**目標:** Google Colab 上でもジョブの進捗表示・完了検知が正常に動作するようにする。既存環境（JupyterLab / VS Code）への影響なし。
+
+#### 27-1. Python 側 poll ハンドラ追加
+
+- `src/lizyml_widget/widget.py`
+  - `__init__` に `self.on_msg(self._handle_custom_msg)` を追加
+  - `_handle_custom_msg(self, widget, content, buffers)` を実装:
+    - `content.type === "poll"` の場合、現在の traitlet 値を `self.send()` で返す
+    - 応答ペイロード: `{type: "job_state", status, progress, elapsed_sec, job_type, job_index, error}`
+    - `status` が `completed` / `failed` の場合は `fit_summary` / `tune_summary` / `available_plots` も含める
+  - 既存の BG スレッド traitlet 書き込みは一切変更しない
+- 受け入れ条件
+  - `poll` メッセージに対して現在のジョブ状態が `self.send()` で返される
+  - メインスレッドで実行される（shell channel 経由）
+  - 既存の action ハンドラ / traitlet 同期に影響しない
+
+#### 27-2. JS 側 useJobPolling フック新規作成
+
+- `js/src/hooks/useJobPolling.ts` を新規作成
+  - `useJobPolling(model): JobState | null` — ポーリング制御とレスポンス管理
+  - `status === "running"` 検出時に 1000ms 間隔で `model.send({type: "poll"})` を開始
+  - `model.on("msg:custom")` で `job_state` 応答を受信し、ローカル state に保持
+  - JS 側 100ms タイマーで `elapsed_sec` を補間（ポーリング間のスムーズな表示）
+  - `status` が `completed` / `failed` になったらポーリング停止 + タイマークリーンアップ
+  - `return` 関数でクリーンアップ（`clearInterval` / `model.off`）
+- 受け入れ条件
+  - ポーリングが `status === "running"` の間のみ動作する
+  - 完了後にタイマー / リスナーがリークしない
+  - elapsed 表示が 100ms 間隔で滑らかに更新される
+
+#### 27-3. App.tsx で polled state をマージ
+
+- `js/src/App.tsx`
+  - `useJobPolling(model)` を呼び出し、polled state を取得
+  - polled 値がある場合は traitlet 値を上書き（polled 優先）:
+    - `effectiveStatus = polled?.status ?? status`
+    - `effectiveProgress = polled?.progress ?? progress`
+    - `effectiveElapsedSec = polled?.elapsed_sec ?? elapsedSec`
+    - `effectiveFitSummary = polled?.fit_summary ?? fitSummary`（完了時）
+    - `effectiveTuneSummary = polled?.tune_summary ?? tuneSummary`（完了時）
+    - `effectiveAvailablePlots = polled?.available_plots ?? availablePlots`（完了時）
+    - `effectiveError = polled?.error ?? error`
+  - 子コンポーネントに effective 値を渡す
+- 受け入れ条件
+  - JupyterLab: traitlet `change:` が先に到達 → polled は確認程度で冗長な上書き
+  - Colab: traitlet `change:` が到達しない → polled state がフォールバックとして UI を更新
+  - 両環境で見た目・動作に差がない
+
+#### 27-4. ProgressView に CSS transition 追加
+
+- `js/src/components/ProgressView.tsx` / `js/src/widget.css`
+  - プログレスバーの幅変更に `transition: width 0.8s ease-out` を追加
+  - ポーリング間隔（1s）の間もバーが滑らかにアニメーション
+- 受け入れ条件
+  - 進捗バーの変化がカクつかない
+  - 既存の JupyterLab 動作で回帰がない
+
+#### 27-5. テスト追加
+
+- `tests/test_widget_api.py`
+  - `_handle_custom_msg` が `poll` メッセージに正しい `job_state` を返すことを検証
+  - `status` が `running` / `completed` / `failed` の各状態で正しいフィールドが含まれることを検証
+  - `poll` 以外のメッセージタイプが無視されることを検証
+- 手動検証
+  - diagnostic notebook（`debug_colab_traitlet_sync.ipynb`）を Colab で再実行し、LizyWidget の Fit が UI に反映されることを確認
+- 受け入れ条件
+  - 既存テストが全パス
+  - poll ハンドラの回帰テストが追加される
+
+**完了条件:**
+
+- Google Colab 上で Fit/Tune ボタンクリック後に進捗・完了が UI に反映される
+- JupyterLab / VS Code での動作に回帰がない
+- elapsed 表示が滑らか（JS 補間）
+- プログレスバーが CSS transition でアニメーション
+
+---
+
+### Phase 28: ダークモード対応（P-019）
+
+**目標:** JupyterLab / Google Colab / VS Code のダークテーマで Widget が正しく表示されるようにする。
+
+#### 28-1. Widget 固有 CSS 変数の導入
+
+- `js/src/widget.css`
+  - `.lzw-root` に Widget 固有 CSS 変数を定義:
+    - `--lzw-bg-0` / `--lzw-bg-1` / `--lzw-bg-2` — 背景（base / surface / elevated）
+    - `--lzw-fg-0` / `--lzw-fg-1` / `--lzw-fg-2` — 前景（primary / secondary / muted）
+    - `--lzw-border` / `--lzw-border-light` — ボーダー
+    - `--lzw-accent` / `--lzw-accent-hover` — アクセント
+    - `--lzw-success` / `--lzw-warning` / `--lzw-error` — ステータス色
+    - `--lzw-input-bg` / `--lzw-input-border` — フォーム入力
+  - ライトモードのデフォルト値は現行の色と同一（見た目の変化なし）
+  - JupyterLab の `--jp-*` 変数が存在する場合はそちらを優先:
+    - `--lzw-bg-0: var(--jp-layout-color0, #fff)`
+- 受け入れ条件
+  - ライトモードでの見た目が変わらない
+  - CSS 変数の命名が体系的で一貫している
+
+#### 28-2. ハードコード色の CSS 変数置換
+
+- `js/src/widget.css`
+  - 約 100 箇所のハードコード hex カラー値を `var(--lzw-*)` に置換
+  - セクションごとに段階的に置換:
+    - Root / Header / Tabs
+    - Data タブ（ColumnTable / ChipGroup / SegmentButton）
+    - Config タブ（DynForm / SearchSpace / NumericStepper）
+    - Results タブ（ScoreTable / ProgressView / PlotViewer）
+    - 共通コンポーネント（Button / Toggle / Modal）
+- 受け入れ条件
+  - ライトモードでピクセルパーフェクト（色の変化なし）
+  - 全ハードコード色が CSS 変数に置換される
+
+#### 28-3. ダークモードメディアクエリ追加
+
+- `js/src/widget.css`
+  - `@media (prefers-color-scheme: dark)` ブロックで `--lzw-*` 変数をダーク値に上書き
+  - JupyterLab: `--jp-*` 変数が存在すればそちらが優先される（`var(--jp-*, var(--lzw-*))` フォールバック）
+  - Colab / `--jp-*` 未提供環境: Widget 固有のダーク変数にフォールバック
+  - ダーク色は JupyterLab Dark テーマの色調に合わせて設計
+- 受け入れ条件
+  - JupyterLab ダークテーマで自然な見た目
+  - Colab ダークモードで Widget が浮かない
+  - VS Code ダークテーマで統合感がある
+
+#### 28-4. Plotly プロットのテーマ追従
+
+- `js/src/hooks/usePlot.ts` または Plotly レンダリング部
+  - `window.matchMedia("(prefers-color-scheme: dark)")` でダークモード検出
+  - ダーク時に Plotly の `layout.template` を `plotly_dark` に設定
+  - `layout.paper_bgcolor` / `layout.plot_bgcolor` を Widget の背景色に合わせる
+  - テーマ切替時のリアクティブ更新（`matchMedia.addEventListener("change", ...)`)
+- 受け入れ条件
+  - プロットの背景・テキスト・グリッド色がダークモードに追従
+  - ライトモード ↔ ダークモードの動的切替に対応
+
+#### 28-5. WCAG コントラスト比の自動検証テスト
+
+- `tests/test_css_contrast.py` を新規作成
+  - `widget.css` をパースし、`.lzw-root` と `@media (prefers-color-scheme: dark)` ブロックから `--lzw-*` 変数の定義値を抽出
+  - 前景/背景のペア定義テーブルを用意:
+    ```
+    ("--lzw-fg-0", "--lzw-bg-0"),   # 本文テキスト on 基本背景
+    ("--lzw-fg-1", "--lzw-bg-0"),   # 副テキスト on 基本背景
+    ("--lzw-fg-2", "--lzw-bg-0"),   # 補助テキスト on 基本背景
+    ("--lzw-fg-0", "--lzw-bg-1"),   # 本文テキスト on サーフェス背景
+    ("--lzw-fg-0", "--lzw-bg-2"),   # 本文テキスト on 高位背景
+    ("--lzw-fg-0", "--lzw-input-bg"),  # テキスト on 入力欄
+    ("--lzw-accent", "--lzw-bg-0"),    # アクセント色 on 基本背景
+    ("--lzw-error", "--lzw-bg-0"),     # エラー色 on 基本背景
+    ("--lzw-success", "--lzw-bg-0"),   # 成功色 on 基本背景
+    ("--lzw-warning", "--lzw-bg-0"),   # 警告色 on 基本背景
+    # ... ボタン・バッジ等のペアも追加
+    ```
+  - WCAG 2.1 コントラスト比計算を実装（相対輝度 → コントラスト比）:
+    - AA 基準: 通常テキスト ≥ 4.5:1、大テキスト/UI 要素 ≥ 3.0:1
+  - ライトモード・ダークモード両方のペアに対してコントラスト比を検証
+  - 違反があれば変数名・実際のコントラスト比・要求値を含む明確なエラーメッセージを出力
+- テストの位置づけ
+  - CI で自動実行される（`uv run pytest` の対象に含まれる）
+  - CSS 変数を変更するたびに、見えにくい色の組み合わせが導入されないことを保証
+  - ブラウザ不要（CSS テキストの静的解析のみ）
+- 受け入れ条件
+  - ライトモード・ダークモードの全前景/背景ペアが WCAG AA 基準を満たす
+  - コントラスト比不足時にテストが失敗し、具体的な変数名と数値を報告する
+
+#### 28-6. ハードコード色の残存チェック（CI lint）
+
+- `tests/test_css_contrast.py` に追加
+  - `widget.css` の `--lzw-*` 変数定義行とコメント行を除外した上で、残存するハードコード hex カラー（`#xxx` / `#xxxxxx` / `rgb(...)` / `rgba(...)`）を検出
+  - CSS 変数への置換漏れを CI で自動検知
+- 受け入れ条件
+  - ハードコード色がゼロ（変数定義行を除く）
+
+#### 28-7. 手動視覚確認
+
+- 6 環境での動作確認
+  - JupyterLab ライト / ダーク
+  - Colab ライト / ダーク
+  - VS Code ライト / ダーク
+  - 全タブ（Data / Config / Results）で確認
+- 受け入れ条件
+  - 6 環境で視覚的な不具合がない
+
+**完了条件:**
+
+- ハードコードカラー約 100 箇所が CSS 変数に置換される
+- `@media (prefers-color-scheme: dark)` でダークモード変数が定義される
+- JupyterLab / Colab / VS Code の各ダークテーマで Widget が適切に表示される
+- Plotly プロットがダーク/ライトテーマに追従する
+- 全前景/背景ペアが WCAG AA コントラスト比基準（4.5:1 / 3.0:1）を CI で自動検証される
+- ハードコード色の残存が CI で自動検出される
