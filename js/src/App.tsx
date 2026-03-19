@@ -1,7 +1,9 @@
 /** App — Header + Tab router. */
 import { useState, useMemo, useEffect } from "preact/hooks";
 import { useTraitlet, useSendAction } from "./hooks/useModel";
+import { useJobPolling } from "./hooks/useJobPolling";
 import { usePlot } from "./hooks/usePlot";
+import { useTheme } from "./hooks/useTheme";
 import { Header } from "./components/Header";
 import { DataTab } from "./tabs/DataTab";
 import { ConfigTab } from "./tabs/ConfigTab";
@@ -12,9 +14,10 @@ type Tab = (typeof TABS)[number];
 
 interface AppProps {
   model: any;
+  rootEl: HTMLElement;
 }
 
-export function App({ model }: AppProps) {
+export function App({ model, rootEl }: AppProps) {
   const [activeTab, setActiveTab] = useState<Tab>("Data");
   const backendInfo = useTraitlet<Record<string, any>>(model, "backend_info");
   const status = useTraitlet<string>(model, "status");
@@ -31,43 +34,55 @@ export function App({ model }: AppProps) {
   const inferenceResult = useTraitlet<Record<string, any>>(model, "inference_result");
   const error = useTraitlet<Record<string, any>>(model, "error");
   const sendAction = useSendAction(model);
+  const { resolved: theme, toggle: toggleTheme } = useTheme(rootEl);
+  const polled = useJobPolling(model, status, elapsedSec);
+
+  // Merge polled state over traitlet state (Colab fallback)
+  const effectiveStatus = polled?.status ?? status;
+  const effectiveProgress = polled?.progress ?? progress;
+  const effectiveElapsedSec = polled?.elapsed_sec ?? elapsedSec;
+  const effectiveJobType = polled?.job_type ?? jobType;
+  const effectiveJobIndex = polled?.job_index ?? jobIndex;
+  const effectiveError = polled?.error ?? error;
+  const effectiveFitSummary = polled?.fit_summary ?? fitSummary;
+  const effectiveTuneSummary = polled?.tune_summary ?? tuneSummary;
+  const effectiveAvailablePlots = polled?.available_plots ?? availablePlots;
 
   const { plots, loading: plotLoading, requestPlot, clearCache } = usePlot(model);
 
   // Clear plot cache when a new job starts
   useEffect(() => {
-    if (status === "running") clearCache();
-  }, [status, clearCache]);
+    if (effectiveStatus === "running") clearCache();
+  }, [effectiveStatus, clearCache]);
 
   // Auto-switch to Results tab when job starts/completes
   useEffect(() => {
-    if (status === "running" || status === "completed" || status === "failed") {
+    if (effectiveStatus === "running" || effectiveStatus === "completed" || effectiveStatus === "failed") {
       setActiveTab("Results");
     }
-  }, [status]);
+  }, [effectiveStatus]);
 
   // All column names for target dropdown
   const allColumns = useMemo(() => {
     const shape = dfInfo.shape;
     if (!shape) return [];
-    const cols = (dfInfo.columns ?? []).map((c: any) => c.name);
-    if (dfInfo.target && !cols.includes(dfInfo.target)) {
-      cols.push(dfInfo.target);
-    }
-    return cols;
+    const base = (dfInfo.columns ?? []).map((c: any) => c.name);
+    return dfInfo.target && !base.includes(dfInfo.target)
+      ? [...base, dfInfo.target]
+      : base;
   }, [dfInfo]);
 
   return (
     <div class="lzw-app">
-      <Header backendInfo={backendInfo} status={status} />
+      <Header backendInfo={backendInfo} status={effectiveStatus} theme={theme} onToggleTheme={toggleTheme} />
 
       {/* Tab bar */}
       <div class="lzw-tabs">
         {TABS.map((tab) => {
           const enabled =
             tab === "Data" ||
-            (tab === "Model" && status !== "idle") ||
-            (tab === "Results" && (jobIndex > 0 || status === "running" || status === "completed" || status === "failed"));
+            (tab === "Model" && effectiveStatus !== "idle") ||
+            (tab === "Results" && (effectiveJobIndex > 0 || effectiveStatus === "running" || effectiveStatus === "completed" || effectiveStatus === "failed"));
           return (
             <button
               key={tab}
@@ -95,29 +110,30 @@ export function App({ model }: AppProps) {
             backendContract={backendContract}
             config={config}
             dfInfo={dfInfo}
-            status={status}
+            status={effectiveStatus}
             sendAction={sendAction}
             model={model}
           />
         )}
         {activeTab === "Results" && (
           <ResultsTab
-            status={status}
-            jobType={jobType}
-            jobIndex={jobIndex}
-            progress={progress}
-            elapsedSec={elapsedSec}
-            fitSummary={fitSummary}
-            tuneSummary={tuneSummary}
-            availablePlots={availablePlots}
+            status={effectiveStatus}
+            jobType={effectiveJobType}
+            jobIndex={effectiveJobIndex}
+            progress={effectiveProgress}
+            elapsedSec={effectiveElapsedSec}
+            fitSummary={effectiveFitSummary}
+            tuneSummary={effectiveTuneSummary}
+            availablePlots={effectiveAvailablePlots}
             inferenceResult={inferenceResult}
-            error={error}
+            error={effectiveError}
             plots={plots}
             plotLoading={plotLoading}
             onRequestPlot={requestPlot}
             sendAction={sendAction}
             onSwitchToFit={() => setActiveTab("Model")}
             evaluationParams={config?.evaluation?.params}
+            theme={theme}
           />
         )}
       </div>

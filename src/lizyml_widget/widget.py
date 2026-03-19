@@ -232,6 +232,40 @@ class LizyWidget(anywidget.AnyWidget):
         self.df_info = self._service.get_df_info()
         self.config = canonical
 
+    # ── Custom message handler (Colab polling) ──────────────
+
+    def _handle_custom_msg(self, content: dict[str, Any], buffers: list[Any]) -> None:
+        """Handle msg:custom messages from JS (e.g. poll requests).
+
+        Overrides ipywidgets.Widget._handle_custom_msg(content, buffers).
+        Runs on the main (shell) thread, so self.send() reliably reaches JS
+        even on Google Colab where BG-thread comm is blocked.
+        """
+        if content.get("type") != "poll":
+            super()._handle_custom_msg(content, buffers)
+            return
+
+        state: dict[str, Any] = {
+            "type": "job_state",
+            "status": self.status,
+            "progress": dict(self.progress),
+            "elapsed_sec": self.elapsed_sec,
+            "job_type": self.job_type,
+            "job_index": self.job_index,
+            "error": dict(self.error),
+        }
+
+        # Include result payloads on terminal states
+        if self.status in ("completed", "failed"):
+            state["fit_summary"] = dict(self.fit_summary)
+            state["tune_summary"] = dict(self.tune_summary)
+            state["available_plots"] = list(self.available_plots)
+
+        try:
+            self.send(state)
+        except Exception as exc:
+            _log.debug("poll reply failed (comm likely closed): %s", exc)
+
     # ── Action dispatcher ─────────────────────────────────────
 
     @traitlets.observe("action")

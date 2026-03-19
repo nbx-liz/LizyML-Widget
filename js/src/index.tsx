@@ -4,7 +4,7 @@ import { App } from "./App";
 
 function render_widget({ model, el }: { model: any; el: HTMLElement }) {
   el.classList.add("lzw-root");
-  render(<App model={model} />, el);
+  render(<App model={model} rootEl={el} />, el);
   return () => render(null, el);
 }
 
