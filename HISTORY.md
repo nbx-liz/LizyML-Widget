@@ -861,3 +861,48 @@
   - Python 側のコード
   - traitlets / Action 契約
   - コンポーネント構造・ロジック
+
+### P-020: libgomp OpenMP プール親和性問題の回避（subprocess 実行戦略）
+
+- **日付**: 2026-03-19
+- **ステータス**: Proposed
+- **背景**:
+  - Linux 環境（WSL2 含む）で libgomp（GCC OpenMP）を使用する場合、OpenMP スレッドプールは最初に並列リージョンを実行したスレッドに束縛される（GCC bug #108494）。
+  - Widget では main thread が lightgbm import / Dataset 作成時に先に OpenMP を使用するため、worker thread からの Fit/Tune 実行時に 50x の速度劣化が発生する。
+  - `daemon=False`、`omp_set_num_threads()`、thread 内 warm-up 等は効果なし。同一プロセス内では回避不可能。
+  - LLVM libomp（macOS デフォルト）および MSVC vcomp（Windows）にはこの制約がない。
+- **検証済みアプローチ**:
+  - ❌ `daemon=False` — プール親和性が原因のため効果なし（daemon=True と同じ 50x）
+  - ❌ `omp_set_num_threads()` / `threadpoolctl` — ICV は設定されるがプール再利用に影響しない
+  - ❌ Thread 内 warm-up / dummy 並列リージョン — 一度束縛されたプールは再割当て不可
+  - ✅ `LD_PRELOAD=libomp` — libomp にはプール親和性バグがなく 2.3x（許容範囲）
+  - ✅ `subprocess.Popen` — 新プロセスでは libgomp 状態が初期化され 1.5x（許容範囲）
+- **提案内容**:
+  - **Phase 1: 環境検知モジュール（`openmp_detect.py`）**
+    - `is_libgomp_affected() -> bool` — Linux + libgomp を検知
+    - `find_libomp_path() -> str | None` — libomp の共有ライブラリパスを探索
+    - `get_execution_strategy() -> tuple[str, str | None]` — `("thread", None)` or `("subprocess", libomp_path)`
+  - **Phase 2: Subprocess エントリポイント（`_subprocess_entry.py`）**
+    - `python -m lizyml_widget._subprocess_entry` として実行
+    - stdin: pickle of `{job_type, config, df_bytes}`
+    - stdout: length-prefixed pickle messages（progress / result / error）
+    - SIGTERM でキャンセル
+  - **Phase 3: Subprocess ランナー（`subprocess_runner.py`）**
+    - `run_job_subprocess()` — subprocess 起動、LD_PRELOAD 設定、データ転送、進捗読取、キャンセル管理
+  - **Phase 4: Widget 統合**
+    - `_run_job` で `self._execution_strategy` に基づき分岐
+    - `_subprocess_job_worker` 新規追加
+    - `WidgetService.get_dataframe()` / `load_model_from_path()` 追加
+    - `LizyMLAdapter.load_model()` 実装
+  - **Phase 5: テスト**
+    - 検知、ランナー、Widget 統合の各レイヤーでユニット + 統合テスト
+- **影響範囲**:
+  - `widget.py` — `__init__`（検知キャッシュ）、`_run_job`（分岐追加）、`_subprocess_job_worker`（新規）
+  - `service.py` — `get_dataframe()`、`load_model_from_path()` 追加
+  - `adapter.py` — `load_model()` 実装
+  - 新規ファイル: `openmp_detect.py`、`subprocess_runner.py`、`_subprocess_entry.py`
+- **変更しないもの**:
+  - traitlets / Action 契約（subprocess path も同じ traitlet を更新）
+  - Colab ポーリング機構（`_handle_custom_msg` は traitlet 値を読むため変更不要）
+  - フロントエンド（JS/CSS）
+  - Windows / macOS の実行パス（`threading.Thread` のまま）
