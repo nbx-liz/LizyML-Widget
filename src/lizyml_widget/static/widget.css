@@ -108,11 +108,24 @@
 .lzw-root tr,
 .lzw-root th,
 .lzw-root td,
-.lzw-root button,
 .lzw-root input,
 .lzw-root select {
   background-color: inherit !important;
   color: inherit !important;
+}
+
+/* Buttons: reset base but allow active/accent overrides */
+.lzw-root button {
+  background-color: inherit;
+  color: inherit;
+}
+
+/* Restore explicit colors for active/selected button states */
+.lzw-root .lzw-segment__btn--active,
+.lzw-root .lzw-chip--active,
+.lzw-root .lzw-tabs__btn--active {
+  background-color: var(--lzw-accent) !important;
+  color: var(--lzw-accent-fg) !important;
 }
 
 /* ── Header ─────────────────────────────────────────────── */
@@ -283,6 +296,11 @@
   border: 1px solid var(--lzw-border);
   border-radius: 3px;
   font-size: 12px;
+  background: var(--lzw-bg-0);
+  color: var(--lzw-fg-0);
+}
+
+.lzw-select option {
   background: var(--lzw-bg-0);
   color: var(--lzw-fg-0);
 }

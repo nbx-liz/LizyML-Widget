@@ -795,11 +795,13 @@ class LizyMLAdapter:
         raise ValueError(msg)
 
     def export_model(self, model: Any, path: str) -> str:
-        model.save(path)
+        model.export(path)
         return path
 
     def load_model(self, path: str) -> Any:
-        raise NotImplementedError("load_model not yet implemented")
+        from lizyml.core.model import Model
+
+        return Model.load(path)
 
     def model_info(self, model: Any) -> dict[str, Any]:
         raise NotImplementedError("model_info not yet implemented")

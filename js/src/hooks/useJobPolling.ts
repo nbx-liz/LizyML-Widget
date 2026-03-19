@@ -29,6 +29,20 @@ const INTERPOLATION_INTERVAL_MS = 100;
 /** Wait this long before deciding traitlets are stalled and starting polling. */
 const STALL_DETECT_MS = 2000;
 
+/** Detect if running in Google Colab (the only known env where BG-thread comm is broken). */
+function isColab(): boolean {
+  try {
+    return (
+      typeof document !== "undefined" &&
+      document.querySelector('link[href*="colab"]') !== null
+    );
+  } catch {
+    return false;
+  }
+}
+
+const IN_COLAB = isColab();
+
 export function useJobPolling(
   model: any,
   traitletStatus: string,
@@ -106,25 +120,30 @@ export function useJobPolling(
     }, INTERPOLATION_INTERVAL_MS);
   }, [model, handleMsg]);
 
-  // Detect stalled traitlets and start polling as fallback
+  // Start polling only on Colab where BG-thread comm is broken.
+  // On JupyterLab/VS Code, traitlet sync works from BG threads — no polling needed.
   useEffect(() => {
     if (traitletStatus !== "running") {
       stopPolling();
       return;
     }
 
-    // Wait STALL_DETECT_MS: if traitletElapsed is still 0, traitlets are stalled
+    if (!IN_COLAB) {
+      // Non-Colab: traitlets work, no polling needed.
+      return;
+    }
+
+    // Colab: wait STALL_DETECT_MS then start polling unconditionally.
+    // (On Colab, traitlet updates from BG threads never arrive.)
     const stallTimer = setTimeout(() => {
-      if (traitletElapsed === 0) {
-        startPolling();
-      }
+      startPolling();
     }, STALL_DETECT_MS);
 
     return () => {
       clearTimeout(stallTimer);
       stopPolling();
     };
-  }, [model, traitletStatus, traitletElapsed, startPolling, stopPolling]);
+  }, [model, traitletStatus, startPolling, stopPolling]);
 
   // Reset polled state on status transitions
   useEffect(() => {

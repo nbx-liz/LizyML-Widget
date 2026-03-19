@@ -501,6 +501,17 @@ class WidgetService:
 
         return self.canonicalize_config(base)
 
+    def get_dataframe(self) -> pd.DataFrame:
+        """Return the loaded DataFrame (for subprocess serialization)."""
+        if self._df is None:
+            msg = "No data loaded"
+            raise ValueError(msg)
+        return self._df
+
+    def load_model_from_path(self, path: str) -> None:
+        """Load a model from file path (for subprocess result recovery)."""
+        self._model = self._adapter.load_model(path)
+
     def save_model(self, path: str) -> str:
         """Persist the current trained model using the active adapter."""
         if self._model is None:
