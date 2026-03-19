@@ -787,3 +787,122 @@
   - `service.py`: `build_config` の split フィールド条件追加
   - `FitSubTab.tsx`: calibration `n_splits` の非推奨表示
   - `pyproject.toml`: `lizyml>=0.2.0` バージョンピン
+
+---
+
+### P-018: Google Colab 互換のジョブ進捗ポーリング機構追加
+
+- **日付**: 2026-03-19
+- **ステータス**: Approved（2026-03-19 承認）
+- **背景**:
+  - Google Colab 上で Widget の Fit/Tune ボタンをクリックしても、UI が更新されず処理が始まったように見えない。
+  - 診断の結果、Colab の comm 実装がバックグラウンドスレッドからの Python→JS 通信（traitlet 書き込み・`self.send()`）を一切伝播しないことを確認した。
+  - 現行の `_job_worker` はバックグラウンドスレッドから `status` / `progress` / `elapsed_sec` / `fit_summary` 等の traitlet を直接書き込んでおり、JupyterLab / VS Code では動作するが Colab では JS 側に反映されない。
+  - BLUEPRINT §2 原則 4「環境非依存（Jupyter / Colab / VS Code のいずれでも動作する）」に違反している。
+- **検証済みアプローチ**:
+  - ❌ `call_soon_threadsafe` — Colab の ipykernel では無効
+  - ❌ `self.send()` from BG thread — IOPub 経由でも BG スレッドからは不可
+  - ✅ JS ポーリング（`model.send()` 双方向 msg:custom + JS 側 elapsed 補間 + CSS transition）
+- **提案内容**:
+  - **Python 側**:
+    - `widget.py` の `__init__` に `self.on_msg(self._handle_custom_msg)` を追加
+    - `_handle_custom_msg` で `poll` タイプのメッセージを受信し、現在の traitlet 値を `self.send()` で返す
+    - 既存の BG スレッドからの traitlet 書き込みは変更しない（JupyterLab / VS Code 互換維持）
+  - **JS 側**:
+    - `useJobPolling(model)` フックを新規作成
+    - `status === "running"` 時に 1000ms 間隔で `model.send({type: "poll"})` を送信
+    - `msg:custom` の `job_state` 応答でローカル state を更新
+    - JS 側 100ms タイマーで `elapsed_sec` を補間（滑らかな表示）
+    - `status` が `completed` / `failed` になったらポーリング停止
+    - JupyterLab では traitlet `change:` イベントが先に到達し、ポーリングは確認程度に動作
+  - **App.tsx**:
+    - polled state と traitlet 値をマージし、polled 値を優先して子コンポーネントに渡す
+  - **ProgressView.tsx**:
+    - プログレスバーに `transition: width 0.8s ease-out` を追加（CSS アニメーション）
+- **影響範囲**:
+  - `src/lizyml_widget/widget.py` — `on_msg` ハンドラ追加
+  - `js/src/hooks/useJobPolling.ts` — 新規作成
+  - `js/src/App.tsx` — polled state マージ
+  - `js/src/components/ProgressView.tsx` — CSS transition 追加
+- **変更しないもの**:
+  - `_job_worker` / `_run_job` — BG スレッドの traitlet 書き込みはそのまま
+  - Service / Adapter 層
+  - Python API（`w.fit()` / `w.tune()`）
+  - 個別 UI コンポーネントの props インターフェース
+
+---
+
+### P-019: ダークモード対応
+
+- **日付**: 2026-03-19
+- **ステータス**: Approved（2026-03-19 承認）
+- **背景**:
+  - 現行の CSS は `var(--jp-*, fallback)` パターンでフォールバック値にライトモード色をハードコードしている（約 100 箇所）。
+  - JupyterLab のダークテーマでは `--jp-*` CSS 変数が切り替わるため部分的に対応できるが、フォールバック色がライト固定のためコンポーネントによっては白背景のまま残る。
+  - Google Colab では `--jp-*` CSS 変数自体が提供されないため、常にフォールバック値（ライトモード色）が使われる。Colab のダークモードでは Widget が浮いて見える。
+  - BLUEPRINT §2 原則 4「環境非依存」の一環として、ダークモードを適切にサポートする必要がある。
+- **提案内容**:
+  - **Phase 1: CSS 変数層の導入**
+    - `.lzw-root` に Widget 固有の CSS 変数（`--lzw-bg`, `--lzw-fg`, `--lzw-border`, `--lzw-accent` 等）を定義
+    - ハードコードされた約 100 箇所のカラー値を Widget 固有変数に置換
+    - ライトモードでの変数値は現行と同一（見た目の変化なし）
+  - **Phase 2: ダークモード対応**
+    - `@media (prefers-color-scheme: dark)` でダークモード変数値を定義
+    - JupyterLab の `--jp-*` 変数が存在する場合はそちらを優先（`var(--jp-layout-color0, var(--lzw-bg))`）
+    - Colab / `--jp-*` 未提供環境では Widget 固有変数にフォールバック
+  - **Phase 3: Plotly プロットのテーマ追従**
+    - Plotly の `layout.template` をダークモード時に `plotly_dark` に切り替え
+    - JS 側で `prefers-color-scheme` を検出し、プロット描画時に適用
+- **影響範囲**:
+  - `js/src/widget.css` — CSS 変数定義 + ダークモードメディアクエリ追加 + ハードコード色置換
+  - `js/src/hooks/usePlot.ts` または Plotly レンダリング部 — テンプレート切替
+  - フロントエンドの外部依存ライブラリの追加・削除はなし
+- **変更しないもの**:
+  - Python 側のコード
+  - traitlets / Action 契約
+  - コンポーネント構造・ロジック
+
+### P-020: libgomp OpenMP プール親和性問題の回避（subprocess 実行戦略）
+
+- **日付**: 2026-03-19
+- **ステータス**: Proposed
+- **背景**:
+  - Linux 環境（WSL2 含む）で libgomp（GCC OpenMP）を使用する場合、OpenMP スレッドプールは最初に並列リージョンを実行したスレッドに束縛される（GCC bug #108494）。
+  - Widget では main thread が lightgbm import / Dataset 作成時に先に OpenMP を使用するため、worker thread からの Fit/Tune 実行時に 50x の速度劣化が発生する。
+  - `daemon=False`、`omp_set_num_threads()`、thread 内 warm-up 等は効果なし。同一プロセス内では回避不可能。
+  - LLVM libomp（macOS デフォルト）および MSVC vcomp（Windows）にはこの制約がない。
+- **検証済みアプローチ**:
+  - ❌ `daemon=False` — プール親和性が原因のため効果なし（daemon=True と同じ 50x）
+  - ❌ `omp_set_num_threads()` / `threadpoolctl` — ICV は設定されるがプール再利用に影響しない
+  - ❌ Thread 内 warm-up / dummy 並列リージョン — 一度束縛されたプールは再割当て不可
+  - ✅ `LD_PRELOAD=libomp` — libomp にはプール親和性バグがなく 2.3x（許容範囲）
+  - ✅ `subprocess.Popen` — 新プロセスでは libgomp 状態が初期化され 1.5x（許容範囲）
+- **提案内容**:
+  - **Phase 1: 環境検知モジュール（`openmp_detect.py`）**
+    - `is_libgomp_affected() -> bool` — Linux + libgomp を検知
+    - `find_libomp_path() -> str | None` — libomp の共有ライブラリパスを探索
+    - `get_execution_strategy() -> tuple[str, str | None]` — `("thread", None)` or `("subprocess", libomp_path)`
+  - **Phase 2: Subprocess エントリポイント（`_subprocess_entry.py`）**
+    - `python -m lizyml_widget._subprocess_entry` として実行
+    - stdin: pickle of `{job_type, config, df_bytes}`
+    - stdout: length-prefixed pickle messages（progress / result / error）
+    - SIGTERM でキャンセル
+  - **Phase 3: Subprocess ランナー（`subprocess_runner.py`）**
+    - `run_job_subprocess()` — subprocess 起動、LD_PRELOAD 設定、データ転送、進捗読取、キャンセル管理
+  - **Phase 4: Widget 統合**
+    - `_run_job` で `self._execution_strategy` に基づき分岐
+    - `_subprocess_job_worker` 新規追加
+    - `WidgetService.get_dataframe()` / `load_model_from_path()` 追加
+    - `LizyMLAdapter.load_model()` 実装
+  - **Phase 5: テスト**
+    - 検知、ランナー、Widget 統合の各レイヤーでユニット + 統合テスト
+- **影響範囲**:
+  - `widget.py` — `__init__`（検知キャッシュ）、`_run_job`（分岐追加）、`_subprocess_job_worker`（新規）
+  - `service.py` — `get_dataframe()`、`load_model_from_path()` 追加
+  - `adapter.py` — `load_model()` 実装
+  - 新規ファイル: `openmp_detect.py`、`subprocess_runner.py`、`_subprocess_entry.py`
+- **変更しないもの**:
+  - traitlets / Action 契約（subprocess path も同じ traitlet を更新）
+  - Colab ポーリング機構（`_handle_custom_msg` は traitlet 値を読むため変更不要）
+  - フロントエンド（JS/CSS）
+  - Windows / macOS の実行パス（`threading.Thread` のまま）

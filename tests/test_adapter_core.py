@@ -542,13 +542,16 @@ class TestStubs:
         adapter = LizyMLAdapter()
         mock_model = MagicMock()
         result = adapter.export_model(mock_model, "/tmp/model.pkl")
-        mock_model.save.assert_called_once_with("/tmp/model.pkl")
+        mock_model.export.assert_called_once_with("/tmp/model.pkl")
         assert result == "/tmp/model.pkl"
 
-    def test_load_model_not_implemented(self) -> None:
+    def test_load_model_invalid_path(self) -> None:
+        """load_model raises on non-existent path."""
+        from lizyml.core.exceptions import LizyMLError
+
         adapter = LizyMLAdapter()
-        with pytest.raises(NotImplementedError):
-            adapter.load_model("/tmp/model.pkl")
+        with pytest.raises(LizyMLError):
+            adapter.load_model("/tmp/nonexistent_model_path.pkl")
 
     def test_model_info_not_implemented(self) -> None:
         adapter = LizyMLAdapter()

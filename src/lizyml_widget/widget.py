@@ -17,7 +17,9 @@ import pandas as pd
 import traitlets
 
 from .adapter import BackendAdapter, LizyMLAdapter
+from .openmp_detect import get_execution_strategy
 from .service import WidgetService
+from .subprocess_runner import run_job_subprocess
 from .types import ConfigPatchOp, FitSummary, PredictionSummary, TuningSummary
 
 _log = logging.getLogger(__name__)
@@ -51,6 +53,8 @@ class LizyWidget(anywidget.AnyWidget):
     def __init__(self, *, adapter: BackendAdapter | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._service = WidgetService(adapter=adapter or LizyMLAdapter())
+        self._execution_strategy: str | None = None
+        self._libomp_path: str | None = None
         self._job_thread: threading.Thread | None = None
         self._cancel_flag = threading.Event()
         self._job_counter = 0
@@ -231,6 +235,40 @@ class LizyWidget(anywidget.AnyWidget):
         canonical = self._service.apply_loaded_config(loaded)
         self.df_info = self._service.get_df_info()
         self.config = canonical
+
+    # ── Custom message handler (Colab polling) ──────────────
+
+    def _handle_custom_msg(self, content: dict[str, Any], buffers: list[Any]) -> None:
+        """Handle msg:custom messages from JS (e.g. poll requests).
+
+        Overrides ipywidgets.Widget._handle_custom_msg(content, buffers).
+        Runs on the main (shell) thread, so self.send() reliably reaches JS
+        even on Google Colab where BG-thread comm is blocked.
+        """
+        if content.get("type") != "poll":
+            super()._handle_custom_msg(content, buffers)
+            return
+
+        state: dict[str, Any] = {
+            "type": "job_state",
+            "status": self.status,
+            "progress": dict(self.progress),
+            "elapsed_sec": self.elapsed_sec,
+            "job_type": self.job_type,
+            "job_index": self.job_index,
+            "error": dict(self.error),
+        }
+
+        # Include result payloads on terminal states
+        if self.status in ("completed", "failed"):
+            state["fit_summary"] = dict(self.fit_summary)
+            state["tune_summary"] = dict(self.tune_summary)
+            state["available_plots"] = list(self.available_plots)
+
+        try:
+            self.send(state)
+        except Exception as exc:
+            _log.debug("poll reply failed (comm likely closed): %s", exc)
 
     # ── Action dispatcher ─────────────────────────────────────
 
@@ -553,11 +591,35 @@ class LizyWidget(anywidget.AnyWidget):
             self.status = "failed"
             return
 
-        # Use non-daemon thread to avoid OpenMP thread degradation.
-        # Daemon threads cause libgomp to use single-threaded execution,
-        # resulting in 50x slowdown for LightGBM on WSL2/Linux.
+        # Detect execution strategy lazily (libgomp may not be loaded at
+        # __init__ time; it loads when data is first processed by sklearn/lgbm).
+        if self._execution_strategy is None:
+            # Default to thread — subprocess is opt-in via LZW_FORCE_SUBPROCESS=1
+            # because real-world fit degradation from libgomp pool affinity is
+            # only 1.0-1.2x, while subprocess overhead (~500ms import) is larger.
+            import os
+
+            if os.environ.get("LZW_FORCE_SUBPROCESS") == "1":
+                self._execution_strategy, self._libomp_path = get_execution_strategy()
+            else:
+                self._execution_strategy = "thread"
+                self._libomp_path = None
+
+        # Join previous worker thread to ensure its OpenMP thread pool is
+        # fully cleaned up.  Without this, repeated Fit/Tune cycles accumulate
+        # orphaned OS threads (one libgomp pool per worker), causing severe CPU
+        # thrashing once thread count exceeds core count.
+        prev = self._job_thread
+        if prev is not None and prev.is_alive():
+            prev.join(timeout=5.0)
+
+        worker = (
+            self._subprocess_job_worker
+            if self._execution_strategy == "subprocess"
+            else self._job_worker
+        )
         thread = threading.Thread(
-            target=self._job_worker,
+            target=worker,
             args=(job_type, full_config),
             daemon=False,
         )
@@ -647,6 +709,97 @@ class LizyWidget(anywidget.AnyWidget):
         finally:
             timer_stop.set()
             timer.join(timeout=2.0)
+
+    def _subprocess_job_worker(self, job_type: str, config: dict[str, Any]) -> None:
+        """Run a job via subprocess for OpenMP-safe execution."""
+        start = time.monotonic()
+        timer_stop = threading.Event()
+
+        def tick_elapsed() -> None:
+            while not timer_stop.is_set():
+                self.elapsed_sec = round(time.monotonic() - start, 1)
+                timer_stop.wait(1.0)
+
+        timer = threading.Thread(target=tick_elapsed, daemon=True)
+        timer.start()
+
+        def on_progress(current: int, total: int, message: str) -> None:
+            self.progress = {"current": current, "total": total, "message": message}
+            self.elapsed_sec = round(time.monotonic() - start, 1)
+
+        import tempfile
+
+        model_out_path = tempfile.mkdtemp(prefix="lzw_model_")
+
+        try:
+            df = self._service.get_dataframe()
+            target = self._service.get_df_info().get("target", "")
+
+            result = run_job_subprocess(
+                job_type=job_type,
+                config=config,
+                df=df,
+                target=target,
+                libomp_path=self._libomp_path,
+                on_progress=on_progress,
+                cancel_flag=self._cancel_flag,
+                model_out_path=model_out_path,
+            )
+
+            if job_type == "fit":
+                normalized = self._normalize_metrics(result.eval_table)
+                self.fit_summary = {
+                    "metrics": normalized if normalized else result.fit_summary.get("metrics", {}),
+                    "fold_count": result.fit_summary.get("fold_count", 0),
+                    "fold_details": result.split_summary,
+                    "params": result.fit_summary.get("params", []),
+                }
+            elif job_type == "tune":
+                self.tune_summary = result.tune_summary
+                if result.eval_table:
+                    normalized = self._normalize_metrics(result.eval_table)
+                    if normalized:
+                        self.fit_summary = {
+                            "metrics": normalized,
+                            "fold_count": len(result.split_summary),
+                            "fold_details": result.split_summary,
+                            "params": [],
+                        }
+
+            # Load model back from subprocess
+            if result.model_path:
+                try:
+                    self._service.load_model_from_path(result.model_path)
+                except Exception as load_err:
+                    _log.warning("Model load from subprocess failed: %s", load_err)
+
+            self.available_plots = result.available_plots
+            self.elapsed_sec = round(time.monotonic() - start, 1)
+            self.status = "completed"
+
+        except InterruptedError:
+            self.elapsed_sec = round(time.monotonic() - start, 1)
+            self.error = {"code": "CANCELLED", "message": "Job cancelled by user"}
+            self.status = "failed"
+
+        except Exception as e:
+            self.elapsed_sec = round(time.monotonic() - start, 1)
+            try:
+                exc_msg = str(e)
+                code = "BACKEND_ERROR" if "lizyml" in exc_msg.lower() else "SUBPROCESS_ERROR"
+            except Exception:
+                code = "SUBPROCESS_ERROR"
+            _log.error("Subprocess job %s failed (%s): %s", job_type, code, e, exc_info=True)
+            self.error = {"code": code, "message": str(e)}
+            self.status = "failed"
+
+        finally:
+            timer_stop.set()
+            timer.join(timeout=2.0)
+            import shutil
+
+            with contextlib.suppress(OSError):
+                shutil.rmtree(model_out_path, ignore_errors=True)
 
     # ── Config helpers ─────────────────────────────────────────
 

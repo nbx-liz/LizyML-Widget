@@ -1,8 +1,11 @@
-/** Header — backend badge + status indicator. */
+/** Header — backend badge + status indicator + theme toggle. */
+import type { ResolvedTheme } from "../hooks/useTheme";
 
 interface HeaderProps {
   backendInfo: { name?: string; version?: string };
   status: string;
+  theme: ResolvedTheme;
+  onToggleTheme: () => void;
 }
 
 const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
@@ -13,7 +16,7 @@ const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
   failed: { label: "✗ Failed", cls: "lzw-badge--error" },
 };
 
-export function Header({ backendInfo, status }: HeaderProps) {
+export function Header({ backendInfo, status, theme, onToggleTheme }: HeaderProps) {
   const s = STATUS_LABELS[status] ?? STATUS_LABELS.idle;
   const backend = backendInfo.name
     ? `${backendInfo.name} v${backendInfo.version}`
@@ -25,6 +28,16 @@ export function Header({ backendInfo, status }: HeaderProps) {
       <span class="lzw-header__right">
         {backend && <span class="lzw-badge lzw-badge--muted">{backend}</span>}
         <span class={`lzw-badge ${s.cls}`}>{s.label}</span>
+        <button
+          class="lzw-theme-toggle"
+          onClick={onToggleTheme}
+          type="button"
+          title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+          aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+          aria-pressed={theme === "dark"}
+        >
+          {theme === "light" ? "🌙" : "☀️"}
+        </button>
       </span>
     </div>
   );

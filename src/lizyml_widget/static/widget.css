@@ -1,3 +1,73 @@
+/* ── Theme Variables ─────────────────────────────────────── */
+/* Base: inherit from JupyterLab theme if available (no data-lzw-theme set). */
+.lzw-root {
+  --lzw-bg-0: var(--jp-layout-color0, #fff);
+  --lzw-bg-1: var(--jp-layout-color1, #f5f5f5);
+  --lzw-bg-2: var(--jp-layout-color2, #eee);
+  --lzw-fg-0: var(--jp-ui-font-color1, #333);
+  --lzw-fg-1: var(--jp-ui-font-color2, #666);
+  --lzw-fg-2: #767676;
+  --lzw-border: var(--jp-border-color1, #e0e0e0);
+  --lzw-border-light: var(--jp-border-color2, #f0f0f0);
+  --lzw-accent: var(--jp-brand-color1, #2196f3);
+  --lzw-accent-fg: #fff;
+  --lzw-input-bg: var(--jp-layout-color0, #fff);
+  --lzw-error: #c62828;
+  --lzw-success: #2e7d32;
+  --lzw-warning: #e65100;
+  --lzw-info: #1565c0;
+  --lzw-badge-info-bg: #e3f2fd;
+  --lzw-badge-running-bg: #fff3e0;
+  --lzw-badge-success-bg: #e8f5e9;
+  --lzw-badge-error-bg: #ffebee;
+  --lzw-tag-warning-bg: #fff3cd;
+  --lzw-tag-warning-fg: #856404;
+  --lzw-modal-overlay: rgba(0, 0, 0, 0.4);
+  --lzw-toggle-knob: #fff;
+}
+
+/* Light: explicit self-managed theme. Overrides --jp-* to avoid host theme leaking
+   (e.g. Colab dark mode setting --jp-ui-font-color1 to light gray). */
+.lzw-root[data-lzw-theme="light"] {
+  --lzw-bg-0: #fff;
+  --lzw-bg-1: #f5f5f5;
+  --lzw-bg-2: #eee;
+  --lzw-fg-0: #333;
+  --lzw-fg-1: #666;
+  --lzw-fg-2: #767676;
+  --lzw-border: #e0e0e0;
+  --lzw-border-light: #f0f0f0;
+  --lzw-accent: #2196f3;
+  --lzw-accent-fg: #fff;
+  --lzw-input-bg: #fff;
+}
+
+.lzw-root[data-lzw-theme="dark"] {
+  --lzw-bg-0: #1e1e1e;
+  --lzw-bg-1: #2d2d2d;
+  --lzw-bg-2: #3c3c3c;
+  --lzw-fg-0: #e0e0e0;
+  --lzw-fg-1: #aaa;
+  --lzw-fg-2: #8a8a8a;
+  --lzw-border: #555;
+  --lzw-border-light: #444;
+  --lzw-accent: #64b5f6;
+  --lzw-accent-fg: #1e1e1e;
+  --lzw-input-bg: #2d2d2d;
+  --lzw-error: #f28b82;
+  --lzw-success: #81c784;
+  --lzw-warning: #ffb74d;
+  --lzw-info: #90caf9;
+  --lzw-badge-info-bg: #1a3a5c;
+  --lzw-badge-running-bg: #3e2a10;
+  --lzw-badge-success-bg: #1a3a1c;
+  --lzw-badge-error-bg: #3c1a1a;
+  --lzw-tag-warning-bg: #3e3010;
+  --lzw-tag-warning-fg: #ffcc80;
+  --lzw-modal-overlay: rgba(0, 0, 0, 0.6);
+  --lzw-toggle-knob: #e0e0e0;
+}
+
 /* ── Root ────────────────────────────────────────────────── */
 .lzw-root {
   font-family: var(--jp-ui-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
@@ -6,13 +76,13 @@
   width: 100%;
   min-height: 620px;
   resize: vertical;
-  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border: 1px solid var(--lzw-border);
   border-radius: 6px;
   overflow: auto;
   display: flex;
   flex-direction: column;
-  background: var(--jp-layout-color0, #fff);
-  color: var(--jp-ui-font-color1, #333);
+  background: var(--lzw-bg-0);
+  color: var(--lzw-fg-0);
 }
 
 .lzw-app {
@@ -28,6 +98,36 @@
   box-sizing: border-box;
 }
 
+/* Reset host environment styles.
+   VS Code Jupyter sets `background: #fff !important` on .cell-output-ipywidget-background.
+   Colab sets background-color on table/button elements.
+   We must use !important to override both. */
+.lzw-root table,
+.lzw-root thead,
+.lzw-root tbody,
+.lzw-root tr,
+.lzw-root th,
+.lzw-root td,
+.lzw-root input,
+.lzw-root select {
+  background-color: inherit !important;
+  color: inherit !important;
+}
+
+/* Buttons: reset base but allow active/accent overrides */
+.lzw-root button {
+  background-color: inherit;
+  color: inherit;
+}
+
+/* Restore explicit colors for active/selected button states */
+.lzw-root .lzw-segment__btn--active,
+.lzw-root .lzw-chip--active,
+.lzw-root .lzw-tabs__btn--active {
+  background-color: var(--lzw-accent) !important;
+  color: var(--lzw-accent-fg) !important;
+}
+
 /* ── Header ─────────────────────────────────────────────── */
 .lzw-header {
   display: flex;
@@ -35,8 +135,8 @@
   justify-content: space-between;
   padding: 8px 16px;
   height: 40px;
-  border-bottom: 1px solid var(--jp-border-color1, #e0e0e0);
-  background: var(--jp-layout-color1, #f5f5f5);
+  border-bottom: 1px solid var(--lzw-border);
+  background: var(--lzw-bg-1);
   flex-shrink: 0;
 }
 
@@ -54,8 +154,8 @@
 /* ── Tabs ────────────────────────────────────────────────── */
 .lzw-tabs {
   display: flex;
-  border-bottom: 1px solid var(--jp-border-color1, #e0e0e0);
-  background: var(--jp-layout-color1, #f5f5f5);
+  border-bottom: 1px solid var(--lzw-border);
+  background: var(--lzw-bg-1);
   flex-shrink: 0;
 }
 
@@ -65,18 +165,18 @@
   background: transparent;
   cursor: pointer;
   font-size: 13px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
   border-bottom: 2px solid transparent;
   transition: color 0.15s, border-color 0.15s;
 }
 
 .lzw-tabs__btn:hover {
-  color: var(--jp-ui-font-color1, #333);
+  color: var(--lzw-fg-0);
 }
 
 .lzw-tabs__btn--active {
-  color: var(--jp-brand-color1, #2196f3);
-  border-bottom-color: var(--jp-brand-color1, #2196f3);
+  color: var(--lzw-accent);
+  border-bottom-color: var(--lzw-accent);
   font-weight: 600;
 }
 
@@ -98,28 +198,28 @@
 }
 
 .lzw-badge--muted {
-  background: var(--jp-layout-color2, #eee);
-  color: var(--jp-ui-font-color2, #666);
+  background: var(--lzw-bg-2);
+  color: var(--lzw-fg-1);
 }
 
 .lzw-badge--info {
-  background: #e3f2fd;
-  color: #1565c0;
+  background: var(--lzw-badge-info-bg);
+  color: var(--lzw-info);
 }
 
 .lzw-badge--running {
-  background: #fff3e0;
-  color: #e65100;
+  background: var(--lzw-badge-running-bg);
+  color: var(--lzw-warning);
 }
 
 .lzw-badge--success {
-  background: #e8f5e9;
-  color: #2e7d32;
+  background: var(--lzw-badge-success-bg);
+  color: var(--lzw-success);
 }
 
 .lzw-badge--error {
-  background: #ffebee;
-  color: #c62828;
+  background: var(--lzw-badge-error-bg);
+  color: var(--lzw-error);
 }
 
 /* ── Tags ────────────────────────────────────────────────── */
@@ -133,13 +233,13 @@
 }
 
 .lzw-tag--muted {
-  background: var(--jp-layout-color2, #eee);
-  color: var(--jp-ui-font-color2, #666);
+  background: var(--lzw-bg-2);
+  color: var(--lzw-fg-1);
 }
 
 .lzw-tag--warning {
-  background: #fff3cd;
-  color: #856404;
+  background: var(--lzw-tag-warning-bg);
+  color: var(--lzw-tag-warning-fg);
 }
 
 /* ── Accordion ───────────────────────────────────────────── */
@@ -158,12 +258,12 @@
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
-  color: var(--jp-ui-font-color1, #333);
+  color: var(--lzw-fg-0);
   text-align: left;
 }
 
 .lzw-accordion__trigger:hover {
-  color: var(--jp-brand-color1, #2196f3);
+  color: var(--lzw-accent);
 }
 
 .lzw-accordion__arrow {
@@ -187,17 +287,22 @@
 .lzw-label {
   min-width: 90px;
   font-size: 12px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
 }
 
 .lzw-select,
 .lzw-input {
   padding: 3px 6px;
-  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border: 1px solid var(--lzw-border);
   border-radius: 3px;
   font-size: 12px;
-  background: var(--jp-layout-color0, #fff);
-  color: var(--jp-ui-font-color1, #333);
+  background: var(--lzw-bg-0);
+  color: var(--lzw-fg-0);
+}
+
+.lzw-select option {
+  background: var(--lzw-bg-0);
+  color: var(--lzw-fg-0);
 }
 
 .lzw-input--sm {
@@ -205,7 +310,7 @@
 }
 
 .lzw-muted {
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
   font-size: 12px;
 }
 
@@ -239,9 +344,9 @@
 .lzw-columns-grid__header > div {
   text-align: left;
   padding: 4px 8px;
-  border-bottom: 2px solid var(--jp-border-color1, #e0e0e0);
+  border-bottom: 2px solid var(--lzw-border);
   font-weight: 600;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
 }
 
 .lzw-columns-grid__row {
@@ -250,7 +355,7 @@
 
 .lzw-columns-grid__row > div {
   padding: 3px 8px;
-  border-bottom: 1px solid var(--jp-border-color2, #f0f0f0);
+  border-bottom: 1px solid var(--lzw-border-light);
   display: flex;
   align-items: center;
 }
@@ -274,9 +379,9 @@
 .lzw-search-space-grid__header > div {
   text-align: left;
   padding: 4px 8px;
-  border-bottom: 2px solid var(--jp-border-color1, #e0e0e0);
+  border-bottom: 2px solid var(--lzw-border);
   font-weight: 600;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
 }
 
 .lzw-search-space-grid__group-wrap {
@@ -291,7 +396,7 @@
   grid-column: 1 / -1;
   font-weight: 600;
   padding: 6px 8px;
-  border-bottom: 1px solid var(--lzw-border, #e0e0e0);
+  border-bottom: 1px solid var(--lzw-border);
 }
 
 .lzw-search-space-grid__row {
@@ -300,7 +405,7 @@
 
 .lzw-search-space-grid__row > div {
   padding: 3px 8px;
-  border-bottom: 1px solid var(--jp-border-color2, #f0f0f0);
+  border-bottom: 1px solid var(--lzw-border-light);
   display: flex;
   align-items: center;
 }
@@ -308,14 +413,14 @@
 .lzw-table th {
   text-align: left;
   padding: 4px 8px;
-  border-bottom: 2px solid var(--jp-border-color1, #e0e0e0);
+  border-bottom: 2px solid var(--lzw-border);
   font-weight: 600;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
 }
 
 .lzw-table td {
   padding: 3px 8px;
-  border-bottom: 1px solid var(--jp-border-color2, #f0f0f0);
+  border-bottom: 1px solid var(--lzw-border-light);
 }
 
 .lzw-table__name {
@@ -344,7 +449,7 @@
 /* ── Data Tab ────────────────────────────────────────────── */
 .lzw-data-tab__shape {
   font-size: 12px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
   margin-bottom: 8px;
 }
 
@@ -353,9 +458,9 @@
   flex-direction: column;
   gap: 2px;
   padding: 8px 0;
-  border-top: 1px solid var(--jp-border-color2, #f0f0f0);
+  border-top: 1px solid var(--lzw-border-light);
   font-size: 12px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
 }
 
 /* ── Sub-tabs ────────────────────────────────────────────── */
@@ -364,28 +469,28 @@
   align-items: center;
   gap: 4px;
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--jp-border-color2, #f0f0f0);
+  border-bottom: 1px solid var(--lzw-border-light);
   margin-bottom: 8px;
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--jp-layout-color0, #fff);
+  background: var(--lzw-bg-0);
 }
 
 .lzw-subtabs__btn {
   padding: 4px 12px;
-  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border: 1px solid var(--lzw-border);
   border-radius: 4px;
-  background: var(--jp-layout-color0, #fff);
+  background: var(--lzw-bg-0);
   cursor: pointer;
   font-size: 12px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
 }
 
 .lzw-subtabs__btn--active {
-  background: var(--jp-brand-color1, #2196f3);
-  color: #fff;
-  border-color: var(--jp-brand-color1, #2196f3);
+  background: var(--lzw-accent);
+  color: var(--lzw-accent-fg);
+  border-color: var(--lzw-accent);
 }
 
 .lzw-subtabs__right {
@@ -395,12 +500,12 @@
 /* ── Buttons ─────────────────────────────────────────────── */
 .lzw-btn {
   padding: 5px 16px;
-  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border: 1px solid var(--lzw-border);
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
-  background: var(--jp-layout-color0, #fff);
-  color: var(--jp-ui-font-color1, #333);
+  background: var(--lzw-bg-0);
+  color: var(--lzw-fg-0);
 }
 
 .lzw-btn:disabled {
@@ -409,9 +514,9 @@
 }
 
 .lzw-btn--primary {
-  background: var(--jp-brand-color1, #2196f3);
-  color: #fff;
-  border-color: var(--jp-brand-color1, #2196f3);
+  background: var(--lzw-accent);
+  color: var(--lzw-accent-fg);
+  border-color: var(--lzw-accent);
 }
 
 .lzw-btn--primary:hover:not(:disabled) {
@@ -427,7 +532,7 @@
   font-weight: 600;
   font-size: 12px;
   margin-bottom: 4px;
-  color: var(--jp-ui-font-color1, #333);
+  color: var(--lzw-fg-0);
 }
 
 .lzw-dynform__section-body {
@@ -454,7 +559,7 @@
 
 .lzw-progress__bar-wrap {
   height: 8px;
-  background: var(--jp-layout-color2, #eee);
+  background: var(--lzw-bg-2);
   border-radius: 4px;
   overflow: hidden;
   margin-bottom: 8px;
@@ -462,9 +567,9 @@
 
 .lzw-progress__bar {
   height: 100%;
-  background: var(--jp-brand-color1, #2196f3);
+  background: var(--lzw-accent);
   border-radius: 4px;
-  transition: width 0.3s ease;
+  transition: width 0.8s ease-out;
 }
 
 .lzw-progress__bar--indeterminate {
@@ -481,7 +586,7 @@
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
   margin-bottom: 12px;
 }
 
@@ -495,7 +600,7 @@
   margin-top: 12px;
   font-family: monospace;
   font-size: 12px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
 }
 
 .lzw-progress__fold-row {
@@ -522,7 +627,7 @@
 .lzw-pre {
   font-family: monospace;
   font-size: 11px;
-  background: var(--jp-layout-color2, #f5f5f5);
+  background: var(--lzw-bg-2);
   padding: 8px;
   border-radius: 4px;
   overflow-x: auto;
@@ -545,7 +650,7 @@
 .lzw-stepper {
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border: 1px solid var(--lzw-border);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -554,11 +659,11 @@
   width: 24px;
   height: 24px;
   border: none;
-  background: var(--jp-layout-color1, #f5f5f5);
+  background: var(--lzw-bg-1);
   cursor: pointer;
   font-size: 14px;
   font-weight: 600;
-  color: var(--jp-ui-font-color1, #333);
+  color: var(--lzw-fg-0);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -567,19 +672,19 @@
 }
 
 .lzw-stepper__btn:hover {
-  background: var(--jp-layout-color2, #eee);
+  background: var(--lzw-bg-2);
 }
 
 .lzw-stepper__input {
   width: 75px;
   border: none;
-  border-left: 1px solid var(--jp-border-color1, #e0e0e0);
-  border-right: 1px solid var(--jp-border-color1, #e0e0e0);
+  border-left: 1px solid var(--lzw-border);
+  border-right: 1px solid var(--lzw-border);
   text-align: center;
   font-size: 12px;
   padding: 2px 4px;
-  background: var(--jp-layout-color0, #fff);
-  color: var(--jp-ui-font-color1, #333);
+  background: var(--lzw-bg-0);
+  color: var(--lzw-fg-0);
   -moz-appearance: textfield;
 }
 
@@ -593,7 +698,7 @@
 .lzw-segment {
   display: inline-flex;
   flex-wrap: wrap;
-  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border: 1px solid var(--lzw-border);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -601,11 +706,11 @@
 .lzw-segment__btn {
   padding: 2px 8px;
   border: none;
-  border-right: 1px solid var(--jp-border-color1, #e0e0e0);
-  background: var(--jp-layout-color0, #fff);
+  border-right: 1px solid var(--lzw-border);
+  background: var(--lzw-bg-0);
   cursor: pointer;
   font-size: 11px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
   white-space: nowrap;
 }
 
@@ -614,12 +719,12 @@
 }
 
 .lzw-segment__btn--active {
-  background: var(--jp-brand-color1, #2196f3);
-  color: #fff;
+  background: var(--lzw-accent);
+  color: var(--lzw-accent-fg);
 }
 
 .lzw-segment__btn:hover:not(.lzw-segment__btn--active) {
-  background: var(--jp-layout-color2, #eee);
+  background: var(--lzw-bg-2);
 }
 
 .lzw-segment--wrap {
@@ -628,7 +733,7 @@
 
 .lzw-segment--wrap .lzw-segment__btn {
   border-radius: 4px;
-  border-right: 1px solid var(--jp-border-color1, #e0e0e0);
+  border-right: 1px solid var(--lzw-border);
 }
 
 /* ── Search Space ────────────────────────────────────────── */
@@ -643,7 +748,7 @@
   align-items: center;
   gap: 2px;
   font-size: 11px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
   margin-left: 4px;
 }
 
@@ -671,7 +776,7 @@
 }
 
 .lzw-inference-actions code {
-  background: var(--jp-layout-color2, #f5f5f5);
+  background: var(--lzw-bg-2);
   padding: 1px 4px;
   border-radius: 3px;
   font-size: 12px;
@@ -690,7 +795,7 @@
   gap: 8px;
   padding-top: 12px;
   margin-top: 12px;
-  border-top: 1px solid var(--jp-border-color2, #f0f0f0);
+  border-top: 1px solid var(--lzw-border-light);
 }
 
 /* ── Toggle ─────────────────────────────────────────────── */
@@ -712,7 +817,7 @@
   position: absolute;
   cursor: pointer;
   inset: 0;
-  background: var(--jp-layout-color2, #ccc);
+  background: var(--lzw-bg-2);
   border-radius: 10px;
   transition: background 0.2s;
 }
@@ -724,13 +829,13 @@
   width: 14px;
   left: 3px;
   bottom: 3px;
-  background: #fff;
+  background: var(--lzw-toggle-knob);
   border-radius: 50%;
   transition: transform 0.2s;
 }
 
 .lzw-toggle input:checked + .lzw-toggle__slider {
-  background: var(--jp-brand-color1, #2196f3);
+  background: var(--lzw-accent);
 }
 
 .lzw-toggle input:checked + .lzw-toggle__slider::before {
@@ -761,24 +866,24 @@
 
 .lzw-chip {
   padding: 2px 8px;
-  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border: 1px solid var(--lzw-border);
   border-radius: 12px;
-  background: var(--jp-layout-color0, #fff);
+  background: var(--lzw-bg-0);
   cursor: pointer;
   font-size: 11px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
   white-space: nowrap;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .lzw-chip--active {
-  background: var(--jp-brand-color1, #2196f3);
-  color: #fff;
-  border-color: var(--jp-brand-color1, #2196f3);
+  background: var(--lzw-accent);
+  color: var(--lzw-accent-fg);
+  border-color: var(--lzw-accent);
 }
 
 .lzw-chip:hover:not(.lzw-chip--active) {
-  background: var(--jp-layout-color2, #eee);
+  background: var(--lzw-bg-2);
 }
 
 /* ── Tag Input ───────────────────────────────────────────── */
@@ -788,9 +893,9 @@
   align-items: center;
   gap: 4px;
   padding: 3px 6px;
-  border: 1px solid var(--jp-border-color1, #e0e0e0);
+  border: 1px solid var(--lzw-border);
   border-radius: 3px;
-  background: var(--jp-layout-color0, #fff);
+  background: var(--lzw-bg-0);
   min-width: 160px;
   cursor: text;
 }
@@ -802,7 +907,7 @@
   font-size: 12px;
   min-width: 80px;
   flex: 1;
-  color: var(--jp-ui-font-color1, #333);
+  color: var(--lzw-fg-0);
 }
 
 .lzw-tag--removable {
@@ -818,11 +923,11 @@
   font-size: 11px;
   line-height: 1;
   padding: 0 1px;
-  color: var(--jp-ui-font-color2, #666);
+  color: var(--lzw-fg-1);
 }
 
 .lzw-tag__remove:hover {
-  color: var(--jp-error-color1, #e53935);
+  color: var(--lzw-error);
 }
 
 /* ── KV Editor ───────────────────────────────────── */
@@ -854,14 +959,14 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--lzw-modal-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 9999;
 }
 .lzw-modal {
-  background: var(--jp-layout-color1, #fff);
+  background: var(--lzw-bg-1);
   border-radius: 8px;
   padding: 16px;
   max-width: 600px;
@@ -869,6 +974,27 @@
   overflow: auto;
   width: 90%;
 }
+/* ── Theme Toggle ─────────────────────────────────────────── */
+.lzw-theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--lzw-border);
+  border-radius: 6px;
+  background: var(--lzw-bg-0);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.lzw-theme-toggle:hover {
+  background: var(--lzw-bg-2);
+}
+
 .lzw-modal__header {
   display: flex;
   justify-content: space-between;

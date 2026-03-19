@@ -6,6 +6,7 @@ import { ScoreTable } from "../components/ScoreTable";
 import { ParamsTable } from "../components/ParamsTable";
 import { PlotViewer } from "../components/PlotViewer";
 import { PredTable } from "../components/PredTable";
+import type { ResolvedTheme } from "../hooks/useTheme";
 
 interface ResultsTabProps {
   status: string;
@@ -25,6 +26,7 @@ interface ResultsTabProps {
   onSwitchToFit?: () => void;
   /** Evaluation params for metric display annotations. */
   evaluationParams?: Record<string, any>;
+  theme?: ResolvedTheme;
 }
 
 /** Format a plot type slug into a display label. */
@@ -55,6 +57,7 @@ export function ResultsTab({
   sendAction,
   onSwitchToFit,
   evaluationParams,
+  theme = "light",
 }: ResultsTabProps) {
   const [selectedPlot, setSelectedPlot] = useState<string | null>(null);
 
@@ -214,6 +217,7 @@ export function ResultsTab({
               plots={plots}
               loading={plotLoading}
               onRequest={onRequestPlot}
+              theme={theme}
             />
           )}
         </div>
@@ -265,6 +269,7 @@ export function ResultsTab({
         plots={plots}
         plotLoading={plotLoading}
         sendAction={sendAction}
+        theme={theme}
       />
     </div>
   );
@@ -277,12 +282,14 @@ function InferenceSection({
   plots,
   plotLoading,
   sendAction,
+  theme = "light",
 }: {
   inferenceResult: Record<string, any>;
   hasInference: boolean;
   plots: Record<string, any>;
   plotLoading: Record<string, boolean>;
   sendAction: (type: string, payload?: Record<string, any>) => void;
+  theme?: ResolvedTheme;
 }) {
   const [returnShap, setReturnShap] = useState(false);
 
@@ -329,6 +336,7 @@ function InferenceSection({
               plots={plots}
               loading={plotLoading}
               onRequest={(pt) => sendAction("request_inference_plot", { plot_type: pt })}
+              theme={theme}
             />
           </Accordion>
           {returnShap && (
@@ -338,6 +346,7 @@ function InferenceSection({
                 plots={plots}
                 loading={plotLoading}
                 onRequest={(pt) => sendAction("request_inference_plot", { plot_type: pt })}
+                theme={theme}
               />
             </Accordion>
           )}
