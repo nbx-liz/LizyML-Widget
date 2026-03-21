@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-03-21
+
+### Added
+- CONTRIBUTING.md with development workflow and quality gates
+- SECURITY.md with vulnerability reporting policy
+- CODE_OF_CONDUCT.md (Contributor Covenant v2.1)
+- `.pre-commit-config.yaml` with ruff and pre-commit-hooks
+- `.editorconfig` for cross-editor formatting consistency
+- `Makefile` with unified `make ci` command
+- Dependabot configuration for pip, github-actions, and npm
+- PR template with HISTORY/CHANGELOG checklist
+- Issue templates for bug reports and feature requests
+
 ## [0.4.0] - 2026-03-21
 
 ### Added
