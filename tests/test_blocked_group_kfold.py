@@ -246,8 +246,8 @@ class TestPreviewSplitsExpanding:
         for fold in result["folds"]:
             assert "train_periods" in fold
             assert "valid_period" in fold
-            assert "train_rows" in fold
-            assert "valid_rows" in fold
+            assert "train_size" in fold
+            assert "valid_size" in fold
 
     def test_expanding_train_periods_grow(self) -> None:
         """In expanding mode, each time fold adds one more train period."""

@@ -299,7 +299,7 @@ class WidgetService:
             current_group: list[Any] = []
             cutoff_idx = 0
             for v in sorted_values:
-                if cutoff_idx < len(cutoffs) and v >= cutoffs[cutoff_idx]:
+                if cutoff_idx < len(cutoffs) and str(v) >= str(cutoffs[cutoff_idx]):
                     if current_group:
                         grouped_periods.append(current_group)
                     current_group = []
@@ -350,8 +350,6 @@ class WidgetService:
                         "valid_size": valid_rows,
                         "train_periods": list(train_periods_list),
                         "valid_period": valid_period,
-                        "train_rows": train_rows,
-                        "valid_rows": valid_rows,
                     }
                 )
                 fold_index += 1
@@ -506,6 +504,10 @@ class WidgetService:
                 embargo=split_section.get("embargo", 0),
                 train_size_max=split_section.get("train_size_max"),
                 test_size_max=split_section.get("test_size_max"),
+                blocks=split_section.get("blocks"),
+                groups=split_section.get("groups"),
+                min_train_rows=split_section.get("min_train_rows", 0),
+                min_valid_rows=split_section.get("min_valid_rows", 0),
             )
 
         # Restore feature exclusions and categorical overrides (batch update)
