@@ -50,16 +50,25 @@ export function App({ model, rootEl }: AppProps) {
 
   const [columnStats, setColumnStats] = useState<Record<string, any> | null>(null);
   const [splitPreview, setSplitPreview] = useState<any | null>(null);
-  const [codeExportPath, setCodeExportPath] = useState<string | null>(null);
+  const [exportLoading, setExportLoading] = useState(false);
 
-  // Handle custom messages for column_stats, split_preview, code_export_result
-  const handleCustomMsg = useCallback((msg: any) => {
+  // Handle custom messages for column_stats, split_preview, code_export_download
+  const handleCustomMsg = useCallback((msg: any, buffers?: ArrayBuffer[]) => {
     if (msg.type === "column_stats") {
       setColumnStats(msg);
     } else if (msg.type === "split_preview" || msg.type === "preview_splits") {
       setSplitPreview(msg);
-    } else if (msg.type === "code_export_result") {
-      setCodeExportPath(msg.path ?? null);
+    } else if (msg.type === "code_export_download" && buffers && buffers.length > 0) {
+      const blob = new Blob([buffers[0]], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = msg.filename || "exported_code.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setExportLoading(false);
     }
   }, []);
   useCustomMsg(model, handleCustomMsg);
@@ -152,7 +161,11 @@ export function App({ model, rootEl }: AppProps) {
             onSwitchToFit={() => setActiveTab("Model")}
             evaluationParams={config?.evaluation?.params}
             theme={theme}
-            codeExportPath={codeExportPath}
+            exportLoading={exportLoading}
+            onExportCode={() => {
+              setExportLoading(true);
+              sendAction("export_code", {});
+            }}
           />
         )}
       </div>

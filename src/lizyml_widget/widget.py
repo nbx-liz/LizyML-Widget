@@ -6,6 +6,7 @@ import contextlib
 import copy
 import importlib.resources
 import logging
+import os
 import re
 import statistics
 import threading
@@ -588,21 +589,24 @@ class LizyWidget(anywidget.AnyWidget):
             import tempfile
             from pathlib import Path
 
-            # Sanitize user-supplied path: reject traversal components
-            raw_path: str | None = payload.get("path") or None
-            if raw_path is not None:
-                p = Path(raw_path)
-                if ".." in p.parts:
-                    raise ValueError(f"Path traversal rejected: {raw_path!r}")
-                if p.is_absolute():
-                    raise ValueError("Absolute paths are not allowed from the UI")
-
-            result_path = self._service.export_code(raw_path)
-            # ZIP the output directory
+            result_path = self._service.export_code(None)  # always tmpdir for UI
             zip_dir = tempfile.mkdtemp(prefix="lzw_code_export_")
-            zip_base = str(Path(zip_dir) / "export")
+            zip_base = str(Path(zip_dir) / "exported_code")
             zip_path = shutil.make_archive(zip_base, "zip", str(result_path))
-            self.send({"type": "code_export_result", "path": zip_path})
+
+            with open(zip_path, "rb") as f:
+                zip_bytes = f.read()
+
+            self.send(
+                {"type": "code_export_download", "filename": "exported_code.zip"},
+                buffers=[zip_bytes],
+            )
+
+            # Cleanup temp files
+            with contextlib.suppress(OSError):
+                os.unlink(zip_path)
+                shutil.rmtree(str(result_path), ignore_errors=True)
+                shutil.rmtree(zip_dir, ignore_errors=True)
         except Exception as e:
             self.error = {"code": "EXPORT_CODE_ERROR", "message": str(e)}
 

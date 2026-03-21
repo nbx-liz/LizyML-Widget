@@ -35,13 +35,13 @@ export function useSendAction(model: any) {
 /** Subscribe to custom messages from Python (widget.send()). */
 export function useCustomMsg(
   model: any,
-  handler: (msg: any) => void,
+  handler: (msg: any, buffers?: ArrayBuffer[]) => void,
 ) {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
   useEffect(() => {
-    const cb = (msg: any) => handlerRef.current(msg);
+    const cb = (msg: any, buffers?: ArrayBuffer[]) => handlerRef.current(msg, buffers);
     model.on("msg:custom", cb);
     return () => model.off("msg:custom", cb);
   }, [model]);
