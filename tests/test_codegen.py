@@ -63,26 +63,35 @@ def _make_widget_with_model() -> Any:
 class TestHandleExportCodeWithCustomPath:
     """_handle_export_code must pass payload['path'] to service.export_code."""
 
-    def test_export_code_with_custom_path(self, tmp_path: Path) -> None:
-        """Handler reads 'path' from payload and passes it to service.export_code."""
+    def test_export_code_with_relative_path(self, tmp_path: Path) -> None:
+        """Handler accepts relative path from payload."""
         w, adapter = _make_widget_with_model()
-        custom_path = str(tmp_path / "my_export")
-        adapter.export_code.return_value = Path(custom_path)
+        rel_path = "my_export"
+        adapter.export_code.return_value = Path(tmp_path / rel_path)
 
         sent_messages: list[dict[str, Any]] = []
         w.send = lambda msg: sent_messages.append(msg)  # type: ignore[method-assign]
 
-        # Invoke handler via action dispatch
-        w.action = {"type": "export_code", "payload": {"path": custom_path}}
+        w.action = {"type": "export_code", "payload": {"path": rel_path}}
 
-        # Verify adapter.export_code was called with the custom path
         call_args = adapter.export_code.call_args
         assert call_args is not None, "adapter.export_code was not called"
-        # path argument (positional or keyword)
         called_path = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("path")
-        assert called_path == custom_path, (
-            f"Expected export_code called with {custom_path!r}, got {called_path!r}"
-        )
+        assert called_path == rel_path
+
+    def test_export_code_rejects_absolute_path(self) -> None:
+        """Handler rejects absolute paths from JS payload."""
+        w, _adapter = _make_widget_with_model()
+        w.action = {"type": "export_code", "payload": {"path": "/etc/evil"}}
+        assert w.error.get("code") == "EXPORT_CODE_ERROR"
+        assert "Absolute paths" in w.error.get("message", "")
+
+    def test_export_code_rejects_traversal(self) -> None:
+        """Handler rejects path traversal attempts."""
+        w, _adapter = _make_widget_with_model()
+        w.action = {"type": "export_code", "payload": {"path": "../../etc/evil"}}
+        assert w.error.get("code") == "EXPORT_CODE_ERROR"
+        assert "traversal" in w.error.get("message", "")
 
 
 class TestHandleExportCodeWithoutPath:

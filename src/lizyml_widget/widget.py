@@ -586,12 +586,21 @@ class LizyWidget(anywidget.AnyWidget):
         try:
             import shutil
             import tempfile
+            from pathlib import Path
 
-            # Use payload path when provided; fall back to tmpdir
+            # Sanitize user-supplied path: reject traversal components
             raw_path: str | None = payload.get("path") or None
+            if raw_path is not None:
+                p = Path(raw_path)
+                if ".." in p.parts:
+                    raise ValueError(f"Path traversal rejected: {raw_path!r}")
+                if p.is_absolute():
+                    raise ValueError("Absolute paths are not allowed from the UI")
+
             result_path = self._service.export_code(raw_path)
             # ZIP the output directory
-            zip_base = tempfile.mktemp(prefix="lzw_code_export_", suffix="")
+            zip_dir = tempfile.mkdtemp(prefix="lzw_code_export_")
+            zip_base = str(Path(zip_dir) / "export")
             zip_path = shutil.make_archive(zip_base, "zip", str(result_path))
             self.send({"type": "code_export_result", "path": zip_path})
         except Exception as e:

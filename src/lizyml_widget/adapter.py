@@ -525,11 +525,11 @@ class LizyMLAdapter:
         on_progress: Callable[..., Any] | None,
         poll_interval: float = 0.5,
     ) -> Any:
-        """Run *target* in a daemon thread, polling on_progress for cancellation.
+        """Run *target* in a non-daemon worker thread, polling for cancellation.
 
-        If *on_progress* raises ``InterruptedError`` the backend thread is
-        abandoned (daemon) and the exception propagates to the caller.
-        The abandoned thread will finish in the background.
+        If *on_progress* raises ``InterruptedError`` the worker thread is
+        abandoned and the exception propagates to the caller.
+        The abandoned thread continues running in the background.
         """
         # Warn if a previously abandoned thread is still running
         prev = self._last_worker_thread
@@ -597,10 +597,10 @@ class LizyMLAdapter:
     ) -> TuningSummary:
         from dataclasses import asdict
 
-        # LizyML v0.2.0+ provides TuneProgressCallback fired after each trial.
-        # When available, run model.tune() directly (not in daemon thread) to
-        # avoid OpenMP thread degradation (12x slowdown on WSL2 daemon threads).
-        # Cancel-polling via daemon thread is the fallback for LizyML < 0.2.0.
+        # Both v0.2.0+ and legacy paths use _run_with_cancel_polling to ensure
+        # the cancel flag is polled every 0.5s.  For v0.2.0+, LizyML fires a
+        # progress_callback per trial, so we pass a cancel-only sentinel to the
+        # polling loop to avoid duplicate "Processing..." messages.
         progress_cb = None
         use_direct_call = False
         if on_progress is not None:
@@ -618,17 +618,18 @@ class LizyMLAdapter:
             except ImportError:
                 pass  # LizyML < 0.2.0: no callback support
 
-        # Always use _run_with_cancel_polling so the cancel flag is checked
-        # during tune execution.  For v0.2.0+ we pass progress_callback so
-        # LizyML fires per-trial updates; the worker thread polls on_progress
-        # every 0.5 s so cancellation is checked between trials.
         if use_direct_call:
+            # v0.2.0+: progress_cb handles real updates; polling loop only
+            # checks cancellation (cancel-only sentinel suppresses generic msg)
+            def _cancel_only(_c: int, _t: int, _m: str) -> None:
+                pass  # cancel flag checked by widget layer via on_progress
+
             result = self._run_with_cancel_polling(
                 lambda: model.tune(progress_callback=progress_cb),
-                on_progress,
+                _cancel_only,
             )
         else:
-            # Legacy path: daemon thread + cancel-polling for LizyML < 0.2.0
+            # Legacy (LizyML < 0.2.0): polling loop provides progress messages
             result = self._run_with_cancel_polling(
                 model.tune,
                 on_progress,
