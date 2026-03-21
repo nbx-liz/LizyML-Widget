@@ -1262,7 +1262,7 @@ wheels = [
 
 [[package]]
 name = "lizyml"
-version = "0.2.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "joblib" },
@@ -1276,9 +1276,9 @@ dependencies = [
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/94/3842868209d5caace168acc9bfdf1c180b7ba14c99b90058cd04d78b424f/lizyml-0.2.0.tar.gz", hash = "sha256:c25ba6914a21d34465960f55e3b96c4060ef0c973bbd2b50b7262f56b149f4ee", size = 496689, upload-time = "2026-03-17T12:20:54.397Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/d4/17e319208f38046e9e0e6d2bbbf86c0116a5936217a574f6d7905c929800/lizyml-0.4.0.tar.gz", hash = "sha256:54cdd9fdafca978cb2dd4b81ac697271457b568732377533eb711179737d9047", size = 539039, upload-time = "2026-03-20T18:14:27.393Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/a4/fe19f9ba181dac70513f43305c9d6bb1a92f5b93af4ea96d3345964c69c2/lizyml-0.2.0-py3-none-any.whl", hash = "sha256:eb18706c4c4620456f65df40bcfe0d9553bd7f620a236ca195e42b18dd4f538b", size = 123636, upload-time = "2026-03-17T12:20:53.006Z" },
+    { url = "https://files.pythonhosted.org/packages/08/50/d0af394946c58179f8d7ad98fbacfd1153eefcec33080865a03b664dcb23/lizyml-0.4.0-py3-none-any.whl", hash = "sha256:ec5ab1e27d395902fb801dce96f94b5f526d13fcd89c68e2a2abd95e81874336", size = 141705, upload-time = "2026-03-20T18:14:25.677Z" },
 ]
 
 [package.optional-dependencies]
@@ -1310,6 +1310,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "ipykernel" },
     { name = "jupyterlab" },
     { name = "lizyml", extra = ["calibration", "explain", "plots", "tuning"] },
     { name = "mypy" },
@@ -1317,6 +1318,8 @@ dev = [
     { name = "pandas-stubs", version = "3.0.0.260204", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "watchfiles" },
 ]
 lizyml = [
@@ -1332,15 +1335,17 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anywidget", specifier = ">=0.9" },
+    { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "jupyterlab", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], marker = "extra == 'dev'" },
-    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], marker = "extra == 'lizyml'", specifier = ">=0.2.0" },
+    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], marker = "extra == 'lizyml'", specifier = ">=0.4.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pandas", specifier = ">=1.5" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "scikit-learn", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "traitlets", specifier = ">=5.0" },
     { name = "watchfiles", marker = "extra == 'dev'", specifier = ">=1.1" },
 ]
