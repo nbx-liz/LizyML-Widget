@@ -1,6 +1,6 @@
 /** App — Header + Tab router. */
-import { useState, useMemo, useEffect } from "preact/hooks";
-import { useTraitlet, useSendAction } from "./hooks/useModel";
+import { useState, useMemo, useEffect, useCallback } from "preact/hooks";
+import { useTraitlet, useSendAction, useCustomMsg } from "./hooks/useModel";
 import { useJobPolling } from "./hooks/useJobPolling";
 import { usePlot } from "./hooks/usePlot";
 import { useTheme } from "./hooks/useTheme";
@@ -47,6 +47,22 @@ export function App({ model, rootEl }: AppProps) {
   const effectiveFitSummary = polled?.fit_summary ?? fitSummary;
   const effectiveTuneSummary = polled?.tune_summary ?? tuneSummary;
   const effectiveAvailablePlots = polled?.available_plots ?? availablePlots;
+
+  const [columnStats, setColumnStats] = useState<Record<string, any> | null>(null);
+  const [splitPreview, setSplitPreview] = useState<any | null>(null);
+  const [codeExportPath, setCodeExportPath] = useState<string | null>(null);
+
+  // Handle custom messages for column_stats, split_preview, code_export_result
+  const handleCustomMsg = useCallback((msg: any) => {
+    if (msg.type === "column_stats") {
+      setColumnStats(msg);
+    } else if (msg.type === "split_preview" || msg.type === "preview_splits") {
+      setSplitPreview(msg);
+    } else if (msg.type === "code_export_result") {
+      setCodeExportPath(msg.path ?? null);
+    }
+  }, []);
+  useCustomMsg(model, handleCustomMsg);
 
   const { plots, loading: plotLoading, requestPlot, clearCache } = usePlot(model);
 
@@ -102,6 +118,8 @@ export function App({ model, rootEl }: AppProps) {
           <DataTab
             dfInfo={dfInfo}
             allColumns={allColumns}
+            columnStats={columnStats}
+            splitPreview={splitPreview}
             sendAction={sendAction}
           />
         )}
@@ -134,6 +152,7 @@ export function App({ model, rootEl }: AppProps) {
             onSwitchToFit={() => setActiveTab("Model")}
             evaluationParams={config?.evaluation?.params}
             theme={theme}
+            codeExportPath={codeExportPath}
           />
         )}
       </div>

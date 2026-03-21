@@ -27,6 +27,8 @@ interface ResultsTabProps {
   /** Evaluation params for metric display annotations. */
   evaluationParams?: Record<string, any>;
   theme?: ResolvedTheme;
+  /** Path from code export result. */
+  codeExportPath?: string | null;
 }
 
 /** Format a plot type slug into a display label. */
@@ -58,6 +60,7 @@ export function ResultsTab({
   onSwitchToFit,
   evaluationParams,
   theme = "light",
+  codeExportPath = null,
 }: ResultsTabProps) {
   const [selectedPlot, setSelectedPlot] = useState<string | null>(null);
 
@@ -133,7 +136,22 @@ export function ResultsTab({
         <span class="lzw-muted" style="margin-left:8px">
           {jobType.charAt(0).toUpperCase() + jobType.slice(1)} #{jobIndex} — {elapsedSec.toFixed(1)}s
         </span>
+        {hasFit && (
+          <button
+            class="lzw-btn"
+            style="margin-left:auto"
+            onClick={() => sendAction("export_code", {})}
+            type="button"
+          >
+            Export Code
+          </button>
+        )}
       </div>
+      {codeExportPath && (
+        <div class="lzw-info-box" style="margin-bottom:12px">
+          Code exported to: <code style="background:var(--lzw-bg-2);padding:1px 4px;border-radius:3px;font-size:12px">{codeExportPath}</code>
+        </div>
+      )}
 
       {/* Tune specific results */}
       {hasTune && (

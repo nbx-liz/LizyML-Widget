@@ -39,6 +39,13 @@
   --lzw-border-light: #f0f0f0;
   --lzw-accent: #2196f3;
   --lzw-accent-fg: #fff;
+  --lzw-accent-bg-subtle: rgba(33, 150, 243, 0.12);
+  --lzw-accent-bg-medium: rgba(33, 150, 243, 0.2);
+  --lzw-accent-border: rgba(33, 150, 243, 0.3);
+  --lzw-accent-bg-faint: rgba(33, 150, 243, 0.08);
+  --lzw-accent-border-faint: rgba(33, 150, 243, 0.25);
+  --lzw-success-bg-medium: rgba(46, 125, 50, 0.2);
+  --lzw-success-border: rgba(46, 125, 50, 0.3);
   --lzw-input-bg: #fff;
 }
 
@@ -53,6 +60,13 @@
   --lzw-border-light: #444;
   --lzw-accent: #64b5f6;
   --lzw-accent-fg: #1e1e1e;
+  --lzw-accent-bg-subtle: rgba(100, 181, 246, 0.12);
+  --lzw-accent-bg-medium: rgba(100, 181, 246, 0.15);
+  --lzw-accent-border: rgba(100, 181, 246, 0.3);
+  --lzw-accent-bg-faint: rgba(100, 181, 246, 0.08);
+  --lzw-accent-border-faint: rgba(100, 181, 246, 0.25);
+  --lzw-success-bg-medium: rgba(129, 199, 132, 0.15);
+  --lzw-success-border: rgba(129, 199, 132, 0.3);
   --lzw-input-bg: #2d2d2d;
   --lzw-error: #f28b82;
   --lzw-success: #81c784;
@@ -1002,3 +1016,220 @@
   margin-bottom: 12px;
   font-weight: 600;
 }
+
+/* ── Section Card ───────────────────────────────────────── */
+.lzw-section-card {
+  background: var(--lzw-bg-1);
+  border: 1px solid var(--lzw-border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.lzw-section-card__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lzw-fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+}
+
+/* ── Distribution Bar ───────────────────────────────────── */
+.lzw-dist-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 50px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--lzw-fg-1);
+}
+
+.lzw-dist-bar-bg {
+  height: 14px;
+  background: var(--lzw-bg-2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.lzw-dist-bar {
+  height: 100%;
+  background: var(--lzw-accent);
+  opacity: 0.6;
+  border-radius: 3px;
+}
+
+.lzw-dist-count {
+  text-align: right;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+/* ── Cutoff Chips ───────────────────────────────────────── */
+.lzw-cutoff-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.lzw-cutoff-chip {
+  background: var(--lzw-bg-2);
+  border: 1px solid var(--lzw-border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--lzw-fg-1);
+  font-family: monospace;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.lzw-cutoff-chip:hover {
+  border-color: var(--lzw-fg-2);
+}
+
+.lzw-cutoff-chip--selected {
+  background: var(--lzw-accent-bg-subtle);
+  border-color: var(--lzw-accent);
+  color: var(--lzw-accent);
+  font-weight: 600;
+}
+
+/* dark mode cutoff-chip handled by --lzw-accent-bg-subtle variable */
+
+/* ── Period Flow ────────────────────────────────────────── */
+.lzw-period-flow {
+  display: flex;
+  gap: 2px;
+  margin: 8px 0;
+  height: 28px;
+  align-items: stretch;
+}
+
+.lzw-period-block {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: monospace;
+}
+
+.lzw-period-block--train {
+  background: var(--lzw-accent-bg-medium);
+  color: var(--lzw-accent);
+  border: 1px solid var(--lzw-accent-border);
+}
+
+.lzw-period-block--valid {
+  background: var(--lzw-success-bg-medium);
+  color: var(--lzw-success);
+  border: 1px solid var(--lzw-success-border);
+}
+
+.lzw-period-block--unused {
+  background: var(--lzw-bg-2);
+  color: var(--lzw-fg-2);
+  border: 1px dashed var(--lzw-border);
+}
+
+/* dark mode period-block handled by --lzw-accent-bg-medium / --lzw-success-bg-medium variables */
+
+/* ── Fold Preview ───────────────────────────────────────── */
+.lzw-fold-preview {
+  font-family: monospace;
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--lzw-fg-1);
+}
+
+.lzw-fold-line {
+  display: grid;
+  grid-template-columns: 50px 1fr 60px 60px;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.lzw-fold-line:nth-child(even) {
+  background: var(--lzw-bg-2);
+}
+
+.lzw-fold-header {
+  font-weight: 600;
+  color: var(--lzw-fg-2);
+  font-size: 10px;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--lzw-border);
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+}
+
+.lzw-train-tag {
+  background: var(--lzw-accent-bg-medium);
+  color: var(--lzw-accent);
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+
+.lzw-valid-tag {
+  background: var(--lzw-success-bg-medium);
+  color: var(--lzw-success);
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+
+/* dark mode train-tag/valid-tag handled by CSS variables */
+
+/* ── Fold Visualization Row ─────────────────────────────── */
+.lzw-fold-vis-row {
+  margin-bottom: 6px;
+}
+
+.lzw-fold-vis-label {
+  font-size: 10px;
+  color: var(--lzw-fg-2);
+  margin-bottom: 2px;
+  font-family: monospace;
+}
+
+/* ── Summary Badge ──────────────────────────────────────── */
+.lzw-summary-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--lzw-bg-2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--lzw-fg-1);
+  margin-top: 12px;
+}
+
+.lzw-summary-badge__num {
+  font-family: monospace;
+  font-weight: 600;
+  color: var(--lzw-accent);
+}
+
+/* ── Info Box ───────────────────────────────────────────── */
+.lzw-info-box {
+  background: var(--lzw-accent-bg-faint);
+  border: 1px solid var(--lzw-accent-border-faint);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--lzw-fg-1);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+/* dark mode info-box handled by CSS variables */
