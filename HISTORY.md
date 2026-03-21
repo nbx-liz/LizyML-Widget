@@ -906,3 +906,76 @@
   - Colab ポーリング機構（`_handle_custom_msg` は traitlet 値を読むため変更不要）
   - フロントエンド（JS/CSS）
   - Windows / macOS の実行パス（`threading.Thread` のまま）
+
+### P-021: CodeGen（コードエクスポート）機能
+
+- **日付**: 2026-03-21
+- **ステータス**: Accepted → Implemented（実装完了後にダウンロード方式を改善）
+- **背景**:
+  - LizyML v0.3.0 で `Model.export_code(path)` が追加された。LizyML に依存しない train.py / predict.py 等を生成できる。
+  - Widget ユーザーが Fit で得た結果を本番パイプラインにそのまま持ち出せるようにする。
+- **提案内容**:
+  - **Adapter**: `BackendAdapter` Protocol に `export_code(model, path) -> Path` メソッド追加
+  - **Service**: `WidgetService.export_code(path) -> Path` 追加
+  - **Widget**: `_handle_export_code` アクションハンドラ追加。tmpdir に生成 → zip → `self.send(msg, buffers=[zip_bytes])` でバイナリバッファ送信
+  - **JS**: Results タブに "Export Code" ボタン追加。`msg:custom` type `code_export_download` を受信し、`Blob` URL + `<a download>` クリックでブラウザの保存ダイアログを起動
+  - **Python API**: `w.export_code(path=None) -> Path` 追加
+- **実装時の変更点**（初期提案からの差分）:
+  - `msg:custom` type を `code_export_result` → `code_export_download` に変更
+  - ペイロードを `{path: string}` → `{filename: string}` + `buffers=[zip_bytes]`（バイナリバッファ転送）に変更
+  - パス表示方式からブラウザダウンロードダイアログ方式に変更（JupyterLab / VS Code Notebook / Colab 全対応）
+  - JS payload からパス指定を除去（セキュリティ対策）。Python API `w.export_code(path)` のみパス指定可
+- **影響範囲**:
+  - `adapter.py` — `BackendAdapter` Protocol 拡張、`LizyMLAdapter.export_code()` 実装
+  - `service.py` — `export_code()` 追加
+  - `widget.py` — `_handle_export_code` + `export_code()` 追加
+  - `js/src/tabs/ResultsTab.tsx` — ボタン + msg:custom 応答（ブラウザダウンロード）
+- **変更しないもの**:
+  - traitlets（msg:custom のみ使用）
+  - 既存の Fit / Tune / Predict フロー
+  - CSS / ダークモード
+
+### P-022: BlockedGroupKFold CV 戦略対応
+
+- **日付**: 2026-03-21
+- **ステータス**: Proposed
+- **背景**:
+  - LizyML v0.4.0 で `blocked_group_kfold` CV 戦略が追加された。時間軸（Period）× エンティティ軸（Group）の 2 軸交差検証。
+  - 金融・広告・EC のパネルデータで「将来の時点 × 未知のユーザー」への汎化性能を正しく評価できる。
+- **提案内容**:
+  - **Contract**: `cv_strategies` リストに `blocked_group_kfold` 追加
+  - **Service**:
+    - `update_cv()` に blocks / groups ネストパラメータ追加
+    - `build_config()` で nested split セクション生成
+    - `get_column_stats(col)` 新規 — カラムの値分布を取得
+    - `preview_splits()` 新規 — Fit 前の fold プレビュー計算
+  - **Widget**:
+    - `_handle_update_cv` バリデーション更新（blocks.col ≠ groups.col）
+    - `_handle_get_column_stats` / `_handle_preview_splits` アクションハンドラ追加
+  - **JS**:
+    - `BlockedGroupKFold.tsx` 新規コンポーネント（Blocks + Groups + FoldPreview）
+    - `DistributionBar.tsx` 新規（値分布棒グラフ）
+    - `FoldPreview.tsx` 新規（fold 可視化）
+    - DataTab に戦略ボタン追加 + 条件付き表示
+    - `msg:custom` で `column_stats` / `split_preview` を受信
+  - **df_info.cv 構造変更**:
+    ```python
+    "cv": {
+        "strategy": "blocked_group_kfold",
+        "blocks": {"col": "date", "cutoffs": [...], "mode": "expanding", "train_window": null},
+        "groups": {"col": "user_id", "n_splits": 3, "stratify": "auto", "shuffle": true},
+        "min_train_rows": 10,
+        "min_valid_rows": 5,
+    }
+    ```
+- **影響範囲**:
+  - `adapter_contract.py` — cv_strategies 追加
+  - `service.py` — update_cv / build_config 拡張、get_column_stats / preview_splits 新規
+  - `widget.py` — アクションハンドラ追加
+  - `js/src/tabs/DataTab.tsx` — CV_STRATEGIES + 条件付き表示
+  - `js/src/components/` — 3 つの新規コンポーネント
+  - `js/src/widget.css` — 新 UI スタイル
+- **変更しないもの**:
+  - 既存 CV 戦略の動作
+  - Adapter Protocol（CV は Service 管理）
+  - traitlets 定義（df_info 内の cv 構造変更のみ）

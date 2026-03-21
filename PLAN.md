@@ -35,6 +35,8 @@
 | 26 | Canonical Config 経路統一 + `inner_valid` 契約整合化 | config canonicalization の単一路線化、Validation 診断改善、Phase 25 残課題の追補 | ⚠️ 部分実装（追補要） |
 | 27 | Google Colab 互換ポーリング | BG スレッド traitlet 同期の Colab 制約を JS ポーリングで回避 | 📝 計画済み |
 | 28 | ダークモード対応 | CSS 変数化 + `prefers-color-scheme` 対応 + Plotly テーマ追従 | 📝 計画済み |
+| 30 | CodeGen（コード出力） | 学習済みモデルの推論コードを出力・ダウンロードできるようにする | ✅ 完了 |
+| 31 | BlockedGroupKFold CV | BlockedGroupKFold CV ストラテジーの UI・バックエンド対応 | ✅ 完了 |
 
 各フェーズ末尾に **完了条件** を定義する。フェーズは順番に実施する（前フェーズの成果物が後フェーズの前提）。
 
@@ -1947,3 +1949,193 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
 - Plotly プロットがダーク/ライトテーマに追従する
 - 全前景/背景ペアが WCAG AA コントラスト比基準（4.5:1 / 3.0:1）を CI で自動検証される
 - ハードコード色の残存が CI で自動検出される
+
+---
+
+### Phase 30: CodeGen（コード出力）✅
+
+**目標:** 学習済みモデルの推論コードを出力し、ZIP としてダウンロードできるようにする。
+
+#### 30-1. BackendAdapter Protocol に `export_code` 追加 ✅
+
+- `src/lizyml_widget/adapter.py`
+  - `BackendAdapter` Protocol に `export_code(model, path) -> Path` を追加
+  - `LizyMLAdapter.export_code()` — `model.export_code(path)` に委譲
+
+#### 30-2. WidgetService に `export_code` 追加 ✅
+
+- `src/lizyml_widget/service.py`
+  - `export_code(path) -> Path` — モデル存在を検証し Adapter に委譲
+
+#### 30-3. Widget action handler 追加 ✅
+
+- `src/lizyml_widget/widget.py`
+  - `_handle_export_code` — tmpdir 作成 → `service.export_code()` → ZIP 化 → `self.send({type: "code_export_download", filename}, buffers=[zip_bytes])` でバイナリバッファ送信
+
+#### 30-4. Widget Python API 追加 ✅
+
+- `src/lizyml_widget/widget.py`
+  - `export_code(path=None) -> Path` — プログラムから直接コード出力を呼び出せる Python API
+
+#### 30-5. ResultsTab に Export Code ボタン追加 ✅
+
+- `js/src/tabs/ResultsTab.tsx`
+  - Fit / Tune 完了後に「Export Code」ボタンを表示
+  - クリック時に `export_code` action を送信
+
+#### 30-6. msg:custom ハンドラ追加（ブラウザダウンロード方式） ✅
+
+- `js/src/tabs/ResultsTab.tsx`
+  - `code_export_download` メッセージを受信し、`buffers[0]` から `Blob` URL を生成、`<a download>` クリックでブラウザの保存ダイアログを起動
+  - JupyterLab / VS Code Notebook / Google Colab いずれでも動作
+
+#### 30-7. セキュリティ改善 ✅
+
+- JS payload からパス指定を除去。UI は常に tmpdir を使用
+- Python API `w.export_code(path)` のみパス指定可
+
+#### 30-8. テスト追加 ✅
+
+- `export_code` の Adapter / Service / Widget 各層のユニットテスト
+
+#### 30-9. 品質ゲート ✅
+
+- Ruff / mypy / pytest 全パス
+
+**完了条件:**
+
+- Fit / Tune 完了後に Export Code ボタンが表示される
+- ボタンクリックで推論コードが ZIP としてブラウザダウンロードされる
+- Python API `widget.export_code()` が動作する
+- JupyterLab / VS Code Notebook / Google Colab いずれでもダウンロードが動作する
+- テスト・lint・型チェックが全パス
+
+---
+
+### Phase 31: BlockedGroupKFold CV ✅
+
+**目標:** BlockedGroupKFold CV ストラテジーを Data タブから選択・設定できるようにし、Split プレビューを表示する。
+
+#### 31-1. Backend Contract に `blocked_group_kfold` 追加 ✅
+
+- `src/lizyml_widget/adapter.py`
+  - `cv_strategies` に `blocked_group_kfold` を追加
+
+#### 31-2. WidgetService に `get_column_stats` 追加 ✅
+
+- `src/lizyml_widget/service.py`
+  - `get_column_stats(column) -> dict` — `{column, unique_count, dtype, values}` を返す
+
+#### 31-3. WidgetService に `preview_splits` 追加 ✅
+
+- `src/lizyml_widget/service.py`
+  - `preview_splits() -> dict` — `{total_folds, time_folds, group_folds, periods, folds}` を返す
+
+#### 31-4. WidgetService `update_cv` 拡張 ✅
+
+- `src/lizyml_widget/service.py`
+  - `update_cv()` に `blocks` / `groups` / `min_train_rows` / `min_valid_rows` パラメータを追加
+
+#### 31-5. WidgetService `build_config` 拡張 ✅
+
+- `src/lizyml_widget/service.py`
+  - `blocked_group_kfold` 選択時にネストされた split セクションを生成
+
+#### 31-6. Widget action handler: `get_column_stats` ✅
+
+- `src/lizyml_widget/widget.py`
+  - `get_column_stats` action → `service.get_column_stats()` → `msg:custom` (`column_stats`) で返す
+
+#### 31-7. Widget action handler: `preview_splits` ✅
+
+- `src/lizyml_widget/widget.py`
+  - `preview_splits` action → `service.preview_splits()` → `msg:custom` (`split_preview` / `preview_splits`) で返す
+
+#### 31-8. df_info.cv 構造拡張 ✅
+
+- `blocked_group_kfold` 用に `blocks` / `groups` / `min_train_rows` / `min_valid_rows` フィールドを追加
+
+#### 31-9. BlockedGroupKFold.tsx コンポーネント新規作成 ✅
+
+- `js/src/components/BlockedGroupKFold.tsx`
+  - Blocks / Groups / Min train rows / Min valid rows の入力 UI
+  - `get_column_stats` / `preview_splits` action の送信
+
+#### 31-10. DistributionBar.tsx コンポーネント新規作成 ✅
+
+- `js/src/components/DistributionBar.tsx`
+  - カラム値の分布をバー表示
+
+#### 31-11. FoldPreview.tsx コンポーネント新規作成 ✅
+
+- `js/src/components/FoldPreview.tsx`
+  - Split プレビューの Fold 構成を視覚的に表示
+
+#### 31-12. DataTab に BlockedGroupKFold 統合 ✅
+
+- `js/src/tabs/DataTab.tsx`
+  - Strategy セグメントに「BlockedGroup」ボタンを追加
+  - `blocked_group_kfold` 選択時に `BlockedGroupKFold` コンポーネントを条件描画
+
+#### 31-13. CSS スタイル追加 ✅
+
+- `js/src/widget.css`
+  - `section-card` / `dist-bar` / `cutoff-chip` / `period-flow` / `fold-preview` / `summary-badge` / `info-box` クラスを追加
+
+#### 31-14. msg:custom ハンドラ追加 ✅
+
+- `js/src/components/BlockedGroupKFold.tsx`
+  - `column_stats` / `split_preview` メッセージを受信し UI を更新
+
+#### 31-15. backend_contract cv_strategies 連携 ✅
+
+- UI が `backend_contract.cv_strategies` を参照し `blocked_group_kfold` を動的に表示
+
+#### 31-16. テスト追加 ✅
+
+- `get_column_stats` / `preview_splits` / `update_cv` 拡張のユニットテスト
+- BlockedGroupKFold 選択時の config 生成テスト
+
+#### 31-17. 品質ゲート ✅
+
+- Ruff / mypy / pytest / ESLint 全パス
+
+**完了条件:**
+
+- Data タブの Strategy セグメントに `blocked_group_kfold` が表示される
+- 選択時に Blocks / Groups / Min train/valid rows の設定 UI が表示される
+- カラム統計情報が `msg:custom` で取得・表示される
+- Split プレビューが視覚的に表示される
+- `build_config()` が `blocked_group_kfold` 用のネスト split セクションを正しく生成する
+- テスト・lint・型チェックが全パス
+
+---
+
+### Phase 32: Tune キャンセル修正 + Export Code ブラウザダウンロード化 ✅
+
+**目標:** Tune のキャンセル動作を Fit と統一し、Export Code をブラウザダウンロード方式に改善する。
+
+#### 32-1. Tune キャンセルに `_run_with_cancel_polling` を適用 ✅
+
+- `src/lizyml_widget/widget.py`
+  - v0.2.0+ と legacy の両方の Tune パスで `_run_with_cancel_polling` パターンを使用するように変更
+  - 以前は v0.2.0+ の Tune が直接呼び出し（キャンセルポーリングなし）だった
+
+#### 32-2. Export Code をブラウザダウンロード方式に変更 ✅
+
+- `src/lizyml_widget/widget.py`
+  - `msg:custom` type を `code_export_result` → `code_export_download` に変更
+  - ペイロードを `{path}` → `{filename}` + `buffers=[zip_bytes]` に変更
+- `js/src/tabs/ResultsTab.tsx`
+  - `Blob` URL 生成 + `<a download>` クリックでブラウザ保存ダイアログを起動
+
+#### 32-3. JS payload からパス指定を除去（セキュリティ修正） ✅
+
+- UI からのパス指定を排除。Python API `w.export_code(path)` のみパス指定可
+
+**完了条件:**
+
+- Tune 実行中のキャンセルが即座に反映される（v0.2.0+ / legacy 両方）
+- Export Code ボタンクリックでブラウザの保存ダイアログが表示される
+- JupyterLab / VS Code Notebook / Colab いずれでも動作する
+- JS payload にパスが含まれない

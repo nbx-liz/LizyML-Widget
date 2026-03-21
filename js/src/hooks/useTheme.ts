@@ -1,7 +1,7 @@
 /** useTheme — manages light/dark theme with system preference detection. */
 import { useState, useEffect, useCallback } from "preact/hooks";
 
-export type ThemeMode = "light" | "dark" | "auto";
+type ThemeMode = "light" | "dark" | "auto";
 export type ResolvedTheme = "light" | "dark";
 
 function getSystemTheme(): ResolvedTheme {

@@ -12,7 +12,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 
-export interface JobState {
+interface JobState {
   status: string;
   progress: Record<string, any>;
   elapsed_sec: number;
@@ -46,7 +46,7 @@ const IN_COLAB = isColab();
 export function useJobPolling(
   model: any,
   traitletStatus: string,
-  traitletElapsed: number,
+  _traitletElapsed: number,
 ): JobState | null {
   const [polled, setPolled] = useState<JobState | null>(null);
   const lastPollTime = useRef<number>(0);
