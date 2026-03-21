@@ -1970,7 +1970,7 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
 #### 30-3. Widget action handler 追加 ✅
 
 - `src/lizyml_widget/widget.py`
-  - `_handle_export_code` — tmpdir 作成 → `service.export_code()` → ZIP 化 → `msg:custom` (`code_export_result`) で結果パスを送信
+  - `_handle_export_code` — tmpdir 作成 → `service.export_code()` → ZIP 化 → `self.send({type: "code_export_download", filename}, buffers=[zip_bytes])` でバイナリバッファ送信
 
 #### 30-4. Widget Python API 追加 ✅
 
@@ -1983,14 +1983,16 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
   - Fit / Tune 完了後に「Export Code」ボタンを表示
   - クリック時に `export_code` action を送信
 
-#### 30-6. msg:custom ハンドラ追加 ✅
+#### 30-6. msg:custom ハンドラ追加（ブラウザダウンロード方式） ✅
 
 - `js/src/tabs/ResultsTab.tsx`
-  - `code_export_result` メッセージを受信し、出力パスを表示
+  - `code_export_download` メッセージを受信し、`buffers[0]` から `Blob` URL を生成、`<a download>` クリックでブラウザの保存ダイアログを起動
+  - JupyterLab / VS Code Notebook / Google Colab いずれでも動作
 
-#### 30-7. Colab 環境検出 ✅
+#### 30-7. セキュリティ改善 ✅
 
-- Colab 検出時に `google.colab.files.download()` を利用したダウンロード導線を提示
+- JS payload からパス指定を除去。UI は常に tmpdir を使用
+- Python API `w.export_code(path)` のみパス指定可
 
 #### 30-8. テスト追加 ✅
 
@@ -2003,9 +2005,9 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
 **完了条件:**
 
 - Fit / Tune 完了後に Export Code ボタンが表示される
-- ボタンクリックで推論コードが ZIP 出力され、パスが表示される
+- ボタンクリックで推論コードが ZIP としてブラウザダウンロードされる
 - Python API `widget.export_code()` が動作する
-- Colab 環境でのダウンロード導線が提示される
+- JupyterLab / VS Code Notebook / Google Colab いずれでもダウンロードが動作する
 - テスト・lint・型チェックが全パス
 
 ---
@@ -2106,3 +2108,34 @@ Phase 11 で対応済みの項目（BLUEPRINT §3.6 Action テーブル更新・
 - Split プレビューが視覚的に表示される
 - `build_config()` が `blocked_group_kfold` 用のネスト split セクションを正しく生成する
 - テスト・lint・型チェックが全パス
+
+---
+
+### Phase 32: Tune キャンセル修正 + Export Code ブラウザダウンロード化 ✅
+
+**目標:** Tune のキャンセル動作を Fit と統一し、Export Code をブラウザダウンロード方式に改善する。
+
+#### 32-1. Tune キャンセルに `_run_with_cancel_polling` を適用 ✅
+
+- `src/lizyml_widget/widget.py`
+  - v0.2.0+ と legacy の両方の Tune パスで `_run_with_cancel_polling` パターンを使用するように変更
+  - 以前は v0.2.0+ の Tune が直接呼び出し（キャンセルポーリングなし）だった
+
+#### 32-2. Export Code をブラウザダウンロード方式に変更 ✅
+
+- `src/lizyml_widget/widget.py`
+  - `msg:custom` type を `code_export_result` → `code_export_download` に変更
+  - ペイロードを `{path}` → `{filename}` + `buffers=[zip_bytes]` に変更
+- `js/src/tabs/ResultsTab.tsx`
+  - `Blob` URL 生成 + `<a download>` クリックでブラウザ保存ダイアログを起動
+
+#### 32-3. JS payload からパス指定を除去（セキュリティ修正） ✅
+
+- UI からのパス指定を排除。Python API `w.export_code(path)` のみパス指定可
+
+**完了条件:**
+
+- Tune 実行中のキャンセルが即座に反映される（v0.2.0+ / legacy 両方）
+- Export Code ボタンクリックでブラウザの保存ダイアログが表示される
+- JupyterLab / VS Code Notebook / Colab いずれでも動作する
+- JS payload にパスが含まれない

@@ -910,21 +910,26 @@
 ### P-021: CodeGen（コードエクスポート）機能
 
 - **日付**: 2026-03-21
-- **ステータス**: Proposed
+- **ステータス**: Accepted → Implemented（実装完了後にダウンロード方式を改善）
 - **背景**:
   - LizyML v0.3.0 で `Model.export_code(path)` が追加された。LizyML に依存しない train.py / predict.py 等を生成できる。
   - Widget ユーザーが Fit で得た結果を本番パイプラインにそのまま持ち出せるようにする。
 - **提案内容**:
   - **Adapter**: `BackendAdapter` Protocol に `export_code(model, path) -> Path` メソッド追加
   - **Service**: `WidgetService.export_code(path) -> Path` 追加
-  - **Widget**: `_handle_export_code` アクションハンドラ追加。tmpdir に生成 → zip → `self.send()` で結果通知
-  - **JS**: Results タブに "Export Code" ボタン追加。`msg:custom` type `code_export_result` を受信してパス表示 / Colab ダウンロード
+  - **Widget**: `_handle_export_code` アクションハンドラ追加。tmpdir に生成 → zip → `self.send(msg, buffers=[zip_bytes])` でバイナリバッファ送信
+  - **JS**: Results タブに "Export Code" ボタン追加。`msg:custom` type `code_export_download` を受信し、`Blob` URL + `<a download>` クリックでブラウザの保存ダイアログを起動
   - **Python API**: `w.export_code(path=None) -> Path` 追加
+- **実装時の変更点**（初期提案からの差分）:
+  - `msg:custom` type を `code_export_result` → `code_export_download` に変更
+  - ペイロードを `{path: string}` → `{filename: string}` + `buffers=[zip_bytes]`（バイナリバッファ転送）に変更
+  - パス表示方式からブラウザダウンロードダイアログ方式に変更（JupyterLab / VS Code Notebook / Colab 全対応）
+  - JS payload からパス指定を除去（セキュリティ対策）。Python API `w.export_code(path)` のみパス指定可
 - **影響範囲**:
   - `adapter.py` — `BackendAdapter` Protocol 拡張、`LizyMLAdapter.export_code()` 実装
   - `service.py` — `export_code()` 追加
   - `widget.py` — `_handle_export_code` + `export_code()` 追加
-  - `js/src/tabs/ResultsTab.tsx` — ボタン + msg:custom 応答
+  - `js/src/tabs/ResultsTab.tsx` — ボタン + msg:custom 応答（ブラウザダウンロード）
 - **変更しないもの**:
   - traitlets（msg:custom のみ使用）
   - 既存の Fit / Tune / Predict フロー

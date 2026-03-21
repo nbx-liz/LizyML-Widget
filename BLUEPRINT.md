@@ -319,7 +319,7 @@ JS は `action` traitlet に Dict を書き込む。Python の `@observe("action
 | `"export_yaml"` | `{}` | 現在の Config を YAML でダウンロード（msg:custom で返す） |
 | `"raw_config"` | `{}` | フル Config の YAML テキストを取得（msg:custom で返す） |
 | `"apply_best_params"` | `{"params": {...}}` | Tune 実行時 config を復元した上で Best Params を適用し、Fit 画面へ反映 |
-| `"export_code"` | `{}` | 学習済みモデルのコードを出力し `msg:custom` で結果パスを返す |
+| `"export_code"` | `{}` | 学習済みモデルのコードを出力し `msg:custom` でブラウザダウンロードを開始する |
 | `"get_column_stats"` | `{"column": "col_name"}` | 指定カラムの統計情報（unique_count, dtype, values）を `msg:custom` で返す |
 | `"preview_splits"` | `{}` | 現在の CV 設定に基づく Split プレビュー（Fold 数・期間・分布）を `msg:custom` で返す |
 
@@ -347,7 +347,7 @@ model.on("msg:custom", (msg) => {
 | `"yaml_export"` | `{content}` | YAML エクスポート結果 |
 | `"raw_config"` | `{content}` | フル Config YAML テキスト |
 | `"job_state"` | `{status, progress, elapsed_sec, ...}` | Colab ポーリング応答 |
-| `"code_export_result"` | `{path: string}` | コード出力結果のファイルパス |
+| `"code_export_download"` | `{filename: string}` + `buffers=[zip_bytes]` | コード出力 ZIP のブラウザダウンロード |
 | `"column_stats"` | `{column, unique_count, dtype, values}` | カラム統計情報 |
 | `"split_preview"` / `"preview_splits"` | `{total_folds, time_folds, group_folds, periods, folds}` | BlockedGroupKFold の Split プレビュー |
 
@@ -372,6 +372,8 @@ def _run_fit(self):
 ```
 
 anywidget は traitlets への書き込みをスレッドセーフに処理するため、バックグラウンドスレッドからの更新が安全に JS へ伝播する。
+
+**キャンセルポーリング:** Fit・Tune の両方で `_run_with_cancel_polling` パターンを使用する。バックエンド呼び出しをデーモンスレッドで実行し、メインワーカースレッドがキャンセルフラグをポーリングする。これにより、ブロッキングなバックエンド呼び出し中でもキャンセルが即座に反映される。
 
 ---
 
@@ -1119,8 +1121,10 @@ Showing 50 of 500 rows    [Download CSV]
 Fit / Tune 完了後、Results タブに「Export Code」ボタンを表示する。
 
 - ボタンクリック時に `export_code` action を送信
-- Python 側で tmpdir にコードを出力し ZIP 化、`msg:custom` (`code_export_result`) でパスを返す
-- Colab 環境では `google.colab.files.download()` を利用した自動ダウンロードを検出・提示
+- Python 側で tmpdir にコードを出力し ZIP 化、`self.send({type: "code_export_download", filename}, buffers=[zip_bytes])` でバイナリバッファを送信
+- JS 側で `Blob` URL を生成し `<a download>` クリックでブラウザの「名前を付けて保存」ダイアログを起動
+- JupyterLab / VS Code Notebook / Google Colab いずれでも動作する
+- JS payload にパスは含まれない（セキュリティ上、UI からのパス指定を排除）。Python API `w.export_code(path)` のみパス指定可
 
 #### エラー表示
 
