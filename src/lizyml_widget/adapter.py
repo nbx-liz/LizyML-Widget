@@ -112,6 +112,8 @@ class BackendAdapter(Protocol):
 
     def export_model(self, model: Any, path: str) -> str: ...
 
+    def export_code(self, model: Any, path: str) -> Any: ...
+
     def load_model(self, path: str) -> Any: ...
 
     def model_info(self, model: Any) -> dict[str, Any]: ...
@@ -797,6 +799,12 @@ class LizyMLAdapter:
     def export_model(self, model: Any, path: str) -> str:
         model.export(path)
         return path
+
+    def export_code(self, model: Any, path: str) -> Any:
+        """Export inference code for the trained model."""
+        from pathlib import Path
+
+        return model.export_code(Path(path))
 
     def load_model(self, path: str) -> Any:
         from lizyml.core.model import Model

@@ -340,6 +340,7 @@ class LizyWidget(anywidget.AnyWidget):
             "group_time_series",
             "purged_time_series",
             "group_kfold",
+            "stratified_group_kfold",
         }
     )
 
@@ -350,7 +351,11 @@ class LizyWidget(anywidget.AnyWidget):
         if strategy not in valid_set:
             self.error = {"code": "CV_ERROR", "message": f"Invalid strategy: {strategy!r}"}
             return
-        n_splits = int(payload.get("n_splits", 5))
+        try:
+            n_splits = int(payload.get("n_splits", 5))
+        except (ValueError, TypeError) as e:
+            self.error = {"code": "CV_ERROR", "message": f"Invalid n_splits: {e}"}
+            return
         if not (2 <= n_splits <= 100):
             self.error = {"code": "CV_ERROR", "message": f"n_splits must be 2-100, got {n_splits}"}
             return
@@ -390,6 +395,7 @@ class LizyWidget(anywidget.AnyWidget):
                     "unique_count": result["unique_count"],
                     "dtype": result["dtype"],
                     "values": result["values"],
+                    "truncated": result.get("truncated", False),
                 }
             )
         except Exception as e:
@@ -557,6 +563,19 @@ class LizyWidget(anywidget.AnyWidget):
             # Fall back to fit model plot if inference plot fails
             self._handle_request_plot(payload)
 
+    def _handle_export_code(self, _payload: dict[str, Any]) -> None:
+        try:
+            import shutil
+            import tempfile
+
+            result_path = self._service.export_code()
+            # ZIP the output directory
+            zip_base = tempfile.mktemp(prefix="lzw_code_export_", suffix="")
+            zip_path = shutil.make_archive(zip_base, "zip", str(result_path))
+            self.send({"type": "code_export_result", "path": zip_path})
+        except Exception as e:
+            self.error = {"code": "EXPORT_CODE_ERROR", "message": str(e)}
+
     _action_handlers: dict[str, Any] = {
         "set_target": _handle_set_target,
         "set_task": _handle_set_task,
@@ -575,6 +594,7 @@ class LizyWidget(anywidget.AnyWidget):
         "import_yaml": _handle_import_yaml,
         "export_yaml": _handle_export_yaml,
         "raw_config": _handle_raw_config,
+        "export_code": _handle_export_code,
     }
 
     # ── Job execution ─────────────────────────────────────────

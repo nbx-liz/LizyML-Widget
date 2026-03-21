@@ -22,6 +22,8 @@ from .types import (
 
 _log = logging.getLogger(__name__)
 
+MAX_STATS_VALUES = 1000
+
 
 class WidgetService:
     """Manages widget state and delegates to BackendAdapter.
@@ -229,11 +231,16 @@ class WidgetService:
             raise ValueError(msg)
         series = self._df[column]
         vc = series.value_counts(sort=False).sort_index()
+        values = [{"value": str(v), "count": int(c)} for v, c in vc.items()]
+        truncated = len(values) > MAX_STATS_VALUES
+        if truncated:
+            values = values[:MAX_STATS_VALUES]
         return {
             "column": column,
             "unique_count": int(series.nunique()),
             "dtype": str(series.dtype),
-            "values": [{"value": str(v), "count": int(c)} for v, c in vc.items()],
+            "values": values,
+            "truncated": truncated,
         }
 
     def preview_splits(self) -> dict[str, Any]:
@@ -278,40 +285,76 @@ class WidgetService:
         time_folds = max(0, num_periods - 1)
         total_folds = time_folds * group_folds
 
+        # Precompute row counts per period (MEDIUM-2: O(1) per period lookup)
+        period_counts: dict[str, int] = {}
+        if blocks_col and blocks_col in self._df.columns:
+            vc = self._df[blocks_col].value_counts()
+            period_counts = {str(k): int(v) for k, v in vc.items()}
+
+        # Use cutoffs to group values into periods (MEDIUM-4)
+        cutoffs: list[Any] = blocks_cfg.get("cutoffs", [])
+        if cutoffs and blocks_col and blocks_col in self._df.columns:
+            sorted_values = sorted(self._df[blocks_col].dropna().unique().tolist(), key=str)
+            grouped_periods: list[list[Any]] = []
+            current_group: list[Any] = []
+            cutoff_idx = 0
+            for v in sorted_values:
+                if cutoff_idx < len(cutoffs) and v >= cutoffs[cutoff_idx]:
+                    if current_group:
+                        grouped_periods.append(current_group)
+                    current_group = []
+                    cutoff_idx += 1
+                current_group.append(v)
+            if current_group:
+                grouped_periods.append(current_group)
+            # Replace periods with group labels
+            periods = [
+                str(gp[0]) if len(gp) == 1 else f"{gp[0]}..{gp[-1]}" for gp in grouped_periods
+            ]
+            # Rebuild period_counts for grouped periods
+            grouped_counts: dict[str, int] = {}
+            for gp, label in zip(grouped_periods, periods, strict=True):
+                grouped_counts[label] = sum(period_counts.get(str(v), 0) for v in gp)
+            period_counts = grouped_counts
+            num_periods = len(periods)
+            time_folds = max(0, num_periods - 1)
+            total_folds = time_folds * group_folds
+
         # Build per-time-fold structures
         folds: list[dict[str, Any]] = []
+        fold_index = 0
         for t in range(time_folds):
             valid_period = periods[t + 1]
             # Expanding: train on all periods up to and including t
             if mode == "sliding" and train_window is not None:
                 start = max(0, t + 1 - train_window)
-                train_periods = periods[start : t + 1]
+                train_periods_list = periods[start : t + 1]
             else:
-                train_periods = periods[: t + 1]
+                train_periods_list = periods[: t + 1]
 
-            # Estimate row counts per period from the DataFrame
-            train_rows = int(
-                sum(
-                    len(self._df[self._df[blocks_col] == p])
-                    for p in train_periods
-                    if blocks_col in self._df.columns
-                )
-            )
-            valid_rows = int(
-                len(self._df[self._df[blocks_col] == valid_period])
-                if blocks_col in self._df.columns
-                else 0
+            # Use precomputed period_counts for O(1) lookup per period
+            train_rows = sum(period_counts.get(str(p), 0) for p in train_periods_list)
+            valid_rows = period_counts.get(str(valid_period), 0)
+
+            period_label = (
+                " + ".join(str(p) for p in train_periods_list) + " -> " + str(valid_period)
             )
 
-            for _ in range(group_folds):
+            for group_idx in range(group_folds):
                 folds.append(
                     {
-                        "train_periods": list(train_periods),
+                        "fold": fold_index,
+                        "period_label": period_label,
+                        "group_label": f"G{group_idx}",
+                        "train_size": train_rows,
+                        "valid_size": valid_rows,
+                        "train_periods": list(train_periods_list),
                         "valid_period": valid_period,
                         "train_rows": train_rows,
                         "valid_rows": valid_rows,
                     }
                 )
+                fold_index += 1
 
         return {
             "total_folds": total_folds,
@@ -656,6 +699,27 @@ class WidgetService:
             msg = "No trained model. Run fit or tune first."
             raise ValueError(msg)
         return self._adapter.export_model(self._model, path)
+
+    def export_code(self, path: str | None = None) -> Any:
+        """Export inference code for the trained model.
+
+        Parameters
+        ----------
+        path:
+            Output directory. If None, a temp directory is created.
+
+        Returns
+        -------
+        Path to the generated code directory.
+        """
+        if self._model is None:
+            msg = "No trained model. Run fit or tune first."
+            raise ValueError(msg)
+        if path is None:
+            import tempfile
+
+            path = tempfile.mkdtemp(prefix="lzw_export_code_")
+        return self._adapter.export_code(self._model, path)
 
     # ── Auto-detection internals ─────────────────────────────
 

@@ -44,15 +44,16 @@ const CV_STRATEGIES = [
   { value: "kfold", label: "KFold" },
   { value: "stratified_kfold", label: "StratifiedKFold" },
   { value: "group_kfold", label: "GroupKFold" },
+  { value: "stratified_group_kfold", label: "StratifiedGroup" },
   { value: "time_series", label: "TimeSeriesSplit" },
   { value: "purged_time_series", label: "PurgedTimeSeriesSplit" },
   { value: "group_time_series", label: "GroupTimeSeriesSplit" },
   { value: "blocked_group_kfold", label: "BlockedGroup" },
 ];
 
-const NEEDS_GROUP = new Set(["group_kfold", "group_time_series"]);
+const NEEDS_GROUP = new Set(["group_kfold", "stratified_group_kfold", "group_time_series"]);
 const NEEDS_TIME = new Set(["time_series", "purged_time_series", "group_time_series"]);
-const NEEDS_RANDOM_STATE = new Set(["kfold", "stratified_kfold"]);
+const NEEDS_RANDOM_STATE = new Set(["kfold", "stratified_kfold", "stratified_group_kfold"]);
 const NEEDS_GAP = new Set(["time_series", "group_time_series"]);
 const NEEDS_PURGE = new Set(["purged_time_series"]);
 const IS_TIME_SERIES = new Set(["time_series", "purged_time_series", "group_time_series"]);
