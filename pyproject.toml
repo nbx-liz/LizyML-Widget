@@ -93,5 +93,6 @@ dev = [
     "watchfiles>=1.1",
     "twine>=6.2.0",
     "vulture>=2.15",
+    "pre-commit>=4.5.1",
 ]
 
