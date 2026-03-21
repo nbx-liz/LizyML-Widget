@@ -43,11 +43,13 @@ htmlcov/
 Untitled*.ipynb
 notebooks/verify_*.ipynb
 notebooks/*.png
+notebooks/*.yaml
 .ipython/
 .jupyter/
 .jupyter-runtime/
 .jupyter-logs/
 notebooks/outputs/
+notebooks/exported_code/
 scripts/jupyter-lab.sh
 scripts/jupyter-reset.sh
 
