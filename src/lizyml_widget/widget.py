@@ -212,6 +212,25 @@ class LizyWidget(anywidget.AnyWidget):
         """Save the trained model to the given path. Returns the path."""
         return self._service.save_model(path)
 
+    def export_code(self, path: str | None = None) -> Any:
+        """Export inference code for the trained model.
+
+        Parameters
+        ----------
+        path:
+            Output directory. If None, a temporary directory is created.
+
+        Returns
+        -------
+        Path to the generated code directory (as returned by the adapter).
+
+        Raises
+        ------
+        ValueError
+            If no model has been trained yet.
+        """
+        return self._service.export_code(path)
+
     def save_config(self, path: str) -> None:
         """Save current full config to YAML file."""
         import yaml  # type: ignore[import-untyped]
@@ -563,12 +582,14 @@ class LizyWidget(anywidget.AnyWidget):
             # Fall back to fit model plot if inference plot fails
             self._handle_request_plot(payload)
 
-    def _handle_export_code(self, _payload: dict[str, Any]) -> None:
+    def _handle_export_code(self, payload: dict[str, Any]) -> None:
         try:
             import shutil
             import tempfile
 
-            result_path = self._service.export_code()
+            # Use payload path when provided; fall back to tmpdir
+            raw_path: str | None = payload.get("path") or None
+            result_path = self._service.export_code(raw_path)
             # ZIP the output directory
             zip_base = tempfile.mktemp(prefix="lzw_code_export_", suffix="")
             zip_path = shutil.make_archive(zip_base, "zip", str(result_path))

@@ -618,13 +618,15 @@ class LizyMLAdapter:
             except ImportError:
                 pass  # LizyML < 0.2.0: no callback support
 
+        # Always use _run_with_cancel_polling so the cancel flag is checked
+        # during tune execution.  For v0.2.0+ we pass progress_callback so
+        # LizyML fires per-trial updates; the worker thread polls on_progress
+        # every 0.5 s so cancellation is checked between trials.
         if use_direct_call:
-            # Direct call on current thread — full OpenMP utilization.
-            # Cancel via on_progress(InterruptedError) is caught by LizyML's
-            # except Exception and emitted as RuntimeWarning; tune runs to
-            # completion. This trade-off is acceptable: 12x CPU improvement
-            # outweighs the loss of immediate cancellation during tune.
-            result = model.tune(progress_callback=progress_cb)
+            result = self._run_with_cancel_polling(
+                lambda: model.tune(progress_callback=progress_cb),
+                on_progress,
+            )
         else:
             # Legacy path: daemon thread + cancel-polling for LizyML < 0.2.0
             result = self._run_with_cancel_polling(
