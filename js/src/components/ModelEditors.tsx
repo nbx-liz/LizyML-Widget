@@ -7,7 +7,7 @@
 import { NumericStepper } from "./NumericStepper";
 import { DynForm } from "./DynForm";
 
-export type TypedParamKind = "objective" | "model_metric" | "integer" | "number" | "boolean";
+type TypedParamKind = "objective" | "model_metric" | "integer" | "number" | "boolean";
 export interface TypedParamMeta { key: string; label: string; kind: TypedParamKind; step?: number; }
 
 /** Model section fields handled by custom ModelSection (not delegated to DynForm). */

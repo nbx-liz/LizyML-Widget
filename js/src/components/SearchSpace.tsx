@@ -10,7 +10,7 @@ import { useState } from "preact/hooks";
 import { NumericStepper } from "./NumericStepper";
 
 /** Atomic update payload — all three stores in one call to avoid stale-closure races. */
-export interface SearchSpaceUpdate {
+interface SearchSpaceUpdate {
   space: Record<string, any>;
   fixedModelParams: Record<string, any>;
   fixedTraining: Record<string, any>;
