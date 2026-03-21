@@ -174,25 +174,152 @@ class WidgetService:
         embargo: int = 0,
         train_size_max: int | None = None,
         test_size_max: int | None = None,
+        blocks: dict[str, Any] | None = None,
+        groups: dict[str, Any] | None = None,
+        min_train_rows: int = 0,
+        min_valid_rows: int = 0,
     ) -> dict[str, Any]:
         """Update cross-validation settings."""
-        self._df_info = {
-            **self._df_info,
-            "cv": {
-                "strategy": strategy,
-                "n_splits": n_splits,
-                "group_column": group_column,
-                "time_column": time_column,
-                "random_state": random_state,
-                "shuffle": shuffle,
-                "gap": gap,
-                "purge_gap": purge_gap,
-                "embargo": embargo,
-                "train_size_max": train_size_max,
-                "test_size_max": test_size_max,
-            },
+        cv: dict[str, Any] = {
+            "strategy": strategy,
+            "n_splits": n_splits,
+            "group_column": group_column,
+            "time_column": time_column,
+            "random_state": random_state,
+            "shuffle": shuffle,
+            "gap": gap,
+            "purge_gap": purge_gap,
+            "embargo": embargo,
+            "train_size_max": train_size_max,
+            "test_size_max": test_size_max,
         }
+        if strategy == "blocked_group_kfold":
+            cv = {
+                **cv,
+                "blocks": blocks,
+                "groups": groups,
+                "min_train_rows": min_train_rows,
+                "min_valid_rows": min_valid_rows,
+            }
+        self._df_info = {**self._df_info, "cv": cv}
         return copy.deepcopy(self._df_info)
+
+    def get_column_stats(self, column: str) -> dict[str, Any]:
+        """Return value distribution for a column.
+
+        Parameters
+        ----------
+        column:
+            Name of the column to inspect.
+
+        Returns
+        -------
+        dict with keys: column, unique_count, dtype, values (sorted list of {value, count}).
+
+        Raises
+        ------
+        ValueError
+            If no data is loaded or the column does not exist.
+        """
+        if self._df is None:
+            msg = "No data loaded"
+            raise ValueError(msg)
+        if column not in self._df.columns:
+            msg = f"Unknown column: {column}"
+            raise ValueError(msg)
+        series = self._df[column]
+        vc = series.value_counts(sort=False).sort_index()
+        return {
+            "column": column,
+            "unique_count": int(series.nunique()),
+            "dtype": str(series.dtype),
+            "values": [{"value": str(v), "count": int(c)} for v, c in vc.items()],
+        }
+
+    def preview_splits(self) -> dict[str, Any]:
+        """Estimate fold structure for blocked_group_kfold before Fit.
+
+        Reads self._df_info["cv"] for blocks config and groups config,
+        then computes the expected fold structure.
+
+        Returns
+        -------
+        dict with keys: total_folds, time_folds, group_folds, periods, folds.
+
+        Raises
+        ------
+        ValueError
+            If no data is loaded or strategy is not 'blocked_group_kfold'.
+        """
+        if self._df is None:
+            msg = "No data loaded"
+            raise ValueError(msg)
+        cv = self._df_info.get("cv", {})
+        if cv.get("strategy") != "blocked_group_kfold":
+            msg = "preview_splits only supports strategy='blocked_group_kfold'"
+            raise ValueError(msg)
+
+        blocks_cfg: dict[str, Any] = cv.get("blocks") or {}
+        groups_cfg: dict[str, Any] = cv.get("groups") or {}
+
+        blocks_col: str = blocks_cfg.get("col", "")
+        mode: str = blocks_cfg.get("mode", "expanding")
+        train_window: int | None = blocks_cfg.get("train_window")
+        group_folds: int = int(groups_cfg.get("n_splits", cv.get("n_splits", 2)))
+
+        # Build period list from blocks_col unique values sorted
+        if blocks_col and blocks_col in self._df.columns:
+            periods: list[str] = sorted(self._df[blocks_col].dropna().unique().tolist(), key=str)
+        else:
+            periods = []
+
+        num_periods = len(periods)
+        # Each time fold: trains on periods[0..t], validates on periods[t+1]
+        time_folds = max(0, num_periods - 1)
+        total_folds = time_folds * group_folds
+
+        # Build per-time-fold structures
+        folds: list[dict[str, Any]] = []
+        for t in range(time_folds):
+            valid_period = periods[t + 1]
+            # Expanding: train on all periods up to and including t
+            if mode == "sliding" and train_window is not None:
+                start = max(0, t + 1 - train_window)
+                train_periods = periods[start : t + 1]
+            else:
+                train_periods = periods[: t + 1]
+
+            # Estimate row counts per period from the DataFrame
+            train_rows = int(
+                sum(
+                    len(self._df[self._df[blocks_col] == p])
+                    for p in train_periods
+                    if blocks_col in self._df.columns
+                )
+            )
+            valid_rows = int(
+                len(self._df[self._df[blocks_col] == valid_period])
+                if blocks_col in self._df.columns
+                else 0
+            )
+
+            for _ in range(group_folds):
+                folds.append(
+                    {
+                        "train_periods": list(train_periods),
+                        "valid_period": valid_period,
+                        "train_rows": train_rows,
+                        "valid_rows": valid_rows,
+                    }
+                )
+
+        return {
+            "total_folds": total_folds,
+            "time_folds": time_folds,
+            "group_folds": group_folds,
+            "periods": periods,
+            "folds": folds,
+        }
 
     def get_df_info(self) -> dict[str, Any]:
         """Return a copy of the current df_info state."""
@@ -252,26 +379,37 @@ class WidgetService:
             "exclude": [c["name"] for c in info["columns"] if c.get("excluded", False)],
         }
 
-        split_section: dict[str, Any] = {
-            "method": strategy,
-            "n_splits": cv["n_splits"],
-        }
+        split_section: dict[str, Any]
 
-        # Strategy-dependent split fields per BLUEPRINT §5.2
-        if strategy in ("kfold", "stratified_kfold", "stratified_group_kfold"):
-            split_section["random_state"] = cv.get("random_state", 42)
-        if strategy in ("kfold", "stratified_group_kfold"):
-            split_section["shuffle"] = cv.get("shuffle", True)
-        if strategy in ("time_series", "group_time_series"):
-            split_section["gap"] = cv.get("gap", 0)
-        if strategy == "purged_time_series":
-            split_section["purge_gap"] = cv.get("purge_gap", 0)
-            split_section["embargo"] = cv.get("embargo", 0)
-        if strategy in ("time_series", "purged_time_series", "group_time_series"):
-            if cv.get("train_size_max") is not None:
-                split_section["train_size_max"] = cv["train_size_max"]
-            if cv.get("test_size_max") is not None:
-                split_section["test_size_max"] = cv["test_size_max"]
+        if strategy == "blocked_group_kfold":
+            split_section = {
+                "method": strategy,
+                "blocks": cv.get("blocks"),
+                "groups": cv.get("groups"),
+                "min_train_rows": cv.get("min_train_rows", 0),
+                "min_valid_rows": cv.get("min_valid_rows", 0),
+            }
+        else:
+            split_section = {
+                "method": strategy,
+                "n_splits": cv["n_splits"],
+            }
+
+            # Strategy-dependent split fields per BLUEPRINT §5.2
+            if strategy in ("kfold", "stratified_kfold", "stratified_group_kfold"):
+                split_section["random_state"] = cv.get("random_state", 42)
+            if strategy in ("kfold", "stratified_group_kfold"):
+                split_section["shuffle"] = cv.get("shuffle", True)
+            if strategy in ("time_series", "group_time_series"):
+                split_section["gap"] = cv.get("gap", 0)
+            if strategy == "purged_time_series":
+                split_section["purge_gap"] = cv.get("purge_gap", 0)
+                split_section["embargo"] = cv.get("embargo", 0)
+            if strategy in ("time_series", "purged_time_series", "group_time_series"):
+                if cv.get("train_size_max") is not None:
+                    split_section["train_size_max"] = cv["train_size_max"]
+                if cv.get("test_size_max") is not None:
+                    split_section["test_size_max"] = cv["test_size_max"]
 
         result = {
             **user_config,

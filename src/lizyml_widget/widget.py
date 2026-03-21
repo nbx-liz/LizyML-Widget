@@ -367,10 +367,45 @@ class LizyWidget(anywidget.AnyWidget):
                 embargo=payload.get("embargo", 0),
                 train_size_max=payload.get("train_size_max"),
                 test_size_max=payload.get("test_size_max"),
+                blocks=payload.get("blocks"),
+                groups=payload.get("groups"),
+                min_train_rows=int(payload.get("min_train_rows", 0)),
+                min_valid_rows=int(payload.get("min_valid_rows", 0)),
             )
             self.df_info = df_info
         except Exception as e:
             self.error = {"code": "CV_ERROR", "message": str(e)}
+
+    def _handle_get_column_stats(self, payload: dict[str, Any]) -> None:
+        column = payload.get("column", "")
+        if not column:
+            self.send({"type": "column_stats_error", "message": "Missing column name"})
+            return
+        try:
+            result = self._service.get_column_stats(column)
+            self.send(
+                {
+                    "type": "column_stats",
+                    "column": result["column"],
+                    "unique_count": result["unique_count"],
+                    "dtype": result["dtype"],
+                    "values": result["values"],
+                }
+            )
+        except Exception as e:
+            self.send({"type": "column_stats_error", "message": str(e)})
+
+    def _handle_preview_splits(self, payload: dict[str, Any]) -> None:
+        try:
+            result = self._service.preview_splits()
+            self.send(
+                {
+                    "type": "preview_splits",
+                    **result,
+                }
+            )
+        except Exception as e:
+            self.send({"type": "preview_splits_error", "message": str(e)})
 
     # Safe path pattern: dotted identifiers (no dunder, no special chars)
     _SAFE_PATH_RE = re.compile(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$")
@@ -527,6 +562,8 @@ class LizyWidget(anywidget.AnyWidget):
         "set_task": _handle_set_task,
         "update_column": _handle_update_column,
         "update_cv": _handle_update_cv,
+        "get_column_stats": _handle_get_column_stats,
+        "preview_splits": _handle_preview_splits,
         "patch_config": _handle_patch_config,
         "fit": _handle_fit,
         "tune": _handle_tune,
