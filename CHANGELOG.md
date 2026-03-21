@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-21
+
+### Added
+- CodeGen export: `w.export_code()` generates standalone LightGBM training/prediction code
+- Browser download for exported code via binary buffer (JupyterLab, VS Code, Colab)
+- BlockedGroupKFold CV strategy with interactive 2-axis configuration UI
+- Column stats inspection (`get_column_stats` action) for data-driven CV setup
+- Fold preview visualization (`preview_splits` action) with period flow diagram
+- Tune cancel support via unified `_run_with_cancel_polling` routing
+- Release automation: `scripts/release.py` + `auto-release.yml` + `release.yml`
+- CI distribution check with twine validation and smoke test
+- CI coverage threshold (80% minimum)
+- CHANGELOG.md with Keep a Changelog format
+
+### Fixed
+- `blocked_group_kfold` missing from `_FALLBACK_STRATEGIES` (silent CV_ERROR)
+- `apply_loaded_config` dropping blocks/groups fields on config round-trip
+- Temp file cleanup using separate `contextlib.suppress` blocks
+- Cutoff comparison type mismatch in `preview_splits`
+- `[dependency-groups]` dev not including ruff/mypy/pytest (CI failure)
+
+### Changed
+- Require lizyml >= 0.4.0
+- Replace `publish.yml` (release-event trigger) with `release.yml` (tag trigger)
+- Export Code sends zip as binary buffer instead of server-side path string
+
 ## [0.3.0] - 2026-03-21
 
 ### Added
