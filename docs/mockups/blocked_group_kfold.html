@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>BlockedGroupKFold UI Mockup</title>
+<style>
+  :root {
+    --bg-0: #1e1e1e;
+    --bg-1: #2d2d2d;
+    --bg-2: #3a3a3a;
+    --fg-0: #e0e0e0;
+    --fg-1: #b0b0b0;
+    --fg-2: #767676;
+    --accent: #4a9eff;
+    --accent-bg: rgba(74,158,255,.12);
+    --border: #555;
+    --warn: #e8a838;
+    --warn-bg: rgba(232,168,56,.1);
+    --success: #4caf50;
+    --danger: #e53935;
+    --danger-bg: rgba(229,57,53,.1);
+    --radius: 6px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --mono: "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--font);
+    background: #111;
+    color: var(--fg-0);
+    display: flex;
+    justify-content: center;
+    padding: 24px;
+  }
+  .widget {
+    width: 720px;
+    background: var(--bg-0);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .header .icon { margin-right: 8px; }
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    padding: 0 16px;
+  }
+  .tab {
+    padding: 8px 16px;
+    cursor: pointer;
+    color: var(--fg-2);
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .content { padding: 16px; }
+
+  /* Accordion */
+  .accordion { margin-bottom: 12px; }
+  .accordion-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-1);
+    cursor: pointer;
+    padding: 6px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .accordion-title::before { content: "\25BC"; font-size: 9px; }
+  .accordion-body { padding: 8px 0 8px 4px; }
+
+  /* Form elements */
+  .form-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 13px;
+  }
+  .form-label { color: var(--fg-1); font-size: 12px; }
+  select, input[type="number"], input[type="text"] {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--fg-0);
+    padding: 5px 8px;
+    font-size: 12px;
+    font-family: var(--font);
+    outline: none;
+    width: 100%;
+  }
+  select:focus, input:focus { border-color: var(--accent); }
+  select option { background: var(--bg-1); color: var(--fg-0); }
+
+  /* Segment buttons */
+  .segment {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .segment button {
+    background: var(--bg-1);
+    border: none;
+    color: var(--fg-1);
+    padding: 4px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    border-right: 1px solid var(--border);
+    font-family: var(--font);
+  }
+  .segment button:last-child { border-right: none; }
+  .segment button.active {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  /* Toggle */
+  .toggle-row { display: flex; align-items: center; gap: 8px; }
+  .toggle {
+    width: 36px; height: 20px;
+    background: var(--bg-2);
+    border-radius: 10px;
+    position: relative;
+    cursor: pointer;
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle::after {
+    content: "";
+    width: 16px; height: 16px;
+    background: #fff;
+    border-radius: 50%;
+    position: absolute;
+    top: 2px; left: 2px;
+    transition: left .2s;
+  }
+  .toggle.on::after { left: 18px; }
+
+  /* Stepper */
+  .stepper {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .stepper button {
+    background: var(--bg-1);
+    border: none;
+    color: var(--fg-1);
+    width: 28px; height: 28px;
+    cursor: pointer;
+    font-size: 14px;
+    font-family: var(--font);
+  }
+  .stepper button:hover { background: var(--bg-2); }
+  .stepper .value {
+    width: 50px;
+    text-align: center;
+    background: var(--bg-0);
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    font-size: 12px;
+    padding: 4px 0;
+    font-family: var(--mono);
+  }
+
+  /* Section card */
+  .section-card {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin-bottom: 10px;
+  }
+  .section-card-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fg-2);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+  }
+
+  /* Distribution bar */
+  .dist-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 50px;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    font-size: 11px;
+    color: var(--fg-1);
+  }
+  .dist-bar-bg {
+    height: 14px;
+    background: var(--bg-2);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .dist-bar {
+    height: 100%;
+    background: var(--accent);
+    opacity: 0.6;
+    border-radius: 3px;
+  }
+  .dist-count { text-align: right; font-family: var(--mono); font-size: 11px; }
+
+  /* Cutoff selector */
+  .cutoff-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .cutoff-chip {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    color: var(--fg-1);
+    font-family: var(--mono);
+  }
+  .cutoff-chip.selected {
+    background: var(--accent-bg);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .cutoff-chip:hover { border-color: var(--fg-2); }
+
+  /* Fold preview */
+  .fold-preview {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.8;
+    color: var(--fg-1);
+  }
+  .fold-preview .fold-line {
+    display: grid;
+    grid-template-columns: 50px 1fr 60px 60px;
+    gap: 4px;
+    padding: 2px 4px;
+    border-radius: 3px;
+  }
+  .fold-preview .fold-line:nth-child(even) { background: var(--bg-2); }
+  .fold-preview .fold-header {
+    font-weight: 600;
+    color: var(--fg-2);
+    font-size: 10px;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+    margin-bottom: 4px;
+  }
+  .fold-preview .train-tag {
+    background: rgba(74,158,255,.15);
+    color: var(--accent);
+    border-radius: 2px;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+  .fold-preview .valid-tag {
+    background: rgba(76,175,80,.15);
+    color: var(--success);
+    border-radius: 2px;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+
+  /* Warning/Info box */
+  .info-box {
+    background: var(--accent-bg);
+    border: 1px solid rgba(74,158,255,.3);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--fg-1);
+    margin-top: 8px;
+    line-height: 1.5;
+  }
+  .warn-box {
+    background: var(--warn-bg);
+    border: 1px solid rgba(232,168,56,.3);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--warn);
+    margin-top: 8px;
+  }
+
+  /* Summary badge */
+  .summary-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-2);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--fg-1);
+    margin-top: 12px;
+  }
+  .summary-badge .num {
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  .hint { font-size: 10px; color: var(--fg-2); margin-top: 2px; }
+  .divider { border-top: 1px solid var(--border); margin: 12px 0; }
+  .col-hint {
+    font-size: 10px;
+    color: var(--fg-2);
+    font-family: var(--mono);
+  }
+
+  /* Period flow diagram */
+  .period-flow {
+    display: flex;
+    gap: 2px;
+    margin: 8px 0;
+    height: 28px;
+    align-items: stretch;
+  }
+  .period-block {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--mono);
+  }
+  .period-block.train {
+    background: rgba(74,158,255,.2);
+    color: var(--accent);
+    border: 1px solid rgba(74,158,255,.3);
+  }
+  .period-block.valid {
+    background: rgba(76,175,80,.2);
+    color: var(--success);
+    border: 1px solid rgba(76,175,80,.3);
+  }
+  .period-block.unused {
+    background: var(--bg-2);
+    color: var(--fg-2);
+    border: 1px dashed var(--border);
+  }
+  .fold-vis-label {
+    font-size: 10px;
+    color: var(--fg-2);
+    margin-bottom: 2px;
+    font-family: var(--mono);
+  }
+  .fold-vis-row { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+
+<div class="widget">
+  <!-- Header -->
+  <div class="header">
+    <span class="icon" style="color: #ff9800;">&#9889;</span>
+    <span>LizyML Widget</span>
+    <span style="flex:1"></span>
+    <span style="font-size:11px; color:var(--fg-2); margin-right:12px;">lizyml v0.4.0</span>
+    <span style="font-size:11px; color:var(--success);">&#x25CF; Data Loaded</span>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active">Data</div>
+    <div class="tab">Model</div>
+    <div class="tab">Results</div>
+  </div>
+
+  <div class="content">
+    <!-- CV Strategy Selection -->
+    <div class="accordion">
+      <div class="accordion-title">Cross Validation</div>
+      <div class="accordion-body">
+
+        <div class="form-row">
+          <span class="form-label">Strategy</span>
+          <div class="segment" style="font-size: 11px;">
+            <button>KFold</button>
+            <button>Stratified</button>
+            <button>Group</button>
+            <button>TimeSeries</button>
+            <button class="active">BlockedGroup</button>
+          </div>
+        </div>
+
+        <div class="info-box">
+          Period (time) x Entity (group) 2-axis CV. Evaluates generalization to future periods AND unseen entities.
+        </div>
+
+        <!-- ============ BLOCKS SECTION ============ -->
+        <div class="section-card" style="margin-top: 12px;">
+          <div class="section-card-title">Blocks (Period Axis)</div>
+
+          <div class="form-row">
+            <span class="form-label">Period Column</span>
+            <div>
+              <select>
+                <option value="">-- select --</option>
+                <option value="date" selected>date</option>
+                <option value="month">month</option>
+                <option value="quarter">quarter</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Value distribution -->
+          <div style="margin: 8px 0 4px 0;">
+            <span class="form-label">Value Distribution</span>
+            <span class="col-hint" style="margin-left: 8px;">7 unique values</span>
+          </div>
+          <div style="padding: 0 4px;">
+            <div class="dist-row">
+              <span>2024-09</span>
+              <div class="dist-bar-bg"><div class="dist-bar" style="width:65%"></div></div>
+              <span class="dist-count">1,842</span>
+            </div>
+            <div class="dist-row">
+              <span>2024-10</span>
+              <div class="dist-bar-bg"><div class="dist-bar" style="width:72%"></div></div>
+              <span class="dist-count">2,031</span>
+            </div>
+            <div class="dist-row">
+              <span>2024-11</span>
+              <div class="dist-bar-bg"><div class="dist-bar" style="width:80%"></div></div>
+              <span class="dist-count">2,256</span>
+            </div>
+            <div class="dist-row">
+              <span>2024-12</span>
+              <div class="dist-bar-bg"><div class="dist-bar" style="width:100%"></div></div>
+              <span class="dist-count">2,823</span>
+            </div>
+            <div class="dist-row">
+              <span>2025-01</span>
+              <div class="dist-bar-bg"><div class="dist-bar" style="width:88%"></div></div>
+              <span class="dist-count">2,487</span>
+            </div>
+            <div class="dist-row">
+              <span>2025-02</span>
+              <div class="dist-bar-bg"><div class="dist-bar" style="width:55%"></div></div>
+              <span class="dist-count">1,553</span>
+            </div>
+            <div class="dist-row">
+              <span>2025-03</span>
+              <div class="dist-bar-bg"><div class="dist-bar" style="width:40%"></div></div>
+              <span class="dist-count">1,128</span>
+            </div>
+          </div>
+
+          <!-- Cutoffs selection -->
+          <div style="margin-top: 12px;">
+            <span class="form-label">Cutoffs</span>
+            <span class="hint" style="margin-left: 8px;">Click values to set period boundaries</span>
+          </div>
+          <div class="cutoff-list">
+            <span class="cutoff-chip">2024-09</span>
+            <span class="cutoff-chip">2024-10</span>
+            <span class="cutoff-chip selected">2024-11</span>
+            <span class="cutoff-chip">2024-12</span>
+            <span class="cutoff-chip selected">2025-01</span>
+            <span class="cutoff-chip">2025-02</span>
+            <span class="cutoff-chip">2025-03</span>
+          </div>
+
+          <!-- Period preview -->
+          <div style="margin-top: 10px;">
+            <span class="form-label">Resulting Periods</span>
+          </div>
+          <div style="font-family: var(--mono); font-size: 11px; color: var(--fg-1); margin-top: 4px; line-height: 1.8;">
+            <div>P0: 2024-09 ~ 2024-10 <span style="color:var(--fg-2)">(3,873 rows)</span></div>
+            <div>P1: 2024-11 ~ 2024-12 <span style="color:var(--fg-2)">(5,079 rows)</span></div>
+            <div>P2: 2025-01 ~ 2025-03 <span style="color:var(--fg-2)">(5,168 rows)</span></div>
+          </div>
+
+          <div class="divider"></div>
+
+          <!-- Mode -->
+          <div class="form-row">
+            <span class="form-label">Mode</span>
+            <div class="segment">
+              <button class="active">Expanding</button>
+              <button>Sliding</button>
+            </div>
+          </div>
+          <div class="hint" style="margin-left: 144px; margin-top: -4px;">
+            Training data grows cumulatively with each fold
+          </div>
+        </div>
+
+        <!-- ============ GROUPS SECTION ============ -->
+        <div class="section-card">
+          <div class="section-card-title">Groups (Entity Axis)</div>
+
+          <div class="form-row">
+            <span class="form-label">Group Column</span>
+            <div>
+              <select>
+                <option value="">-- select --</option>
+                <option value="user_id" selected>user_id (245 unique)</option>
+                <option value="store_id">store_id (18 unique)</option>
+                <option disabled style="color:var(--fg-2);">date (used as blocks.col)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <span class="form-label">Folds (n_splits)</span>
+            <div class="stepper">
+              <button>-</button>
+              <div class="value">3</div>
+              <button>+</button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <span class="form-label">Stratify</span>
+            <div class="segment">
+              <button class="active">Auto</button>
+              <button>On</button>
+              <button>Off</button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <span class="form-label">Shuffle</span>
+            <div class="toggle on"></div>
+          </div>
+        </div>
+
+        <!-- ============ FOLD PREVIEW ============ -->
+        <div class="section-card">
+          <div class="section-card-title">Fold Preview</div>
+
+          <div class="summary-badge">
+            Total: <span class="num">6</span> folds
+            <span style="color:var(--fg-2);">(2 time &times; 3 groups)</span>
+          </div>
+
+          <!-- Visual fold diagram -->
+          <div style="margin-top: 12px;">
+            <div class="fold-vis-row">
+              <div class="fold-vis-label">Time Fold 0 &times; Group Folds</div>
+              <div class="period-flow">
+                <div class="period-block train" style="flex:2;">P0 (train)</div>
+                <div class="period-block valid" style="flex:1;">P1 (valid)</div>
+                <div class="period-block unused" style="flex:1;">P2</div>
+              </div>
+            </div>
+            <div class="fold-vis-row">
+              <div class="fold-vis-label">Time Fold 1 &times; Group Folds</div>
+              <div class="period-flow">
+                <div class="period-block train" style="flex:2;">P0+P1 (train)</div>
+                <div class="period-block valid" style="flex:1;">P2 (valid)</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <!-- Detailed fold table -->
+          <div class="fold-preview">
+            <div class="fold-line fold-header">
+              <span>Fold</span>
+              <span>Structure</span>
+              <span style="text-align:right">Train</span>
+              <span style="text-align:right">Valid</span>
+            </div>
+            <div class="fold-line">
+              <span>0</span>
+              <span><span class="train-tag">P0</span> &rarr; <span class="valid-tag">P1</span> &middot; G0</span>
+              <span style="text-align:right">2,582</span>
+              <span style="text-align:right">1,693</span>
+            </div>
+            <div class="fold-line">
+              <span>1</span>
+              <span><span class="train-tag">P0</span> &rarr; <span class="valid-tag">P1</span> &middot; G1</span>
+              <span style="text-align:right">2,582</span>
+              <span style="text-align:right">1,693</span>
+            </div>
+            <div class="fold-line">
+              <span>2</span>
+              <span><span class="train-tag">P0</span> &rarr; <span class="valid-tag">P1</span> &middot; G2</span>
+              <span style="text-align:right">2,582</span>
+              <span style="text-align:right">1,693</span>
+            </div>
+            <div class="fold-line">
+              <span>3</span>
+              <span><span class="train-tag">P0+P1</span> &rarr; <span class="valid-tag">P2</span> &middot; G0</span>
+              <span style="text-align:right">5,968</span>
+              <span style="text-align:right">1,723</span>
+            </div>
+            <div class="fold-line">
+              <span>4</span>
+              <span><span class="train-tag">P0+P1</span> &rarr; <span class="valid-tag">P2</span> &middot; G1</span>
+              <span style="text-align:right">5,968</span>
+              <span style="text-align:right">1,723</span>
+            </div>
+            <div class="fold-line">
+              <span>5</span>
+              <span><span class="train-tag">P0+P1</span> &rarr; <span class="valid-tag">P2</span> &middot; G2</span>
+              <span style="text-align:right">5,968</span>
+              <span style="text-align:right">1,723</span>
+            </div>
+          </div>
+
+          <!-- Advanced settings -->
+          <div class="divider"></div>
+          <div class="form-row">
+            <span class="form-label">Min Train Rows</span>
+            <div class="stepper">
+              <button>-</button>
+              <div class="value">10</div>
+              <button>+</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <span class="form-label">Min Valid Rows</span>
+            <div class="stepper">
+              <button>-</button>
+              <div class="value">5</div>
+              <button>+</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

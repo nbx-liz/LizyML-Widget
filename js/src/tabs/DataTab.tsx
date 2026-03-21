@@ -1,5 +1,6 @@
 /** DataTab — Target/Task selection, Column settings, CV settings, Feature summary. */
 import { Accordion } from "../components/Accordion";
+import { BlockedGroupKFold } from "../components/BlockedGroupKFold";
 import { ColumnTable } from "../components/ColumnTable";
 import { NumericStepper } from "../components/NumericStepper";
 
@@ -15,6 +16,10 @@ interface CvInfo {
   embargo?: number;
   train_size_max?: number | null;
   test_size_max?: number | null;
+  blocks?: any;
+  groups?: any;
+  min_train_rows?: number;
+  min_valid_rows?: number;
 }
 
 interface DfInfo {
@@ -30,6 +35,8 @@ interface DfInfo {
 interface DataTabProps {
   dfInfo: DfInfo;
   allColumns: string[];
+  columnStats: Record<string, any> | null;
+  splitPreview: any | null;
   sendAction: (type: string, payload?: Record<string, any>) => void;
 }
 
@@ -37,19 +44,21 @@ const CV_STRATEGIES = [
   { value: "kfold", label: "KFold" },
   { value: "stratified_kfold", label: "StratifiedKFold" },
   { value: "group_kfold", label: "GroupKFold" },
+  { value: "stratified_group_kfold", label: "StratifiedGroup" },
   { value: "time_series", label: "TimeSeriesSplit" },
   { value: "purged_time_series", label: "PurgedTimeSeriesSplit" },
   { value: "group_time_series", label: "GroupTimeSeriesSplit" },
+  { value: "blocked_group_kfold", label: "BlockedGroup" },
 ];
 
-const NEEDS_GROUP = new Set(["group_kfold", "group_time_series"]);
+const NEEDS_GROUP = new Set(["group_kfold", "stratified_group_kfold", "group_time_series"]);
 const NEEDS_TIME = new Set(["time_series", "purged_time_series", "group_time_series"]);
-const NEEDS_RANDOM_STATE = new Set(["kfold", "stratified_kfold"]);
+const NEEDS_RANDOM_STATE = new Set(["kfold", "stratified_kfold", "stratified_group_kfold"]);
 const NEEDS_GAP = new Set(["time_series", "group_time_series"]);
 const NEEDS_PURGE = new Set(["purged_time_series"]);
 const IS_TIME_SERIES = new Set(["time_series", "purged_time_series", "group_time_series"]);
 
-export function DataTab({ dfInfo, allColumns, sendAction }: DataTabProps) {
+export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAction }: DataTabProps) {
   const shape = dfInfo.shape ?? [0, 0];
   const columns = dfInfo.columns ?? [];
   const cv = dfInfo.cv ?? { strategy: "kfold", n_splits: 5 };
@@ -136,6 +145,17 @@ export function DataTab({ dfInfo, allColumns, sendAction }: DataTabProps) {
             ))}
           </div>
         </div>
+        {cv.strategy === "blocked_group_kfold" ? (
+          <BlockedGroupKFold
+            cv={cv}
+            allColumns={featureCols}
+            columnStats={columnStats}
+            splitPreview={splitPreview}
+            sendAction={sendAction}
+            sendCv={sendCv}
+          />
+        ) : (
+        <>
         <div class="lzw-form-row">
           <label class="lzw-label">Folds</label>
           <NumericStepper
@@ -258,6 +278,8 @@ export function DataTab({ dfInfo, allColumns, sendAction }: DataTabProps) {
               />
             </div>
           </>
+        )}
+        </>
         )}
       </Accordion>
 

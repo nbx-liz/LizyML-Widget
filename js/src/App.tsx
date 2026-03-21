@@ -1,6 +1,6 @@
 /** App — Header + Tab router. */
-import { useState, useMemo, useEffect } from "preact/hooks";
-import { useTraitlet, useSendAction } from "./hooks/useModel";
+import { useState, useMemo, useEffect, useCallback } from "preact/hooks";
+import { useTraitlet, useSendAction, useCustomMsg } from "./hooks/useModel";
 import { useJobPolling } from "./hooks/useJobPolling";
 import { usePlot } from "./hooks/usePlot";
 import { useTheme } from "./hooks/useTheme";
@@ -47,6 +47,31 @@ export function App({ model, rootEl }: AppProps) {
   const effectiveFitSummary = polled?.fit_summary ?? fitSummary;
   const effectiveTuneSummary = polled?.tune_summary ?? tuneSummary;
   const effectiveAvailablePlots = polled?.available_plots ?? availablePlots;
+
+  const [columnStats, setColumnStats] = useState<Record<string, any> | null>(null);
+  const [splitPreview, setSplitPreview] = useState<any | null>(null);
+  const [exportLoading, setExportLoading] = useState(false);
+
+  // Handle custom messages for column_stats, split_preview, code_export_download
+  const handleCustomMsg = useCallback((msg: any, buffers?: ArrayBuffer[]) => {
+    if (msg.type === "column_stats") {
+      setColumnStats(msg);
+    } else if (msg.type === "split_preview" || msg.type === "preview_splits") {
+      setSplitPreview(msg);
+    } else if (msg.type === "code_export_download" && buffers && buffers.length > 0) {
+      const blob = new Blob([buffers[0]], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = msg.filename || "exported_code.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setExportLoading(false);
+    }
+  }, []);
+  useCustomMsg(model, handleCustomMsg);
 
   const { plots, loading: plotLoading, requestPlot, clearCache } = usePlot(model);
 
@@ -102,6 +127,8 @@ export function App({ model, rootEl }: AppProps) {
           <DataTab
             dfInfo={dfInfo}
             allColumns={allColumns}
+            columnStats={columnStats}
+            splitPreview={splitPreview}
             sendAction={sendAction}
           />
         )}
@@ -134,6 +161,11 @@ export function App({ model, rootEl }: AppProps) {
             onSwitchToFit={() => setActiveTab("Model")}
             evaluationParams={config?.evaluation?.params}
             theme={theme}
+            exportLoading={exportLoading}
+            onExportCode={() => {
+              setExportLoading(true);
+              sendAction("export_code", {});
+            }}
           />
         )}
       </div>

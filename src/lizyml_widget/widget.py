@@ -6,6 +6,7 @@ import contextlib
 import copy
 import importlib.resources
 import logging
+import os
 import re
 import statistics
 import threading
@@ -212,6 +213,25 @@ class LizyWidget(anywidget.AnyWidget):
         """Save the trained model to the given path. Returns the path."""
         return self._service.save_model(path)
 
+    def export_code(self, path: str | None = None) -> Any:
+        """Export inference code for the trained model.
+
+        Parameters
+        ----------
+        path:
+            Output directory. If None, a temporary directory is created.
+
+        Returns
+        -------
+        Path to the generated code directory (as returned by the adapter).
+
+        Raises
+        ------
+        ValueError
+            If no model has been trained yet.
+        """
+        return self._service.export_code(path)
+
     def save_config(self, path: str) -> None:
         """Save current full config to YAML file."""
         import yaml  # type: ignore[import-untyped]
@@ -340,6 +360,8 @@ class LizyWidget(anywidget.AnyWidget):
             "group_time_series",
             "purged_time_series",
             "group_kfold",
+            "stratified_group_kfold",
+            "blocked_group_kfold",
         }
     )
 
@@ -350,7 +372,11 @@ class LizyWidget(anywidget.AnyWidget):
         if strategy not in valid_set:
             self.error = {"code": "CV_ERROR", "message": f"Invalid strategy: {strategy!r}"}
             return
-        n_splits = int(payload.get("n_splits", 5))
+        try:
+            n_splits = int(payload.get("n_splits", 5))
+        except (ValueError, TypeError) as e:
+            self.error = {"code": "CV_ERROR", "message": f"Invalid n_splits: {e}"}
+            return
         if not (2 <= n_splits <= 100):
             self.error = {"code": "CV_ERROR", "message": f"n_splits must be 2-100, got {n_splits}"}
             return
@@ -367,10 +393,46 @@ class LizyWidget(anywidget.AnyWidget):
                 embargo=payload.get("embargo", 0),
                 train_size_max=payload.get("train_size_max"),
                 test_size_max=payload.get("test_size_max"),
+                blocks=payload.get("blocks"),
+                groups=payload.get("groups"),
+                min_train_rows=int(payload.get("min_train_rows", 0)),
+                min_valid_rows=int(payload.get("min_valid_rows", 0)),
             )
             self.df_info = df_info
         except Exception as e:
             self.error = {"code": "CV_ERROR", "message": str(e)}
+
+    def _handle_get_column_stats(self, payload: dict[str, Any]) -> None:
+        column = payload.get("column", "")
+        if not column:
+            self.send({"type": "column_stats_error", "message": "Missing column name"})
+            return
+        try:
+            result = self._service.get_column_stats(column)
+            self.send(
+                {
+                    "type": "column_stats",
+                    "column": result["column"],
+                    "unique_count": result["unique_count"],
+                    "dtype": result["dtype"],
+                    "values": result["values"],
+                    "truncated": result.get("truncated", False),
+                }
+            )
+        except Exception as e:
+            self.send({"type": "column_stats_error", "message": str(e)})
+
+    def _handle_preview_splits(self, payload: dict[str, Any]) -> None:
+        try:
+            result = self._service.preview_splits()
+            self.send(
+                {
+                    "type": "preview_splits",
+                    **result,
+                }
+            )
+        except Exception as e:
+            self.send({"type": "preview_splits_error", "message": str(e)})
 
     # Safe path pattern: dotted identifiers (no dunder, no special chars)
     _SAFE_PATH_RE = re.compile(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$")
@@ -522,11 +584,42 @@ class LizyWidget(anywidget.AnyWidget):
             # Fall back to fit model plot if inference plot fails
             self._handle_request_plot(payload)
 
+    def _handle_export_code(self, payload: dict[str, Any]) -> None:
+        try:
+            import shutil
+            import tempfile
+            from pathlib import Path
+
+            result_path = self._service.export_code(None)  # always tmpdir for UI
+            zip_dir = tempfile.mkdtemp(prefix="lzw_code_export_")
+            zip_base = str(Path(zip_dir) / "exported_code")
+            zip_path = shutil.make_archive(zip_base, "zip", str(result_path))
+
+            with open(zip_path, "rb") as f:
+                zip_bytes = f.read()
+
+            self.send(
+                {"type": "code_export_download", "filename": "exported_code.zip"},
+                buffers=[zip_bytes],
+            )
+
+            # Cleanup temp files
+            with contextlib.suppress(OSError):
+                os.unlink(zip_path)
+            with contextlib.suppress(OSError):
+                shutil.rmtree(str(result_path), ignore_errors=True)
+            with contextlib.suppress(OSError):
+                shutil.rmtree(zip_dir, ignore_errors=True)
+        except Exception as e:
+            self.error = {"code": "EXPORT_CODE_ERROR", "message": str(e)}
+
     _action_handlers: dict[str, Any] = {
         "set_target": _handle_set_target,
         "set_task": _handle_set_task,
         "update_column": _handle_update_column,
         "update_cv": _handle_update_cv,
+        "get_column_stats": _handle_get_column_stats,
+        "preview_splits": _handle_preview_splits,
         "patch_config": _handle_patch_config,
         "fit": _handle_fit,
         "tune": _handle_tune,
@@ -538,6 +631,7 @@ class LizyWidget(anywidget.AnyWidget):
         "import_yaml": _handle_import_yaml,
         "export_yaml": _handle_export_yaml,
         "raw_config": _handle_raw_config,
+        "export_code": _handle_export_code,
     }
 
     # ── Job execution ─────────────────────────────────────────
@@ -597,8 +691,6 @@ class LizyWidget(anywidget.AnyWidget):
             # Default to thread — subprocess is opt-in via LZW_FORCE_SUBPROCESS=1
             # because real-world fit degradation from libgomp pool affinity is
             # only 1.0-1.2x, while subprocess overhead (~500ms import) is larger.
-            import os
-
             if os.environ.get("LZW_FORCE_SUBPROCESS") == "1":
                 self._execution_strategy, self._libomp_path = get_execution_strategy()
             else:
