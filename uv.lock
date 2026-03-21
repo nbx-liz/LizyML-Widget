@@ -1476,9 +1476,20 @@ lizyml = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "ipykernel" },
+    { name = "jupyterlab" },
+    { name = "lizyml", extra = ["calibration", "explain", "plots", "tuning"] },
+    { name = "mypy" },
+    { name = "pandas-stubs", version = "2.3.3.260113", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas-stubs", version = "3.0.0.260204", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "twine" },
     { name = "vulture" },
+    { name = "watchfiles" },
 ]
 
 [package.metadata]
@@ -1502,9 +1513,18 @@ provides-extras = ["dev", "lizyml"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "ipykernel", specifier = ">=6.0" },
+    { name = "jupyterlab", specifier = ">=4.0" },
+    { name = "lizyml", extras = ["plots", "tuning", "calibration", "explain"], specifier = ">=0.4.0" },
+    { name = "mypy", specifier = ">=1.0" },
+    { name = "pandas-stubs", specifier = ">=2.0" },
+    { name = "pytest", specifier = ">=7.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "ruff", specifier = ">=0.4" },
+    { name = "scikit-learn", specifier = ">=1.0" },
     { name = "twine", specifier = ">=6.2.0" },
     { name = "vulture", specifier = ">=2.15" },
+    { name = "watchfiles", specifier = ">=1.1" },
 ]
 
 [[package]]
