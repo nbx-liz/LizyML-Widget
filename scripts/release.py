@@ -26,9 +26,7 @@ import sys
 
 def run(cmd: str, *, check: bool = True) -> str:
     """Run a shell command and return stdout."""
-    result = subprocess.run(
-        cmd, shell=True, capture_output=True, text=True, check=False
-    )
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
     if check and result.returncode != 0:
         print(f"ERROR: {cmd}", file=sys.stderr)
         print(result.stderr, file=sys.stderr)
@@ -109,8 +107,7 @@ def check_changelog_has_version(version: str) -> None:
         content = f.read()
     if f"## [{ver}]" not in content:
         print(
-            f"ERROR: CHANGELOG.md has no entry for [{ver}]. "
-            f"Add it before running this script.",
+            f"ERROR: CHANGELOG.md has no entry for [{ver}]. Add it before running this script.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -167,9 +164,7 @@ def main() -> None:
         body_file = f.name
 
     pr_url = run(
-        f"gh pr create --base main --head develop "
-        f'--title "{pr_title}" '
-        f'--body-file "{body_file}"'
+        f'gh pr create --base main --head develop --title "{pr_title}" --body-file "{body_file}"'
     )
     print(f"\nPR created: {pr_url}")
     print("\nNext: Merge the PR on GitHub.")

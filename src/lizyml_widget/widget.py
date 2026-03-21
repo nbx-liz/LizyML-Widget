@@ -361,6 +361,7 @@ class LizyWidget(anywidget.AnyWidget):
             "purged_time_series",
             "group_kfold",
             "stratified_group_kfold",
+            "blocked_group_kfold",
         }
     )
 
@@ -605,7 +606,9 @@ class LizyWidget(anywidget.AnyWidget):
             # Cleanup temp files
             with contextlib.suppress(OSError):
                 os.unlink(zip_path)
+            with contextlib.suppress(OSError):
                 shutil.rmtree(str(result_path), ignore_errors=True)
+            with contextlib.suppress(OSError):
                 shutil.rmtree(zip_dir, ignore_errors=True)
         except Exception as e:
             self.error = {"code": "EXPORT_CODE_ERROR", "message": str(e)}
@@ -688,8 +691,6 @@ class LizyWidget(anywidget.AnyWidget):
             # Default to thread — subprocess is opt-in via LZW_FORCE_SUBPROCESS=1
             # because real-world fit degradation from libgomp pool affinity is
             # only 1.0-1.2x, while subprocess overhead (~500ms import) is larger.
-            import os
-
             if os.environ.get("LZW_FORCE_SUBPROCESS") == "1":
                 self._execution_strategy, self._libomp_path = get_execution_strategy()
             else:

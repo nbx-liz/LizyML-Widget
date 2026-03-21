@@ -143,7 +143,6 @@ export function FoldPreview({
       {folds.length === 0 && (
         <p class="lzw-muted" style={{ marginTop: "8px" }}>
           Configure blocks and groups to preview folds.
-          {mode && ""}
         </p>
       )}
     </div>
