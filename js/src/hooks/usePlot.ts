@@ -1,8 +1,8 @@
 /**
- * usePlot — request plots via action traitlet + receive via msg:custom.
+ * usePlot — request plots via msg:custom + receive via msg:custom.
  * Caches received plots by plot_type.
  */
-import { useState, useCallback, useEffect, useRef } from "preact/hooks";
+import { useState, useCallback, useEffect } from "preact/hooks";
 
 interface PlotCache {
   [plotType: string]: any; // parsed Plotly JSON spec
@@ -11,7 +11,6 @@ interface PlotCache {
 export function usePlot(model: any) {
   const [plots, setPlots] = useState<PlotCache>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
-  const tsRef = useRef(0);
 
   useEffect(() => {
     const handler = (msg: any) => {
@@ -37,13 +36,11 @@ export function usePlot(model: any) {
       if (plots[plotType]) return; // already cached
       if (loading[plotType]) return; // already loading
       setLoading((prev) => ({ ...prev, [plotType]: true }));
-      tsRef.current += 1;
-      model.set("action", {
-        type: "request_plot",
+      model.send({
+        type: "action",
+        action_type: "request_plot",
         payload: { plot_type: plotType },
-        _ts: tsRef.current,
       });
-      model.save_changes();
     },
     [model, plots, loading],
   );

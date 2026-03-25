@@ -29,13 +29,25 @@ const INTERPOLATION_INTERVAL_MS = 100;
 /** Wait this long before deciding traitlets are stalled and starting polling. */
 const STALL_DETECT_MS = 2000;
 
-/** Detect if running in Google Colab (the only known env where BG-thread comm is broken). */
+/** Detect if running in Google Colab.
+ *
+ * P-023: Primary check uses window.google.colab (official Colab JS API).
+ * Fallback uses link[href*="colab"] CSS heuristic which may break as
+ * Colab updates its DOM structure.
+ */
 function isColab(): boolean {
   try {
-    return (
-      typeof document !== "undefined" &&
-      document.querySelector('link[href*="colab"]') !== null
-    );
+    if (typeof window !== "undefined") {
+      // Primary: official Colab JS API (stable)
+      if ((window as any).google?.colab) return true;
+      // Fallback: CSS link heuristic (fragile — Colab DOM may change)
+      if (
+        typeof document !== "undefined" &&
+        document.querySelector('link[href*="colab"]') !== null
+      )
+        return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -120,21 +132,23 @@ export function useJobPolling(
     }, INTERPOLATION_INTERVAL_MS);
   }, [model, handleMsg]);
 
-  // Start polling only on Colab where BG-thread comm is broken.
-  // On JupyterLab/VS Code, traitlet sync works from BG threads — no polling needed.
+  // P-023: Polling is now a universal fallback rather than Colab-only.
+  // On Colab, start polling immediately (BG-thread traitlet sync may or may
+  // not work depending on ipywidgets version).  On other environments, wait
+  // STALL_DETECT_MS as a safety net in case traitlet sync stalls.
   useEffect(() => {
     if (traitletStatus !== "running") {
       stopPolling();
       return;
     }
 
-    if (!IN_COLAB) {
-      // Non-Colab: traitlets work, no polling needed.
-      return;
+    if (IN_COLAB) {
+      // Colab: start polling immediately (no wait).
+      startPolling();
+      return () => stopPolling();
     }
 
-    // Colab: wait STALL_DETECT_MS then start polling unconditionally.
-    // (On Colab, traitlet updates from BG threads never arrive.)
+    // Non-Colab: wait STALL_DETECT_MS, then start polling as fallback.
     const stallTimer = setTimeout(() => {
       startPolling();
     }, STALL_DETECT_MS);
