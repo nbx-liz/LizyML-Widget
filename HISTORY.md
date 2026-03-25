@@ -979,3 +979,48 @@
   - 既存 CV 戦略の動作
   - Adapter Protocol（CV は Service 管理）
   - traitlets 定義（df_info 内の cv 構造変更のみ）
+
+---
+
+### P-023: Action 通信を traitlet 同期から msg:custom に移行（Colab ipywidgets 7.x 互換）
+
+- **日付**: 2026-03-25
+- **ステータス**: Proposed
+- **背景**:
+  - Google Colab（ipywidgets 7.7.1）で Fit ボタンをクリックしても処理が開始されない障害が発生。
+  - 診断の結果、JS→Python 方向の `Dict` traitlet 同期（`model.set("action", {...})` + `model.save_changes()`）が Python 側の `@traitlets.observe("action")` に到達しないことを確認。
+  - Python 側から直接 `w.action = {...}` を設定すると Fit は正常に完了する。BG スレッドからの Python→JS traitlet 同期は動作する。
+  - P-018 で導入したポーリング機構の `isColab()` 検出（`link[href*="colab"]`）も `false` を返すようになっているが、BG スレッド通信自体は現行 Colab で動作するため、ポーリングの必要性は低下。
+  - anywidget issue [#786](https://github.com/manzt/anywidget/issues/786) で Dict traitlet の初回同期失敗が報告されており、ipywidgets 7.x 固有の挙動と推定。
+- **提案内容**:
+  - **JS 側**:
+    - `useSendAction` hook を `model.set()` + `save_changes()` から `model.send()` (msg:custom) に変更
+    - `usePlot.ts` の `requestPlot` も同様に `model.send()` に変更
+    - `action` traitlet の `useTraitlet` 購読を削除（不要になるため）
+  - **Python 側**:
+    - `_handle_custom_msg` で `type: "action"` のメッセージを受信し、既存の action dispatch ロジック（`_action_handlers` map）に委譲
+    - `@traitlets.observe("action")` の `_on_action` は Python API 互換のため維持（`w.action = {...}` による直接操作を引き続きサポート）
+    - `action` traitlet 定義自体は残す（Python API の後方互換性維持）
+  - **isColab() 検出の改善**:
+    - `window.google?.colab` を primary check に追加、`link[href*="colab"]` を fallback に格下げ
+  - **ポーリング機構の改善**:
+    - BG スレッド通信が動作する環境ではポーリング不要だが、将来の Colab 変更に備えてフォールバックとして維持
+    - stall detection（traitlet 更新が 2 秒間来ない場合にポーリング開始）を Colab 限定から全環境に適用（環境検出不要に）
+- **影響範囲**:
+  - `js/src/hooks/useModel.ts` — `useSendAction` の通信方式変更
+  - `js/src/hooks/usePlot.ts` — `requestPlot` の通信方式変更
+  - `js/src/hooks/useJobPolling.ts` — `isColab()` 検出改善 + stall detection 汎用化
+  - `js/src/App.tsx` — `action` traitlet 購読削除（軽微）
+  - `src/lizyml_widget/widget.py` — `_handle_custom_msg` にアクション dispatch 追加
+- **変更しないもの**:
+  - `action` traitlet 定義（Python API 後方互換性のため残す）
+  - `_on_action` observer（Python API 経由の操作をサポート）
+  - `_action_handlers` map（dispatch ロジックは共通）
+  - Service / Adapter 層
+  - 個別 UI コンポーネントの props（`sendAction` の型シグネチャは変わらない）
+  - ポーリング応答ロジック（`_handle_custom_msg` の `poll` ハンドラ）
+- **受け入れ基準**:
+  - Colab（ipywidgets 7.7.1）で Fit / Tune / 全アクションが動作する
+  - JupyterLab / VS Code Notebooks での動作に退行がない
+  - Python API（`w.action = {...}`）が引き続き動作する
+  - 既存テストが全パス + 新規テストで msg:custom action dispatch をカバー

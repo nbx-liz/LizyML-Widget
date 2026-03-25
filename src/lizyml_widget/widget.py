@@ -259,13 +259,36 @@ class LizyWidget(anywidget.AnyWidget):
     # ── Custom message handler (Colab polling) ──────────────
 
     def _handle_custom_msg(self, content: dict[str, Any], buffers: list[Any]) -> None:
-        """Handle msg:custom messages from JS (e.g. poll requests).
+        """Handle msg:custom messages from JS (e.g. poll and action requests).
 
         Overrides ipywidgets.Widget._handle_custom_msg(content, buffers).
         Runs on the main (shell) thread, so self.send() reliably reaches JS
         even on Google Colab where BG-thread comm is blocked.
+
+        Message types:
+        - ``{type: "poll"}``: return current job state (Colab polling fallback)
+        - ``{type: "action", action_type: str, payload: dict}``: dispatch an
+          action (P-023 — replaces traitlet-based JS→Python action sync which
+          breaks on Colab ipywidgets 7.x)
+
+        Note: the msg:custom schema uses ``action_type`` to name the action,
+        while the traitlet path (``_on_action``) uses ``type``.  This is
+        intentional — msg:custom already uses ``type`` to distinguish message
+        categories ("action" vs "poll"), so the action name lives in
+        ``action_type`` to avoid collision.
         """
-        if content.get("type") != "poll":
+        msg_type = content.get("type")
+
+        if msg_type == "action":
+            action_type: str = content.get("action_type", "")
+            raw_payload = content.get("payload", {})
+            payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+            handler = self._action_handlers.get(action_type)
+            if handler is not None:
+                handler(self, payload)
+            return
+
+        if msg_type != "poll":
             super()._handle_custom_msg(content, buffers)
             return
 
