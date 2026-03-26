@@ -22,6 +22,7 @@ interface FitSubTabProps {
   sendAction: (type: string, payload?: Record<string, any>) => void;
   rawYaml: string | null;
   setRawYaml: (value: string | null) => void;
+  yamlExportCount?: number;
 }
 
 export function FitSubTab({
@@ -35,6 +36,7 @@ export function FitSubTab({
   sendAction,
   rawYaml,
   setRawYaml,
+  yamlExportCount,
 }: FitSubTabProps) {
   const sections: Array<{ key: string; title: string }> = uiSchema.sections ?? [];
   const optionSets: Record<string, Record<string, string[]>> = uiSchema.option_sets ?? {};
@@ -380,7 +382,7 @@ export function FitSubTab({
         );
       })}
 
-      <ConfigFooter sendAction={sendAction} rawYaml={rawYaml} setRawYaml={setRawYaml} />
+      <ConfigFooter sendAction={sendAction} rawYaml={rawYaml} setRawYaml={setRawYaml} yamlExportCount={yamlExportCount} />
     </>
   );
 }

@@ -8,6 +8,7 @@ build/
 
 # Frontend (js/)
 js/node_modules/
+js/coverage/
 *.tsbuildinfo
 .eslintcache
 

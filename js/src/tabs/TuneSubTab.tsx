@@ -18,6 +18,7 @@ interface TuneSubTabProps {
   sendAction: (type: string, payload?: Record<string, any>) => void;
   rawYaml: string | null;
   setRawYaml: (value: string | null) => void;
+  yamlExportCount?: number;
 }
 
 export function TuneSubTab({
@@ -29,6 +30,7 @@ export function TuneSubTab({
   sendAction,
   rawYaml,
   setRawYaml,
+  yamlExportCount,
 }: TuneSubTabProps) {
   const optionSets: Record<string, Record<string, string[]>> = uiSchema.option_sets ?? {};
   const tuning = localConfig.tuning ?? {};
@@ -154,7 +156,7 @@ export function TuneSubTab({
         </div>
       </Accordion>
 
-      <ConfigFooter sendAction={sendAction} rawYaml={rawYaml} setRawYaml={setRawYaml} />
+      <ConfigFooter sendAction={sendAction} rawYaml={rawYaml} setRawYaml={setRawYaml} yamlExportCount={yamlExportCount} />
     </div>
   );
 }

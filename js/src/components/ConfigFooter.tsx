@@ -2,16 +2,25 @@
  * ConfigFooter — Import/Export YAML buttons + Raw Config modal.
  * Shared between Fit and Tune sub-tabs.
  */
-import { useRef, useCallback } from "preact/hooks";
+import { useRef, useCallback, useState, useEffect } from "preact/hooks";
 
 interface ConfigFooterProps {
   sendAction: (type: string, payload?: Record<string, any>) => void;
   rawYaml: string | null;
   setRawYaml: (value: string | null) => void;
+  yamlExportCount?: number;
 }
 
-export function ConfigFooter({ sendAction, rawYaml, setRawYaml }: ConfigFooterProps) {
+export function ConfigFooter({ sendAction, rawYaml, setRawYaml, yamlExportCount }: ConfigFooterProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [exportLoading, setExportLoading] = useState(false);
+
+  // B-3: Reset loading state when export response arrives
+  useEffect(() => {
+    if (yamlExportCount && yamlExportCount > 0) {
+      setExportLoading(false);
+    }
+  }, [yamlExportCount]);
 
   const handleImportFile = useCallback(
     (e: Event) => {
@@ -40,8 +49,16 @@ export function ConfigFooter({ sendAction, rawYaml, setRawYaml }: ConfigFooterPr
         <button class="lzw-btn" type="button" onClick={() => fileInputRef.current?.click()}>
           Import YAML
         </button>
-        <button class="lzw-btn" type="button" onClick={() => sendAction("export_yaml")}>
-          Export YAML
+        <button
+          class="lzw-btn"
+          type="button"
+          disabled={exportLoading}
+          onClick={() => {
+            setExportLoading(true);
+            sendAction("export_yaml");
+          }}
+        >
+          {exportLoading ? "Exporting..." : "Export YAML"}
         </button>
         <button class="lzw-btn" type="button" onClick={() => sendAction("raw_config")}>
           Raw Config

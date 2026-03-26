@@ -9,6 +9,10 @@
  * Polling activates only when traitlet updates stall (Colab detection):
  * if elapsed_sec traitlet hasn't changed within 2s of status becoming "running",
  * polling kicks in as a fallback.
+ *
+ * A-1 fix: Uses jobIndex (Int traitlet, Colab-safe) as a secondary trigger
+ * so that consecutive jobs (Fit→Fit, Tune→Fit) correctly restart polling
+ * even when traitletStatus stays "running" due to Colab BG-thread blackout.
  */
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 
@@ -59,6 +63,7 @@ export function useJobPolling(
   model: any,
   traitletStatus: string,
   _traitletElapsed: number,
+  traitletJobIndex: number,
 ): JobState | null {
   const [polled, setPolled] = useState<JobState | null>(null);
   const lastPollTime = useRef<number>(0);
@@ -110,6 +115,14 @@ export function useJobPolling(
 
   /** Start polling: register listener + timers. */
   const startPolling = useCallback(() => {
+    // Guard against duplicate registration (e.g. StrictMode double-invoke)
+    if (needsPolling.current) return;
+
+    // A-2: Reset polled state before starting so stale data doesn't persist
+    setPolled(null);
+    lastPollTime.current = 0;
+    lastElapsed.current = 0;
+
     needsPolling.current = true;
     pollingActive.current = true;
 
@@ -136,6 +149,9 @@ export function useJobPolling(
   // On Colab, start polling immediately (BG-thread traitlet sync may or may
   // not work depending on ipywidgets version).  On other environments, wait
   // STALL_DETECT_MS as a safety net in case traitlet sync stalls.
+  //
+  // A-1 fix: traitletJobIndex in deps ensures polling restarts on consecutive
+  // jobs even when traitletStatus stays "running" (Colab BG-thread blackout).
   useEffect(() => {
     if (traitletStatus !== "running") {
       stopPolling();
@@ -157,15 +173,18 @@ export function useJobPolling(
       clearTimeout(stallTimer);
       stopPolling();
     };
-  }, [model, traitletStatus, startPolling, stopPolling]);
+  }, [model, traitletStatus, traitletJobIndex, startPolling, stopPolling]);
 
-  // Reset polled state on status transitions
+  // Reset polled state on status transitions.
+  // On non-running states, clear polled so that traitlet values take over
+  // (polled?.status ?? status merging in App.tsx).
   useEffect(() => {
     if (traitletStatus === "running") {
       lastPollTime.current = 0;
       lastElapsed.current = 0;
       setPolled(null);
-    } else if (traitletStatus === "data_loaded" || traitletStatus === "idle") {
+    } else {
+      // completed, failed, data_loaded, idle — all clear polled
       setPolled(null);
     }
   }, [traitletStatus]);

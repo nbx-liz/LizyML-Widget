@@ -85,6 +85,8 @@ export function ConfigTab({
   // Debounced send to Python via patch_config
   const handleChange = useCallback(
     (newConfig: Record<string, any>) => {
+      // B-5: Reject config changes while job is running
+      if (status === "running") return;
       setLocalConfig(newConfig);
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
@@ -95,7 +97,7 @@ export function ConfigTab({
         }
       }, 300);
     },
-    [sendAction],
+    [sendAction, status],
   );
 
   const handleSectionChange = useCallback(
@@ -118,6 +120,7 @@ export function ConfigTab({
 
   // Import/Export YAML via custom messages
   const [rawYaml, setRawYaml] = useState<string | null>(null);
+  const [yamlExportCount, setYamlExportCount] = useState(0);
 
   useCustomMsg(model, useCallback((msg: any) => {
     if (msg.type === "yaml_export") {
@@ -128,6 +131,7 @@ export function ConfigTab({
       a.download = "config.yaml";
       a.click();
       URL.revokeObjectURL(url);
+      setYamlExportCount((prev) => prev + 1);
     } else if (msg.type === "raw_config") {
       setRawYaml(msg.content);
     } else if (msg.type === "raw_config_error") {
@@ -178,7 +182,7 @@ export function ConfigTab({
         </div>
       </div>
 
-      <div class="lzw-config-tab__body">
+      <div class="lzw-config-tab__body" style={status === "running" ? { pointerEvents: "none", opacity: 0.6 } : undefined}>
         {subTab === "fit" && (
           <FitSubTab
             localConfig={localConfig}
@@ -191,6 +195,7 @@ export function ConfigTab({
             sendAction={sendAction}
             rawYaml={rawYaml}
             setRawYaml={setRawYaml}
+            yamlExportCount={yamlExportCount}
           />
         )}
         {subTab === "tune" && (
@@ -203,6 +208,7 @@ export function ConfigTab({
             sendAction={sendAction}
             rawYaml={rawYaml}
             setRawYaml={setRawYaml}
+            yamlExportCount={yamlExportCount}
           />
         )}
       </div>
