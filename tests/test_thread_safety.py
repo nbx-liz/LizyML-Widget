@@ -52,60 +52,68 @@ class TestRunJobAtomicGuard:
     """C-1: Only one job can be spawned even under concurrent calls."""
 
     def test_double_fit_only_starts_one_job(self) -> None:
-        """Calling _handle_fit twice rapidly should only start one job."""
+        """Calling _handle_fit while a job is running should be rejected."""
         w = _make_widget()
         _load_data(w)
 
-        # Slow down the job worker so we can test overlap
-        original_run_job = w._run_job
-        started = []
+        # Block adapter.fit so the first job stays in "running" state
+        fit_entered = threading.Event()
+        fit_release = threading.Event()
 
-        def slow_run_job(job_type: str) -> None:
-            # Track that we entered _run_job
-            started.append(job_type)
-            original_run_job(job_type)
+        def blocking_fit(_model: Any, *, on_progress: Any = None) -> Any:
+            fit_entered.set()
+            fit_release.wait(timeout=10)
+            from lizyml_widget.types import FitSummary
 
-        w._run_job = slow_run_job
+            return FitSummary(metrics={}, fold_count=1, fold_details=[], params=[])
 
-        # Call _handle_fit twice from the same thread (simulates rapid dispatch)
+        w._service._adapter.fit = blocking_fit  # type: ignore[assignment]
+
+        # Start first fit (will block in adapter.fit)
         w._handle_fit({})
+        fit_entered.wait(timeout=5)
+        assert w.status == "running", f"Expected running, got {w.status}"
+
+        # Second fit while first is running — must be rejected
         w._handle_fit({})
 
-        # Wait for any thread to finish
+        # Release the first job
+        fit_release.set()
         if w._job_thread is not None:
             w._job_thread.join(timeout=10)
 
-        # Second call should have been rejected by the status guard
-        assert started.count("fit") == 2, "Both calls enter _run_job"
-        # But only one thread should have been spawned (second returns early)
-        assert w._job_counter == 1, "Only one job should have been started"
+        assert w._job_counter == 1, f"Only one job should have started, got {w._job_counter}"
 
     def test_concurrent_fit_from_two_threads(self) -> None:
         """Two threads calling _run_job must result in only one executing."""
         w = _make_widget()
         _load_data(w)
 
-        results: list[str] = []
-        lock = threading.Lock()
+        # Block adapter.fit so jobs stay in "running"
+        fit_entered = threading.Event()
+        fit_release = threading.Event()
 
-        original_run_job = w._run_job
+        def blocking_fit(_model: Any, *, on_progress: Any = None) -> Any:
+            fit_entered.set()
+            fit_release.wait(timeout=10)
+            from lizyml_widget.types import FitSummary
 
-        def tracked_run_job(job_type: str) -> None:
-            original_run_job(job_type)
-            with lock:
-                results.append(job_type)
+            return FitSummary(metrics={}, fold_count=1, fold_details=[], params=[])
 
-        w._run_job = tracked_run_job
+        w._service._adapter.fit = blocking_fit  # type: ignore[assignment]
 
         t1 = threading.Thread(target=w._handle_fit, args=({},))
         t2 = threading.Thread(target=w._handle_fit, args=({},))
 
         t1.start()
+        # Wait for first job to actually enter adapter.fit
+        fit_entered.wait(timeout=5)
         t2.start()
-        t1.join(timeout=10)
         t2.join(timeout=10)
 
-        # Wait for job to complete
+        # Release the first job and wait
+        fit_release.set()
+        t1.join(timeout=10)
         if w._job_thread is not None:
             w._job_thread.join(timeout=10)
 

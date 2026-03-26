@@ -22,7 +22,7 @@ interface FitSubTabProps {
   sendAction: (type: string, payload?: Record<string, any>) => void;
   rawYaml: string | null;
   setRawYaml: (value: string | null) => void;
-  yamlExportCount?: boolean;
+  yamlExportCount?: number;
 }
 
 export function FitSubTab({

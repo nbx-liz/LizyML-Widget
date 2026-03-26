@@ -58,7 +58,8 @@ class WidgetService:
     def load_data(self, df: pd.DataFrame, target: str | None = None) -> dict[str, Any]:
         """Load a DataFrame and compute column metadata."""
         self._df = df
-        self._model = None
+        with self._model_lock:
+            self._model = None
 
         columns: list[dict[str, Any]] = []
         for col in df.columns:

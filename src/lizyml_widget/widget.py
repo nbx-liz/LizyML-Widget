@@ -496,7 +496,8 @@ class LizyWidget(anywidget.AnyWidget):
         plot_type = payload.get("plot_type", "")
         if not plot_type:
             return
-        request_id: str | None = payload.get("request_id")
+        raw_rid = payload.get("request_id")
+        request_id: str | None = raw_rid if isinstance(raw_rid, str) else None
         try:
             plot_data = self._service.get_plot(plot_type)
             msg: dict[str, Any] = {
@@ -596,7 +597,8 @@ class LizyWidget(anywidget.AnyWidget):
         plot_type = payload.get("plot_type", "")
         if not plot_type:
             return
-        request_id: str | None = payload.get("request_id")
+        raw_rid = payload.get("request_id")
+        request_id: str | None = raw_rid if isinstance(raw_rid, str) else None
         # Inference plots use prediction data, not fit model
         inference_data = self.inference_result.get("data", [])
         if not inference_data:
@@ -613,8 +615,8 @@ class LizyWidget(anywidget.AnyWidget):
             if request_id is not None:
                 msg["request_id"] = request_id
             self.send(msg)
-        except Exception:
-            # Fall back to fit model plot if inference plot fails
+        except Exception as exc:
+            _log.debug("Inference plot failed, falling back to fit plot: %s", exc)
             self._handle_request_plot(payload)
 
     def _handle_export_code(self, payload: dict[str, Any]) -> None:
@@ -688,6 +690,29 @@ class LizyWidget(anywidget.AnyWidget):
                 self.status = "failed"
                 return
 
+            # Build and validate config before committing to "running"
+            # so that _job_counter is only incremented for valid jobs.
+            try:
+                full_config = self._service.prepare_run_config(dict(self.config), job_type=job_type)
+            except Exception as exc:
+                _log.error("Config build failed: %s", exc, exc_info=True)
+                self.error = {"code": "CONFIG_ERROR", "message": str(exc)}
+                self.status = "failed"
+                return
+
+            errors = self._service.validate_config(full_config)
+            if errors:
+                self.error = {
+                    "code": "VALIDATION_ERROR",
+                    "message": errors[0]["message"],
+                    "details": errors,
+                }
+                self.status = "failed"
+                return
+
+            if job_type == "tune":
+                self._tune_config_snapshot = copy.deepcopy(full_config)
+
             self._cancel_flag.clear()
             self._job_counter += 1
             self.job_type = job_type
@@ -696,29 +721,6 @@ class LizyWidget(anywidget.AnyWidget):
             self.progress = {"current": 0, "total": 0, "message": f"Starting {job_type}..."}
             self.elapsed_sec = 0.0
             self.error = {}
-
-        try:
-            full_config = self._service.prepare_run_config(dict(self.config), job_type=job_type)
-        except Exception as exc:
-            _log.error("Config build failed: %s", exc, exc_info=True)
-            self.error = {"code": "CONFIG_ERROR", "message": str(exc)}
-            self.status = "failed"
-            return
-
-        if job_type == "tune":
-            with self._job_lock:
-                self._tune_config_snapshot = copy.deepcopy(full_config)
-
-        # Pre-execution validation (BLUEPRINT §9-3)
-        errors = self._service.validate_config(full_config)
-        if errors:
-            self.error = {
-                "code": "VALIDATION_ERROR",
-                "message": errors[0]["message"],
-                "details": errors,
-            }
-            self.status = "failed"
-            return
 
         # Detect execution strategy lazily (libgomp may not be loaded at
         # __init__ time; it loads when data is first processed by sklearn/lgbm).
