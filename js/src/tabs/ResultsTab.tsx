@@ -1,5 +1,5 @@
 /** ResultsTab — status-based view: running/completed/failed + inference. */
-import { useState } from "preact/hooks";
+import { useState, useEffect } from "preact/hooks";
 import { Accordion } from "../components/Accordion";
 import { ProgressView } from "../components/ProgressView";
 import { ScoreTable } from "../components/ScoreTable";
@@ -309,6 +309,14 @@ function InferenceSection({
   theme?: ResolvedTheme;
 }) {
   const [returnShap, setReturnShap] = useState(false);
+  const [inferenceLoading, setInferenceLoading] = useState(false);
+
+  // Reset loading state when inference result arrives
+  useEffect(() => {
+    if (inferenceResult?.status === "completed" || inferenceResult?.status === "failed") {
+      setInferenceLoading(false);
+    }
+  }, [inferenceResult?.status]);
 
   return (
     <Accordion title="Inference" defaultOpen={hasInference}>
@@ -330,10 +338,14 @@ function InferenceSection({
           {inferenceResult?.status === "ready" && (
             <button
               class="lzw-btn lzw-btn--primary"
-              onClick={() => sendAction("run_inference", { return_shap: returnShap })}
+              disabled={inferenceLoading}
+              onClick={() => {
+                setInferenceLoading(true);
+                sendAction("run_inference", { return_shap: returnShap });
+              }}
               type="button"
             >
-              Run Inference ({inferenceResult.rows} rows)
+              {inferenceLoading ? "Running..." : `Run Inference (${inferenceResult.rows} rows)`}
             </button>
           )}
         </div>
