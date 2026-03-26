@@ -175,13 +175,16 @@ export function useJobPolling(
     };
   }, [model, traitletStatus, traitletJobIndex, startPolling, stopPolling]);
 
-  // Reset polled state on status transitions
+  // Reset polled state on status transitions.
+  // On non-running states, clear polled so that traitlet values take over
+  // (polled?.status ?? status merging in App.tsx).
   useEffect(() => {
     if (traitletStatus === "running") {
       lastPollTime.current = 0;
       lastElapsed.current = 0;
       setPolled(null);
-    } else if (traitletStatus === "data_loaded" || traitletStatus === "idle") {
+    } else {
+      // completed, failed, data_loaded, idle — all clear polled
       setPolled(null);
     }
   }, [traitletStatus]);

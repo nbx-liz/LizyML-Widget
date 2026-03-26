@@ -141,7 +141,7 @@ export function ResultsTab({
         </span>
         {hasFit && (
           <button
-            class="lzw-btn"
+            class="lzw-btn lzw-btn--accent-outline"
             style="margin-left:auto"
             onClick={onExportCode}
             disabled={exportLoading}
@@ -160,7 +160,7 @@ export function ResultsTab({
               <ParamsTable params={[tuneSummary.best_params]} />
               <div style="margin-top: 8px;">
                 <button
-                  class="lzw-btn"
+                  class="lzw-btn lzw-btn--primary"
                   onClick={() => {
                     sendAction("apply_best_params", { params: tuneSummary.best_params });
                     onSwitchToFit?.();
