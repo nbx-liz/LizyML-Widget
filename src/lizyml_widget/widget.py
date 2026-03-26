@@ -58,6 +58,7 @@ class LizyWidget(anywidget.AnyWidget):
         self._libomp_path: str | None = None
         self._job_thread: threading.Thread | None = None
         self._cancel_flag = threading.Event()
+        self._job_lock = threading.Lock()
         self._job_counter = 0
         self._inference_df: pd.DataFrame | None = None
         self._tune_config_snapshot: dict[str, Any] | None = None
@@ -495,23 +496,26 @@ class LizyWidget(anywidget.AnyWidget):
         plot_type = payload.get("plot_type", "")
         if not plot_type:
             return
+        request_id: str | None = payload.get("request_id")
         try:
             plot_data = self._service.get_plot(plot_type)
-            self.send(
-                {
-                    "type": "plot_data",
-                    "plot_type": plot_type,
-                    "plotly_json": plot_data.plotly_json,
-                }
-            )
+            msg: dict[str, Any] = {
+                "type": "plot_data",
+                "plot_type": plot_type,
+                "plotly_json": plot_data.plotly_json,
+            }
+            if request_id is not None:
+                msg["request_id"] = request_id
+            self.send(msg)
         except Exception as e:
-            self.send(
-                {
-                    "type": "plot_error",
-                    "plot_type": plot_type,
-                    "message": str(e),
-                }
-            )
+            err: dict[str, Any] = {
+                "type": "plot_error",
+                "plot_type": plot_type,
+                "message": str(e),
+            }
+            if request_id is not None:
+                err["request_id"] = request_id
+            self.send(err)
 
     def _handle_run_inference(self, payload: dict[str, Any]) -> None:
         if self._inference_df is None:
@@ -577,9 +581,13 @@ class LizyWidget(anywidget.AnyWidget):
         params = payload.get("params", {})
         if not params:
             return
+        with self._job_lock:
+            snapshot = (
+                copy.deepcopy(self._tune_config_snapshot) if self._tune_config_snapshot else None
+            )
         try:
             self.config = self._service.apply_best_params(
-                params, dict(self.config), tune_snapshot=self._tune_config_snapshot
+                params, dict(self.config), tune_snapshot=snapshot
             )
         except Exception as e:
             self.error = {"code": "APPLY_ERROR", "message": str(e)}
@@ -588,6 +596,7 @@ class LizyWidget(anywidget.AnyWidget):
         plot_type = payload.get("plot_type", "")
         if not plot_type:
             return
+        request_id: str | None = payload.get("request_id")
         # Inference plots use prediction data, not fit model
         inference_data = self.inference_result.get("data", [])
         if not inference_data:
@@ -596,13 +605,14 @@ class LizyWidget(anywidget.AnyWidget):
         try:
             predictions = pd.DataFrame(inference_data)
             plot_data = self._service.get_inference_plot(predictions, plot_type)
-            self.send(
-                {
-                    "type": "plot_data",
-                    "plot_type": plot_type,
-                    "plotly_json": plot_data.plotly_json,
-                }
-            )
+            msg: dict[str, Any] = {
+                "type": "plot_data",
+                "plot_type": plot_type,
+                "plotly_json": plot_data.plotly_json,
+            }
+            if request_id is not None:
+                msg["request_id"] = request_id
+            self.send(msg)
         except Exception:
             # Fall back to fit model plot if inference plot fails
             self._handle_request_plot(payload)
@@ -660,31 +670,32 @@ class LizyWidget(anywidget.AnyWidget):
     # ── Job execution ─────────────────────────────────────────
 
     def _run_job(self, job_type: str) -> None:
-        if self.status == "running":
-            return
+        with self._job_lock:
+            if self.status == "running":
+                return
 
-        # Pre-execution data/target checks (BLUEPRINT §6.1)
-        if not self._service.has_data():
-            self.error = {"code": "NO_DATA", "message": "No data loaded. Call load(df) first."}
-            self.status = "failed"
-            return
+            # Pre-execution data/target checks (BLUEPRINT §6.1)
+            if not self._service.has_data():
+                self.error = {"code": "NO_DATA", "message": "No data loaded. Call load(df) first."}
+                self.status = "failed"
+                return
 
-        if not self._service.has_target():
-            self.error = {
-                "code": "NO_TARGET",
-                "message": "No target selected. Call load(df, target=...) or set_target(col).",
-            }
-            self.status = "failed"
-            return
+            if not self._service.has_target():
+                self.error = {
+                    "code": "NO_TARGET",
+                    "message": "No target selected. Call load(df, target=...) or set_target(col).",
+                }
+                self.status = "failed"
+                return
 
-        self._cancel_flag.clear()
-        self._job_counter += 1
-        self.job_type = job_type
-        self.job_index = self._job_counter
-        self.status = "running"
-        self.progress = {"current": 0, "total": 0, "message": f"Starting {job_type}..."}
-        self.elapsed_sec = 0.0
-        self.error = {}
+            self._cancel_flag.clear()
+            self._job_counter += 1
+            self.job_type = job_type
+            self.job_index = self._job_counter
+            self.status = "running"
+            self.progress = {"current": 0, "total": 0, "message": f"Starting {job_type}..."}
+            self.elapsed_sec = 0.0
+            self.error = {}
 
         try:
             full_config = self._service.prepare_run_config(dict(self.config), job_type=job_type)
@@ -695,7 +706,8 @@ class LizyWidget(anywidget.AnyWidget):
             return
 
         if job_type == "tune":
-            self._tune_config_snapshot = copy.deepcopy(full_config)
+            with self._job_lock:
+                self._tune_config_snapshot = copy.deepcopy(full_config)
 
         # Pre-execution validation (BLUEPRINT §9-3)
         errors = self._service.validate_config(full_config)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import threading
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -38,6 +39,7 @@ class WidgetService:
         self._df: pd.DataFrame | None = None
         self._df_info: dict[str, Any] = {}
         self._model: Any = None
+        self._model_lock = threading.Lock()
 
     @property
     def info(self) -> BackendInfo:
@@ -566,7 +568,8 @@ class WidgetService:
             raise ValueError(msg)
         model = self._adapter.create_model(config, self._df)
         result = self._adapter.fit(model, on_progress=on_progress)
-        self._model = model
+        with self._model_lock:
+            self._model = model
         return result
 
     def tune(
@@ -581,23 +584,28 @@ class WidgetService:
             raise ValueError(msg)
         model = self._adapter.create_model(config, self._df)
         result = self._adapter.tune(model, on_progress=on_progress)
-        self._model = model
+        with self._model_lock:
+            self._model = model
         return result
 
     def predict(self, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary:
         """Run prediction on new data."""
-        if self._model is None:
+        with self._model_lock:
+            model = self._model
+        if model is None:
             msg = "No trained model. Run fit or tune first."
             raise ValueError(msg)
-        return self._adapter.predict(self._model, data, return_shap=return_shap)
+        return self._adapter.predict(model, data, return_shap=return_shap)
 
     # ── Results ──────────────────────────────────────────────
 
     def get_plot(self, plot_type: str) -> PlotData:
-        if self._model is None:
+        with self._model_lock:
+            model = self._model
+        if model is None:
             msg = "No trained model"
             raise ValueError(msg)
-        return self._adapter.plot(self._model, plot_type)
+        return self._adapter.plot(model, plot_type)
 
     def get_inference_plot(self, predictions: pd.DataFrame, plot_type: str) -> PlotData:
         """Generate an inference plot (prediction-distribution or shap-summary)."""
@@ -608,22 +616,29 @@ class WidgetService:
             raise TypeError(msg) from None
 
     def get_available_plots(self) -> list[str]:
-        if self._model is None:
+        with self._model_lock:
+            model = self._model
+        if model is None:
             return []
-        return self._adapter.available_plots(self._model)
+        return self._adapter.available_plots(model)
 
     def get_evaluate_table(self) -> list[dict[str, Any]]:
-        if self._model is None:
+        with self._model_lock:
+            model = self._model
+        if model is None:
             return []
-        return self._adapter.evaluate_table(self._model)
+        return self._adapter.evaluate_table(model)
 
     def get_split_summary(self) -> list[dict[str, Any]]:
-        if self._model is None:
+        with self._model_lock:
+            model = self._model
+        if model is None:
             return []
-        return self._adapter.split_summary(self._model)
+        return self._adapter.split_summary(model)
 
     def get_model(self) -> Any:
-        return self._model
+        with self._model_lock:
+            return self._model
 
     def classify_best_params(
         self, params: dict[str, Any]
@@ -693,14 +708,18 @@ class WidgetService:
 
     def load_model_from_path(self, path: str) -> None:
         """Load a model from file path (for subprocess result recovery)."""
-        self._model = self._adapter.load_model(path)
+        model = self._adapter.load_model(path)
+        with self._model_lock:
+            self._model = model
 
     def save_model(self, path: str) -> str:
         """Persist the current trained model using the active adapter."""
-        if self._model is None:
+        with self._model_lock:
+            model = self._model
+        if model is None:
             msg = "No trained model. Run fit or tune first."
             raise ValueError(msg)
-        return self._adapter.export_model(self._model, path)
+        return self._adapter.export_model(model, path)
 
     def export_code(self, path: str | None = None) -> Any:
         """Export inference code for the trained model.
@@ -714,14 +733,16 @@ class WidgetService:
         -------
         Path to the generated code directory.
         """
-        if self._model is None:
+        with self._model_lock:
+            model = self._model
+        if model is None:
             msg = "No trained model. Run fit or tune first."
             raise ValueError(msg)
         if path is None:
             import tempfile
 
             path = tempfile.mkdtemp(prefix="lzw_export_code_")
-        return self._adapter.export_code(self._model, path)
+        return self._adapter.export_code(model, path)
 
     # ── Auto-detection internals ─────────────────────────────
 
