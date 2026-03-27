@@ -59,8 +59,8 @@ export class MockModel {
   }
 
   /** Simulate a msg:custom message from Python side. */
-  simulateCustomMessage(msg: any): void {
-    this._emit("msg:custom", msg);
+  simulateCustomMessage(msg: any, buffers?: ArrayBuffer[]): void {
+    this._emit("msg:custom", msg, buffers);
   }
 
   /** Get all messages sent via model.send(). */

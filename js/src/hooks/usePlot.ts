@@ -31,12 +31,18 @@ export function usePlot(model: any) {
       return rid === expected; // strict match when we have a pending ID
     };
 
-    const handler = (msg: any) => {
-      if (msg.type === "plot_data" && msg.plotly_json) {
+    const handler = (msg: any, buffers?: ArrayBuffer[]) => {
+      if (msg.type === "plot_data") {
         const pt = msg.plot_type;
         if (!isAcceptable(pt, msg.request_id)) return;
+        // D-1: Large plots arrive as binary buffer instead of inline JSON
+        let jsonStr: string | undefined = msg.plotly_json;
+        if (msg.binary && buffers && buffers.length > 0) {
+          jsonStr = new TextDecoder().decode(buffers[0]);
+        }
+        if (!jsonStr) return;
         try {
-          const spec = JSON.parse(msg.plotly_json);
+          const spec = JSON.parse(jsonStr);
           setPlots((prev) => ({ ...prev, [pt]: spec }));
         } catch {
           // ignore parse errors

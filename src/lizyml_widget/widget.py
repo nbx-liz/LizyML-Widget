@@ -492,7 +492,41 @@ class LizyWidget(anywidget.AnyWidget):
     def _handle_cancel(self, _payload: dict[str, Any]) -> None:
         self._cancel_flag.set()
 
+    # D-1: Binary buffer threshold for large Plotly JSON (800 KB).
+    _PLOT_BINARY_THRESHOLD = 800_000
+
+    def _send_plot_response(
+        self,
+        plot_type: str,
+        plotly_json: str,
+        request_id: str | None,
+    ) -> None:
+        """Send a plot_data response, using a binary buffer for large payloads.
+
+        When *plotly_json* exceeds ``_PLOT_BINARY_THRESHOLD`` bytes, the JSON
+        string is sent as a binary buffer instead of inline in the message dict.
+        The JS side detects this via the ``binary`` flag and decodes the buffer.
+        """
+        msg: dict[str, Any] = {
+            "type": "plot_data",
+            "plot_type": plot_type,
+        }
+        if request_id is not None:
+            msg["request_id"] = request_id
+
+        if len(plotly_json) > self._PLOT_BINARY_THRESHOLD:
+            msg["binary"] = True
+            self.send(msg, buffers=[plotly_json.encode("utf-8")])
+        else:
+            msg["plotly_json"] = plotly_json
+            self.send(msg)
+
     def _handle_request_plot(self, payload: dict[str, Any]) -> None:
+        # TODO(C-4): Consider non-blocking plot generation for slow plots
+        # (e.g., SHAP). Deferred because self.send() from a background thread
+        # is unreliable on Colab (BG thread comm blackout), and routing the
+        # response back to the main thread adds complexity.  Re-evaluate when
+        # a main-thread callback mechanism is available.
         plot_type = payload.get("plot_type", "")
         if not plot_type:
             return
@@ -500,14 +534,7 @@ class LizyWidget(anywidget.AnyWidget):
         request_id: str | None = raw_rid if isinstance(raw_rid, str) else None
         try:
             plot_data = self._service.get_plot(plot_type)
-            msg: dict[str, Any] = {
-                "type": "plot_data",
-                "plot_type": plot_type,
-                "plotly_json": plot_data.plotly_json,
-            }
-            if request_id is not None:
-                msg["request_id"] = request_id
-            self.send(msg)
+            self._send_plot_response(plot_type, plot_data.plotly_json, request_id)
         except Exception as e:
             err: dict[str, Any] = {
                 "type": "plot_error",
@@ -607,14 +634,7 @@ class LizyWidget(anywidget.AnyWidget):
         try:
             predictions = pd.DataFrame(inference_data)
             plot_data = self._service.get_inference_plot(predictions, plot_type)
-            msg: dict[str, Any] = {
-                "type": "plot_data",
-                "plot_type": plot_type,
-                "plotly_json": plot_data.plotly_json,
-            }
-            if request_id is not None:
-                msg["request_id"] = request_id
-            self.send(msg)
+            self._send_plot_response(plot_type, plot_data.plotly_json, request_id)
         except Exception as exc:
             _log.debug("Inference plot failed, falling back to fit plot: %s", exc)
             self._handle_request_plot(payload)
