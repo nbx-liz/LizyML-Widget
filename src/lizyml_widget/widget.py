@@ -162,6 +162,24 @@ class LizyWidget(anywidget.AnyWidget):
         """Column metadata list from the loaded DataFrame."""
         return list(self.df_info.get("columns", []))
 
+    def load_model(self, path: str) -> LizyWidget:
+        """Load a trained model from file for inference without re-fitting."""
+        self._service.load_model_from_path(path)
+        self.status = "completed"
+        self.available_plots = self._service.get_available_plots()
+        return self
+
+    @property
+    def model_info(self) -> dict[str, Any] | None:
+        """Return metadata about the currently loaded model, or None if no model."""
+        model = self._service.get_model()
+        if model is None:
+            return None
+        try:
+            return self._service._adapter.model_info(model)  # noqa: SLF001
+        except Exception:
+            return {"loaded": True}
+
     def load_inference(self, df: pd.DataFrame) -> LizyWidget:
         """Load a DataFrame for inference."""
         self._inference_df = df

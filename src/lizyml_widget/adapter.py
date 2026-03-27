@@ -762,8 +762,13 @@ class LizyMLAdapter:
             raise ImportError(msg) from e
 
         if plot_type == "prediction-distribution":
+            # Find prediction column: prefer columns starting with "pred", fallback to last column
+            pred_col = next(
+                (c for c in predictions.columns if c.startswith("pred")),
+                predictions.columns[-1],
+            )
             fig = go.Figure()
-            fig.add_trace(go.Histogram(x=predictions["pred"], name="Predictions"))
+            fig.add_trace(go.Histogram(x=predictions[pred_col], name="Predictions"))
             fig.update_layout(
                 title="Prediction Distribution",
                 xaxis_title="Predicted Value",
@@ -815,4 +820,17 @@ class LizyMLAdapter:
         return Model.load(path)
 
     def model_info(self, model: Any) -> dict[str, Any]:
-        raise NotImplementedError("model_info not yet implemented")
+        """Return metadata about a loaded/trained model."""
+        info: dict[str, Any] = {"loaded": True}
+
+        # Extract model params if available
+        with contextlib.suppress(Exception):
+            params_df = model.params_table()
+            if params_df is not None:
+                info["params"] = params_df.reset_index().to_dict(orient="records")
+
+        # Extract task from config
+        with contextlib.suppress(Exception):
+            info["task"] = model._cfg.task  # noqa: SLF001
+
+        return info
