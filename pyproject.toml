@@ -78,6 +78,8 @@ mypy_path = "src"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--ignore=tests/e2e"
+markers = ["e2e: end-to-end tests requiring Jupyter server and Playwright"]
 
 [dependency-groups]
 dev = [
@@ -94,5 +96,8 @@ dev = [
     "twine>=6.2.0",
     "vulture>=2.15",
     "pre-commit>=4.5.1",
+    "pytest-playwright>=0.7.2",
+    "playwright>=1.58.0",
+    "requests>=2.32.5",
 ]
 
