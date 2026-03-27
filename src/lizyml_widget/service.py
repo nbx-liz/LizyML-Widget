@@ -761,20 +761,36 @@ class WidgetService:
             return "regression"
         return "multiclass"
 
-    @staticmethod
-    def _default_strategy_for_task(task: str) -> str:
+    def _default_strategy_for_task(self, task: str) -> str:
+        """Get default CV strategy for task from adapter contract."""
+        try:
+            contract = self._adapter.get_backend_contract()
+            defaults = contract.capabilities.get("cv_default_strategy", {})
+            if task in defaults:
+                return str(defaults[task])
+        except Exception:
+            pass
+        # Fallback
         return "stratified_kfold" if task in ("binary", "multiclass") else "kfold"
 
-    @staticmethod
-    def _default_cv_state(*, strategy: str, n_splits: int) -> dict[str, Any]:
+    def _default_cv_state(self, *, strategy: str, n_splits: int) -> dict[str, Any]:
+        """Build default CV state, reading defaults from adapter contract."""
+        # Read contract defaults with fallbacks
+        cv_defaults: dict[str, Any] = {}
+        try:
+            contract = self._adapter.get_backend_contract()
+            cv_defaults = contract.capabilities.get("cv_defaults", {})
+        except Exception:
+            pass
+
         return {
             "strategy": strategy,
             "n_splits": n_splits,
             "group_column": None,
             "time_column": None,
-            "random_state": 42,
-            "shuffle": True,
-            "gap": 0,
+            "random_state": cv_defaults.get("random_state", 42),
+            "shuffle": cv_defaults.get("shuffle", True),
+            "gap": cv_defaults.get("gap", 0),
             "purge_gap": 0,
             "embargo": 0,
             "train_size_max": None,

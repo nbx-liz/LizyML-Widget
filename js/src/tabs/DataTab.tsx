@@ -38,6 +38,7 @@ interface DataTabProps {
   columnStats: Record<string, any> | null;
   splitPreview: any | null;
   sendAction: (type: string, payload?: Record<string, any>) => void;
+  backendContract?: Record<string, any> | null;
 }
 
 const CV_STRATEGIES = [
@@ -51,14 +52,50 @@ const CV_STRATEGIES = [
   { value: "blocked_group_kfold", label: "BlockedGroup" },
 ];
 
-const NEEDS_GROUP = new Set(["group_kfold", "stratified_group_kfold", "group_time_series"]);
-const NEEDS_TIME = new Set(["time_series", "purged_time_series", "group_time_series"]);
-const NEEDS_RANDOM_STATE = new Set(["kfold", "stratified_kfold", "stratified_group_kfold"]);
-const NEEDS_GAP = new Set(["time_series", "group_time_series"]);
-const NEEDS_PURGE = new Set(["purged_time_series"]);
-const IS_TIME_SERIES = new Set(["time_series", "purged_time_series", "group_time_series"]);
+/* Fallback Sets used when backend_contract does not provide cv_strategy_fields */
+const FALLBACK_NEEDS_GROUP = new Set(["group_kfold", "stratified_group_kfold", "group_time_series"]);
+const FALLBACK_NEEDS_TIME = new Set(["time_series", "purged_time_series", "group_time_series"]);
+const FALLBACK_NEEDS_RANDOM_STATE = new Set(["kfold", "stratified_kfold", "stratified_group_kfold"]);
+const FALLBACK_NEEDS_GAP = new Set(["time_series", "group_time_series"]);
+const FALLBACK_NEEDS_PURGE = new Set(["purged_time_series"]);
+const FALLBACK_IS_TIME_SERIES = new Set(["time_series", "purged_time_series", "group_time_series"]);
 
-export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAction }: DataTabProps) {
+/** Derive a Set of strategy names whose fields include any of the given field names. */
+function deriveStrategiesWithField(
+  cvStrategyFields: Record<string, string[]>,
+  fieldNames: string[],
+): Set<string> {
+  return new Set(
+    Object.entries(cvStrategyFields)
+      .filter(([, fields]) => fieldNames.some((f) => fields.includes(f)))
+      .map(([strategy]) => strategy),
+  );
+}
+
+export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAction, backendContract }: DataTabProps) {
+  // Read CV strategy fields from backend contract, derive Sets with fallbacks
+  const cvStrategyFields: Record<string, string[]> =
+    backendContract?.capabilities?.cv_strategy_fields ?? {};
+  const hasContractFields = Object.keys(cvStrategyFields).length > 0;
+
+  const NEEDS_GROUP = hasContractFields
+    ? deriveStrategiesWithField(cvStrategyFields, ["group_col", "groups_col"])
+    : FALLBACK_NEEDS_GROUP;
+  const NEEDS_TIME = hasContractFields
+    ? deriveStrategiesWithField(cvStrategyFields, ["time_col"])
+    : FALLBACK_NEEDS_TIME;
+  const NEEDS_RANDOM_STATE = hasContractFields
+    ? deriveStrategiesWithField(cvStrategyFields, ["random_state"])
+    : FALLBACK_NEEDS_RANDOM_STATE;
+  const NEEDS_GAP = hasContractFields
+    ? deriveStrategiesWithField(cvStrategyFields, ["gap"])
+    : FALLBACK_NEEDS_GAP;
+  const NEEDS_PURGE = hasContractFields
+    ? deriveStrategiesWithField(cvStrategyFields, ["purge_gap"])
+    : FALLBACK_NEEDS_PURGE;
+  const IS_TIME_SERIES = hasContractFields
+    ? deriveStrategiesWithField(cvStrategyFields, ["max_train_size", "max_test_size"])
+    : FALLBACK_IS_TIME_SERIES;
   const shape = dfInfo.shape ?? [0, 0];
   const columns = dfInfo.columns ?? [];
   const cv = dfInfo.cv ?? { strategy: "kfold", n_splits: 5 };

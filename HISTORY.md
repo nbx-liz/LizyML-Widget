@@ -1024,3 +1024,52 @@
   - JupyterLab / VS Code Notebooks での動作に退行がない
   - Python API（`w.action = {...}`）が引き続き動作する
   - 既存テストが全パス + 新規テストで msg:custom action dispatch をカバー
+
+---
+
+### P-024: `load_model` / `model_info` Python API
+
+- **日付**: 2026-03-27
+- **ステータス**: Proposed
+- **背景**:
+  - ユーザーが過去に学習・保存したモデルを Widget に読み込み、推論やプロット取得を行いたいケースがある。
+  - 現状 `save_model()` / `export_model()` はあるが、保存したモデルを再ロードして Widget に復元する Python API が存在しない。
+  - `BackendAdapter` Protocol には `load_model(path)` / `model_info(model)` が定義済みだが、Widget 層のパブリックメソッドとして公開されていない。
+  - `model_info` は `NotImplementedError` を送出する未実装状態。
+- **提案内容**:
+  - `LizyWidget.load_model(path: str) -> LizyWidget` — `_service.load_model_from_path(path)` を呼び出し、`status = "completed"` に設定、`available_plots` を更新する。
+  - `LizyWidget.model_info: dict[str, Any] | None` プロパティ — モデルが存在すれば安全なメタデータ dict を返す。モデル未ロード時は `None`。
+  - `LizyMLAdapter.model_info(model)` — `NotImplementedError` を `{"loaded": True}` + パラメータ情報の返却に変更。
+- **影響範囲**:
+  - `src/lizyml_widget/widget.py` — パブリックメソッド・プロパティの追加
+  - `src/lizyml_widget/adapter.py` — `model_info` の実装
+- **受け入れ基準**:
+  - `load_model(path)` で `status == "completed"` かつ `available_plots` が取得される
+  - `model_info` がモデル未ロード時に `None`、ロード後に `dict` を返す
+  - 既存テスト全パス + 新規テストでカバー
+
+---
+
+### P-025: CV Strategy Metadata in Backend Contract + Service Default Delegation
+
+- **日付**: 2026-03-27
+- **ステータス**: 承認・実装
+- **目的**:
+  JS の DataTab に残る CV 戦略固有の定数 (NEEDS_GROUP, NEEDS_TIME 等) を backend_contract.capabilities に移動し、
+  Service の CV デフォルトロジックを Adapter に委譲する。
+- **影響範囲**:
+  - `BackendContract.capabilities` に `cv_strategy_fields` / `cv_defaults` / `cv_default_strategy` を追加
+  - `adapter_contract.py` の `build_capabilities()` を拡張
+  - `service.py` の `_default_cv_state` / `_default_strategy_for_task` を adapter contract 経由に変更
+  - `js/src/tabs/DataTab.tsx` — contract から CV strategy fields を読み取り、ハードコード値をフォールバックに格下げ
+  - `js/src/components/SearchSpace.tsx` — `special_search_space_fields` を ui_schema から読み取り
+- **互換性**:
+  - JS: backend_contract から読み取り、フォールバックでハードコード値を保持
+  - Python: build_capabilities に追加のみ（Adapter Protocol 変更なし）
+- **代替案**:
+  - 完全に JS 側のハードコードを維持 → backend 追加時にJS変更が必要になり拡張性が低い
+- **受け入れ基準**:
+  - DataTab が backend_contract.capabilities.cv_strategy_fields を使用
+  - Service の CV デフォルトが adapter contract 経由
+  - SearchSpace の special field 判定が ui_schema 経由
+  - 既存テスト全パス

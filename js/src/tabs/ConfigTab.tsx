@@ -108,7 +108,7 @@ export function ConfigTab({
   );
 
   const canRun =
-    status === "data_loaded" || status === "completed" || status === "failed" || status === "running";
+    status === "data_loaded" || status === "completed" || status === "failed";
 
   // Tune requires at least one range/choice param, unless backend allows empty space
   const tuneSpace = localConfig.tuning?.optuna?.space ?? {};
@@ -125,12 +125,25 @@ export function ConfigTab({
   useCustomMsg(model, useCallback((msg: any) => {
     if (msg.type === "yaml_export") {
       const blob = new Blob([msg.content], { type: "text/yaml" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "config.yaml";
-      a.click();
-      URL.revokeObjectURL(url);
+      // D-2: Try Blob URL first; fall back to data URL for Colab sandbox
+      try {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "config.yaml";
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch {
+        // Colab sandbox may block Blob URL — fall back to data URL
+        const reader = new FileReader();
+        reader.onload = () => {
+          const a = document.createElement("a");
+          a.href = reader.result as string;
+          a.download = "config.yaml";
+          a.click();
+        };
+        reader.readAsDataURL(blob);
+      }
       setYamlExportCount((prev) => prev + 1);
     } else if (msg.type === "raw_config") {
       setRawYaml(msg.content);
