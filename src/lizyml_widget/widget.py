@@ -367,8 +367,7 @@ class LizyWidget(anywidget.AnyWidget):
         try:
             df_info = self._service.set_task(task)
             self.df_info = df_info
-            if task:
-                self.config = self._service.apply_task_params(dict(self.config), task)
+            self.config = self._service.apply_task_params(dict(self.config), task)
         except Exception as e:
             self.error = {"code": "TASK_ERROR", "message": str(e)}
 

@@ -108,7 +108,7 @@ export function ConfigTab({
   );
 
   const canRun =
-    status === "data_loaded" || status === "completed" || status === "failed" || status === "running";
+    status === "data_loaded" || status === "completed" || status === "failed";
 
   // Tune requires at least one range/choice param, unless backend allows empty space
   const tuneSpace = localConfig.tuning?.optuna?.space ?? {};
