@@ -51,6 +51,9 @@ class TestNumericInputContract:
         for tsx_file in JS_SRC.rglob("*.tsx"):
             if tsx_file == stepper_path:
                 continue
+            # Skip test files — they may contain type="number" in test assertions
+            if "__tests__" in tsx_file.parts:
+                continue
             content = tsx_file.read_text()
             assert 'type="number"' not in content, (
                 f'{tsx_file.name} contains raw type="number" input '

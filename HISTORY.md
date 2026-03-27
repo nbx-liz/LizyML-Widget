@@ -1027,6 +1027,29 @@
 
 ---
 
+### P-024: `load_model` / `model_info` Python API
+
+- **日付**: 2026-03-27
+- **ステータス**: Proposed
+- **背景**:
+  - ユーザーが過去に学習・保存したモデルを Widget に読み込み、推論やプロット取得を行いたいケースがある。
+  - 現状 `save_model()` / `export_model()` はあるが、保存したモデルを再ロードして Widget に復元する Python API が存在しない。
+  - `BackendAdapter` Protocol には `load_model(path)` / `model_info(model)` が定義済みだが、Widget 層のパブリックメソッドとして公開されていない。
+  - `model_info` は `NotImplementedError` を送出する未実装状態。
+- **提案内容**:
+  - `LizyWidget.load_model(path: str) -> LizyWidget` — `_service.load_model_from_path(path)` を呼び出し、`status = "completed"` に設定、`available_plots` を更新する。
+  - `LizyWidget.model_info: dict[str, Any] | None` プロパティ — モデルが存在すれば安全なメタデータ dict を返す。モデル未ロード時は `None`。
+  - `LizyMLAdapter.model_info(model)` — `NotImplementedError` を `{"loaded": True}` + パラメータ情報の返却に変更。
+- **影響範囲**:
+  - `src/lizyml_widget/widget.py` — パブリックメソッド・プロパティの追加
+  - `src/lizyml_widget/adapter.py` — `model_info` の実装
+- **受け入れ基準**:
+  - `load_model(path)` で `status == "completed"` かつ `available_plots` が取得される
+  - `model_info` がモデル未ロード時に `None`、ロード後に `dict` を返す
+  - 既存テスト全パス + 新規テストでカバー
+
+---
+
 ### P-025: CV Strategy Metadata in Backend Contract + Service Default Delegation
 
 - **日付**: 2026-03-27

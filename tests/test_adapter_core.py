@@ -553,10 +553,12 @@ class TestStubs:
         with pytest.raises(LizyMLError):
             adapter.load_model("/tmp/nonexistent_model_path.pkl")
 
-    def test_model_info_not_implemented(self) -> None:
+    def test_model_info_returns_dict(self) -> None:
         adapter = LizyMLAdapter()
-        with pytest.raises(NotImplementedError):
-            adapter.model_info(MagicMock())
+        model = MagicMock()
+        result = adapter.model_info(model)
+        assert isinstance(result, dict)
+        assert result["loaded"] is True
 
 
 class TestNumThreadsExplicit:
