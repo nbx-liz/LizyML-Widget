@@ -9,6 +9,10 @@
  * Polling activates only when traitlet updates stall (Colab detection):
  * if elapsed_sec traitlet hasn't changed within 2s of status becoming "running",
  * polling kicks in as a fallback.
+ *
+ * A-1 fix: Uses jobIndex (Int traitlet, Colab-safe) as a secondary trigger
+ * so that consecutive jobs (Fit→Fit, Tune→Fit) correctly restart polling
+ * even when traitletStatus stays "running" due to Colab BG-thread blackout.
  */
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 
@@ -29,13 +33,25 @@ const INTERPOLATION_INTERVAL_MS = 100;
 /** Wait this long before deciding traitlets are stalled and starting polling. */
 const STALL_DETECT_MS = 2000;
 
-/** Detect if running in Google Colab (the only known env where BG-thread comm is broken). */
+/** Detect if running in Google Colab.
+ *
+ * P-023: Primary check uses window.google.colab (official Colab JS API).
+ * Fallback uses link[href*="colab"] CSS heuristic which may break as
+ * Colab updates its DOM structure.
+ */
 function isColab(): boolean {
   try {
-    return (
-      typeof document !== "undefined" &&
-      document.querySelector('link[href*="colab"]') !== null
-    );
+    if (typeof window !== "undefined") {
+      // Primary: official Colab JS API (stable)
+      if ((window as any).google?.colab) return true;
+      // Fallback: CSS link heuristic (fragile — Colab DOM may change)
+      if (
+        typeof document !== "undefined" &&
+        document.querySelector('link[href*="colab"]') !== null
+      )
+        return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -47,6 +63,7 @@ export function useJobPolling(
   model: any,
   traitletStatus: string,
   _traitletElapsed: number,
+  traitletJobIndex: number,
 ): JobState | null {
   const [polled, setPolled] = useState<JobState | null>(null);
   const lastPollTime = useRef<number>(0);
@@ -98,6 +115,14 @@ export function useJobPolling(
 
   /** Start polling: register listener + timers. */
   const startPolling = useCallback(() => {
+    // Guard against duplicate registration (e.g. StrictMode double-invoke)
+    if (needsPolling.current) return;
+
+    // A-2: Reset polled state before starting so stale data doesn't persist
+    setPolled(null);
+    lastPollTime.current = 0;
+    lastElapsed.current = 0;
+
     needsPolling.current = true;
     pollingActive.current = true;
 
@@ -120,21 +145,26 @@ export function useJobPolling(
     }, INTERPOLATION_INTERVAL_MS);
   }, [model, handleMsg]);
 
-  // Start polling only on Colab where BG-thread comm is broken.
-  // On JupyterLab/VS Code, traitlet sync works from BG threads — no polling needed.
+  // P-023: Polling is now a universal fallback rather than Colab-only.
+  // On Colab, start polling immediately (BG-thread traitlet sync may or may
+  // not work depending on ipywidgets version).  On other environments, wait
+  // STALL_DETECT_MS as a safety net in case traitlet sync stalls.
+  //
+  // A-1 fix: traitletJobIndex in deps ensures polling restarts on consecutive
+  // jobs even when traitletStatus stays "running" (Colab BG-thread blackout).
   useEffect(() => {
     if (traitletStatus !== "running") {
       stopPolling();
       return;
     }
 
-    if (!IN_COLAB) {
-      // Non-Colab: traitlets work, no polling needed.
-      return;
+    if (IN_COLAB) {
+      // Colab: start polling immediately (no wait).
+      startPolling();
+      return () => stopPolling();
     }
 
-    // Colab: wait STALL_DETECT_MS then start polling unconditionally.
-    // (On Colab, traitlet updates from BG threads never arrive.)
+    // Non-Colab: wait STALL_DETECT_MS, then start polling as fallback.
     const stallTimer = setTimeout(() => {
       startPolling();
     }, STALL_DETECT_MS);
@@ -143,15 +173,18 @@ export function useJobPolling(
       clearTimeout(stallTimer);
       stopPolling();
     };
-  }, [model, traitletStatus, startPolling, stopPolling]);
+  }, [model, traitletStatus, traitletJobIndex, startPolling, stopPolling]);
 
-  // Reset polled state on status transitions
+  // Reset polled state on status transitions.
+  // On non-running states, clear polled so that traitlet values take over
+  // (polled?.status ?? status merging in App.tsx).
   useEffect(() => {
     if (traitletStatus === "running") {
       lastPollTime.current = 0;
       lastElapsed.current = 0;
       setPolled(null);
-    } else if (traitletStatus === "data_loaded" || traitletStatus === "idle") {
+    } else {
+      // completed, failed, data_loaded, idle — all clear polled
       setPolled(null);
     }
   }, [traitletStatus]);

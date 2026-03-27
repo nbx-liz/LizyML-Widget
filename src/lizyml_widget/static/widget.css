@@ -537,6 +537,16 @@
   opacity: 0.9;
 }
 
+.lzw-btn--accent-outline {
+  background: transparent;
+  color: var(--lzw-accent);
+  border-color: var(--lzw-accent);
+}
+
+.lzw-btn--accent-outline:hover:not(:disabled) {
+  background: var(--lzw-accent-bg-subtle);
+}
+
 /* ── DynForm ─────────────────────────────────────────────── */
 .lzw-dynform__section {
   margin-bottom: 8px;

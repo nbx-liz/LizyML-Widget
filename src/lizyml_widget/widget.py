@@ -58,6 +58,7 @@ class LizyWidget(anywidget.AnyWidget):
         self._libomp_path: str | None = None
         self._job_thread: threading.Thread | None = None
         self._cancel_flag = threading.Event()
+        self._job_lock = threading.Lock()
         self._job_counter = 0
         self._inference_df: pd.DataFrame | None = None
         self._tune_config_snapshot: dict[str, Any] | None = None
@@ -259,13 +260,36 @@ class LizyWidget(anywidget.AnyWidget):
     # ── Custom message handler (Colab polling) ──────────────
 
     def _handle_custom_msg(self, content: dict[str, Any], buffers: list[Any]) -> None:
-        """Handle msg:custom messages from JS (e.g. poll requests).
+        """Handle msg:custom messages from JS (e.g. poll and action requests).
 
         Overrides ipywidgets.Widget._handle_custom_msg(content, buffers).
         Runs on the main (shell) thread, so self.send() reliably reaches JS
         even on Google Colab where BG-thread comm is blocked.
+
+        Message types:
+        - ``{type: "poll"}``: return current job state (Colab polling fallback)
+        - ``{type: "action", action_type: str, payload: dict}``: dispatch an
+          action (P-023 — replaces traitlet-based JS→Python action sync which
+          breaks on Colab ipywidgets 7.x)
+
+        Note: the msg:custom schema uses ``action_type`` to name the action,
+        while the traitlet path (``_on_action``) uses ``type``.  This is
+        intentional — msg:custom already uses ``type`` to distinguish message
+        categories ("action" vs "poll"), so the action name lives in
+        ``action_type`` to avoid collision.
         """
-        if content.get("type") != "poll":
+        msg_type = content.get("type")
+
+        if msg_type == "action":
+            action_type: str = content.get("action_type", "")
+            raw_payload = content.get("payload", {})
+            payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+            handler = self._action_handlers.get(action_type)
+            if handler is not None:
+                handler(self, payload)
+            return
+
+        if msg_type != "poll":
             super()._handle_custom_msg(content, buffers)
             return
 
@@ -472,23 +496,27 @@ class LizyWidget(anywidget.AnyWidget):
         plot_type = payload.get("plot_type", "")
         if not plot_type:
             return
+        raw_rid = payload.get("request_id")
+        request_id: str | None = raw_rid if isinstance(raw_rid, str) else None
         try:
             plot_data = self._service.get_plot(plot_type)
-            self.send(
-                {
-                    "type": "plot_data",
-                    "plot_type": plot_type,
-                    "plotly_json": plot_data.plotly_json,
-                }
-            )
+            msg: dict[str, Any] = {
+                "type": "plot_data",
+                "plot_type": plot_type,
+                "plotly_json": plot_data.plotly_json,
+            }
+            if request_id is not None:
+                msg["request_id"] = request_id
+            self.send(msg)
         except Exception as e:
-            self.send(
-                {
-                    "type": "plot_error",
-                    "plot_type": plot_type,
-                    "message": str(e),
-                }
-            )
+            err: dict[str, Any] = {
+                "type": "plot_error",
+                "plot_type": plot_type,
+                "message": str(e),
+            }
+            if request_id is not None:
+                err["request_id"] = request_id
+            self.send(err)
 
     def _handle_run_inference(self, payload: dict[str, Any]) -> None:
         if self._inference_df is None:
@@ -554,9 +582,13 @@ class LizyWidget(anywidget.AnyWidget):
         params = payload.get("params", {})
         if not params:
             return
+        with self._job_lock:
+            snapshot = (
+                copy.deepcopy(self._tune_config_snapshot) if self._tune_config_snapshot else None
+            )
         try:
             self.config = self._service.apply_best_params(
-                params, dict(self.config), tune_snapshot=self._tune_config_snapshot
+                params, dict(self.config), tune_snapshot=snapshot
             )
         except Exception as e:
             self.error = {"code": "APPLY_ERROR", "message": str(e)}
@@ -565,6 +597,8 @@ class LizyWidget(anywidget.AnyWidget):
         plot_type = payload.get("plot_type", "")
         if not plot_type:
             return
+        raw_rid = payload.get("request_id")
+        request_id: str | None = raw_rid if isinstance(raw_rid, str) else None
         # Inference plots use prediction data, not fit model
         inference_data = self.inference_result.get("data", [])
         if not inference_data:
@@ -573,15 +607,16 @@ class LizyWidget(anywidget.AnyWidget):
         try:
             predictions = pd.DataFrame(inference_data)
             plot_data = self._service.get_inference_plot(predictions, plot_type)
-            self.send(
-                {
-                    "type": "plot_data",
-                    "plot_type": plot_type,
-                    "plotly_json": plot_data.plotly_json,
-                }
-            )
-        except Exception:
-            # Fall back to fit model plot if inference plot fails
+            msg: dict[str, Any] = {
+                "type": "plot_data",
+                "plot_type": plot_type,
+                "plotly_json": plot_data.plotly_json,
+            }
+            if request_id is not None:
+                msg["request_id"] = request_id
+            self.send(msg)
+        except Exception as exc:
+            _log.debug("Inference plot failed, falling back to fit plot: %s", exc)
             self._handle_request_plot(payload)
 
     def _handle_export_code(self, payload: dict[str, Any]) -> None:
@@ -637,53 +672,55 @@ class LizyWidget(anywidget.AnyWidget):
     # ── Job execution ─────────────────────────────────────────
 
     def _run_job(self, job_type: str) -> None:
-        if self.status == "running":
-            return
+        with self._job_lock:
+            if self.status == "running":
+                return
 
-        # Pre-execution data/target checks (BLUEPRINT §6.1)
-        if not self._service.has_data():
-            self.error = {"code": "NO_DATA", "message": "No data loaded. Call load(df) first."}
-            self.status = "failed"
-            return
+            # Pre-execution data/target checks (BLUEPRINT §6.1)
+            if not self._service.has_data():
+                self.error = {"code": "NO_DATA", "message": "No data loaded. Call load(df) first."}
+                self.status = "failed"
+                return
 
-        if not self._service.has_target():
-            self.error = {
-                "code": "NO_TARGET",
-                "message": "No target selected. Call load(df, target=...) or set_target(col).",
-            }
-            self.status = "failed"
-            return
+            if not self._service.has_target():
+                self.error = {
+                    "code": "NO_TARGET",
+                    "message": "No target selected. Call load(df, target=...) or set_target(col).",
+                }
+                self.status = "failed"
+                return
 
-        self._cancel_flag.clear()
-        self._job_counter += 1
-        self.job_type = job_type
-        self.job_index = self._job_counter
-        self.status = "running"
-        self.progress = {"current": 0, "total": 0, "message": f"Starting {job_type}..."}
-        self.elapsed_sec = 0.0
-        self.error = {}
+            # Build and validate config before committing to "running"
+            # so that _job_counter is only incremented for valid jobs.
+            try:
+                full_config = self._service.prepare_run_config(dict(self.config), job_type=job_type)
+            except Exception as exc:
+                _log.error("Config build failed: %s", exc, exc_info=True)
+                self.error = {"code": "CONFIG_ERROR", "message": str(exc)}
+                self.status = "failed"
+                return
 
-        try:
-            full_config = self._service.prepare_run_config(dict(self.config), job_type=job_type)
-        except Exception as exc:
-            _log.error("Config build failed: %s", exc, exc_info=True)
-            self.error = {"code": "CONFIG_ERROR", "message": str(exc)}
-            self.status = "failed"
-            return
+            errors = self._service.validate_config(full_config)
+            if errors:
+                self.error = {
+                    "code": "VALIDATION_ERROR",
+                    "message": errors[0]["message"],
+                    "details": errors,
+                }
+                self.status = "failed"
+                return
 
-        if job_type == "tune":
-            self._tune_config_snapshot = copy.deepcopy(full_config)
+            if job_type == "tune":
+                self._tune_config_snapshot = copy.deepcopy(full_config)
 
-        # Pre-execution validation (BLUEPRINT §9-3)
-        errors = self._service.validate_config(full_config)
-        if errors:
-            self.error = {
-                "code": "VALIDATION_ERROR",
-                "message": errors[0]["message"],
-                "details": errors,
-            }
-            self.status = "failed"
-            return
+            self._cancel_flag.clear()
+            self._job_counter += 1
+            self.job_type = job_type
+            self.job_index = self._job_counter
+            self.status = "running"
+            self.progress = {"current": 0, "total": 0, "message": f"Starting {job_type}..."}
+            self.elapsed_sec = 0.0
+            self.error = {}
 
         # Detect execution strategy lazily (libgomp may not be loaded at
         # __init__ time; it loads when data is first processed by sklearn/lgbm).

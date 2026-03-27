@@ -2,7 +2,7 @@
  * useModel — Preact hooks for anywidget model (traitlet) binding.
  *
  * Provides reactive access to Python→JS traitlets and a sendAction
- * helper for JS→Python communication via the `action` traitlet.
+ * helper for JS→Python communication via msg:custom.
  */
 import { useState, useEffect, useCallback, useRef } from "preact/hooks";
 
@@ -19,14 +19,17 @@ export function useTraitlet<T>(model: any, name: string): T {
   return value;
 }
 
-/** Send an action to the Python side via the `action` traitlet. */
+/** Send an action to the Python side via msg:custom.
+ *
+ * P-023: Switched from traitlet sync (model.set + save_changes) to
+ * model.send() because Dict traitlet JS→Python sync breaks on
+ * Google Colab (ipywidgets 7.x).  msg:custom is handled by
+ * _handle_custom_msg on the Python main thread.
+ */
 export function useSendAction(model: any) {
-  const tsRef = useRef(0);
   return useCallback(
     (type: string, payload: Record<string, any> = {}) => {
-      tsRef.current += 1;
-      model.set("action", { type, payload, _ts: tsRef.current });
-      model.save_changes();
+      model.send({ type: "action", action_type: type, payload });
     },
     [model],
   );

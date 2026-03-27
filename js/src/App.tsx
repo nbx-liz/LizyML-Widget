@@ -35,7 +35,7 @@ export function App({ model, rootEl }: AppProps) {
   const error = useTraitlet<Record<string, any>>(model, "error");
   const sendAction = useSendAction(model);
   const { resolved: theme, toggle: toggleTheme } = useTheme(rootEl);
-  const polled = useJobPolling(model, status, elapsedSec);
+  const polled = useJobPolling(model, status, elapsedSec, jobIndex);
 
   // Merge polled state over traitlet state (Colab fallback)
   const effectiveStatus = polled?.status ?? status;

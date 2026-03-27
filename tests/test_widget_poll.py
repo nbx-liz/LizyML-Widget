@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 from lizyml_widget.adapter import LizyMLAdapter
-from lizyml_widget.types import BackendInfo
+from lizyml_widget.types import BackendInfo, FitSummary, TuningSummary
 
 
 def _make_widget() -> Any:
@@ -144,6 +144,131 @@ class TestPollHandlerCompleted:
         assert state["status"] == "failed"
         assert state["error"]["code"] == "BACKEND_ERROR"
         assert "fit_summary" in state  # included for terminal states
+
+
+def _make_widget_for_jobs() -> Any:
+    """Create a LizyWidget with full mock adapter for running fit/tune jobs."""
+    real_adapter = LizyMLAdapter()
+    with patch("lizyml_widget.widget.LizyMLAdapter") as MockAdapter:
+        adapter = MockAdapter.return_value
+        adapter.info = BackendInfo(name="mock", version="0.0.0")
+        adapter.get_config_schema.return_value = {"type": "object", "properties": {}}
+        adapter.validate_config.return_value = []
+        adapter.initialize_config.side_effect = real_adapter.initialize_config
+        adapter.apply_config_patch.side_effect = real_adapter.apply_config_patch
+        adapter.prepare_run_config.side_effect = real_adapter.prepare_run_config
+        adapter.get_backend_contract.side_effect = real_adapter.get_backend_contract
+        adapter.canonicalize_config.side_effect = real_adapter.canonicalize_config
+        adapter.apply_task_defaults.side_effect = real_adapter.apply_task_defaults
+        adapter.classify_best_params.side_effect = real_adapter.classify_best_params
+
+        mock_model = MagicMock()
+        adapter.create_model.return_value = mock_model
+        adapter.fit.return_value = FitSummary(
+            metrics={"auc": {"is": 0.95, "oos": 0.90}},
+            fold_count=5,
+            params=[{"index": "n_estimators", "value": 100}],
+        )
+        adapter.tune.return_value = TuningSummary(
+            best_params={"learning_rate": 0.01},
+            best_score=0.92,
+            trials=[],
+            metric_name="auc",
+            direction="maximize",
+        )
+        adapter.evaluate_table.return_value = [{"index": "auc", "if_mean": 0.95, "oof": 0.90}]
+        adapter.split_summary.return_value = [{"fold": 0, "n_train": 40, "n_valid": 10}]
+        adapter.available_plots.return_value = ["learning-curve"]
+
+        from lizyml_widget.widget import LizyWidget
+
+        w = LizyWidget()
+    return w
+
+
+class TestPollStateTransitions:
+    """Poll responses across job lifecycle — regression tests for A-1 and the 'frozen UI' bug."""
+
+    def test_consecutive_fit_increments_job_index_in_poll(self) -> None:
+        """After Fit→Fit, poll must return the second job's index."""
+        w = _make_widget_for_jobs()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        # First fit (via msg:custom, same as JS path)
+        w._handle_custom_msg({"type": "action", "action_type": "fit", "payload": {}}, [])
+        if w._job_thread:
+            w._job_thread.join(timeout=30)
+        assert w.status == "completed"
+        assert w.job_index == 1
+
+        # Second fit
+        w._handle_custom_msg({"type": "action", "action_type": "fit", "payload": {}}, [])
+        if w._job_thread:
+            w._job_thread.join(timeout=30)
+        assert w.status == "completed"
+        assert w.job_index == 2
+
+        # Poll after second fit must reflect job_index=2
+        sent: list[dict[str, Any]] = []
+        w.send = MagicMock(side_effect=lambda msg: sent.append(msg))
+        w._handle_custom_msg({"type": "poll"}, [])
+
+        state = sent[0]
+        assert state["job_index"] == 2
+        assert state["status"] == "completed"
+        assert "fit_summary" in state
+
+    def test_tune_then_fit_poll_returns_fit_results(self) -> None:
+        """After Tune→Apply→Fit, poll must return fit (not tune) results."""
+        w = _make_widget_for_jobs()
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        w.load(df, target="y")
+
+        # Tune (via msg:custom)
+        w._handle_custom_msg({"type": "action", "action_type": "tune", "payload": {}}, [])
+        if w._job_thread:
+            w._job_thread.join(timeout=60)
+        assert w.status == "completed"
+        tune_best = w.tune_summary.get("best_params", {})
+
+        # Apply best params + Fit
+        w._handle_apply_best_params({"params": tune_best})
+        w._handle_custom_msg({"type": "action", "action_type": "fit", "payload": {}}, [])
+        if w._job_thread:
+            w._job_thread.join(timeout=30)
+        assert w.status == "completed"
+
+        # Poll: fit_summary should reflect the Fit, not be empty
+        sent: list[dict[str, Any]] = []
+        w.send = MagicMock(side_effect=lambda msg: sent.append(msg))
+        w._handle_custom_msg({"type": "poll"}, [])
+
+        state = sent[0]
+        assert state["status"] == "completed"
+        assert state["job_index"] == 2
+        # fit_summary should have metrics from the Fit
+        fit_s = state.get("fit_summary", {})
+        assert fit_s.get("fold_count", 0) > 0, "fit_summary should have results from the Fit run"
+
+    def test_poll_during_running_excludes_results(self) -> None:
+        """Poll while status=running should NOT include fit_summary/tune_summary."""
+        w = _make_widget()
+        w.status = "running"
+        w.job_type = "fit"
+        w.job_index = 1
+        # Stale results from a previous run
+        w.fit_summary = {"metrics": {"auc": {"oos": 0.9}}, "fold_count": 5, "params": []}
+
+        sent: list[dict[str, Any]] = []
+        w.send = MagicMock(side_effect=lambda msg: sent.append(msg))
+        w._handle_custom_msg({"type": "poll"}, [])
+
+        state = sent[0]
+        assert state["status"] == "running"
+        # Running state should NOT include result payloads
+        assert "fit_summary" not in state
+        assert "tune_summary" not in state
 
 
 class TestPollHandlerIgnoresOtherTypes:
