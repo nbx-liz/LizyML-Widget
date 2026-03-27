@@ -330,15 +330,29 @@ export function SearchSpace({
   };
 
   /** Build fake schema for rendering a catalog entry's Fixed control. */
+  const specialFields: Record<string, string> = uiSchema?.special_search_space_fields ?? {};
   const buildFieldSchema = (entry: CatalogEntry): Record<string, any> => {
-    if (entry.key === "objective") {
+    const fieldKind = specialFields[entry.key];
+    if (fieldKind === "objective") {
       return { title: entry.title, type: "string", enum: optionSets.objective?.[task ?? ""] ?? [], segment: true };
     }
-    if (entry.key === "metric") {
+    if (fieldKind === "model_metric") {
       return { title: entry.title, type: "array", items: { enum: optionSets.model_metric?.[task ?? ""] ?? [] } };
     }
-    if (entry.key === "inner_valid") {
+    if (fieldKind === "inner_valid_picker") {
       return { title: entry.title, type: "string", options: innerValidOpts };
+    }
+    // Fallback: match by key name for backward compatibility when contract lacks special_search_space_fields
+    if (!fieldKind) {
+      if (entry.key === "objective") {
+        return { title: entry.title, type: "string", enum: optionSets.objective?.[task ?? ""] ?? [], segment: true };
+      }
+      if (entry.key === "metric") {
+        return { title: entry.title, type: "array", items: { enum: optionSets.model_metric?.[task ?? ""] ?? [] } };
+      }
+      if (entry.key === "inner_valid") {
+        return { title: entry.title, type: "string", options: innerValidOpts };
+      }
     }
     return { title: entry.title, type: entry.paramType };
   };

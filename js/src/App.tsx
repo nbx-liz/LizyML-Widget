@@ -147,6 +147,7 @@ export function App({ model, rootEl }: AppProps) {
             columnStats={columnStats}
             splitPreview={splitPreview}
             sendAction={sendAction}
+            backendContract={backendContract}
           />
         )}
         {activeTab === "Model" && (
