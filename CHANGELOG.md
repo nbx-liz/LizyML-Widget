@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-03-27
+
+### Fixed
+- Consecutive jobs (Fit→Fit, Tune→Apply→Fit) now work correctly on Google Colab — polling restarts on `job_index` change (A-1)
+- Polled state clears on completed/failed status transitions, preventing frozen UI after Tune (A-1 regression)
+- Thread safety: `_job_lock` prevents TOCTOU race in `_run_job` (C-1)
+- Thread safety: `_model_lock` protects model access during concurrent operations (C-2)
+- Thread safety: `_tune_config_snapshot` reads protected by `_job_lock` (C-3)
+- Plot responses echo `request_id` for stale-response filtering on rapid tab switching (B-1)
+- Inference button disabled during execution to prevent double-click (B-2)
+- YAML Export button disabled during export to prevent duplicate downloads (B-3)
+- Config form disabled during job execution to prevent accidental edits (B-5)
+- Action dispatch migrated from traitlet sync to msg:custom for Colab ipywidgets 7.x compatibility (P-023)
+
+### Added
+- JS test infrastructure: Vitest + @testing-library/preact + jsdom
+- 60 JS tests covering hook state lifecycle, polling, plot caching, and component guards
+- MockModel test utility for anywidget model interface
+- Python poll state transition tests for consecutive jobs and Tune→Fit flow
+- Thread safety tests (TOCTOU guard, model lock, snapshot protection)
+- Plot request_id echo-back tests with backward compatibility
+- Colab fit diagnostic notebook
+
+### Changed
+- Export Code button styled with accent-outline for better visibility
+- Apply to Fit button styled with primary color to prevent oversight after Tune
+
 ## [0.4.1] - 2026-03-21
 
 ### Added
