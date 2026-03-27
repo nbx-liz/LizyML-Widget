@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-28
+
+### Added
+- `w.load_model(path)` — Load trained model from file for inference without re-fitting (P-024)
+- `w.model_info` — Property returning model metadata (loaded state, parameters)
+- `adapter.model_info(model)` — Model metadata extraction in LizyMLAdapter
+- Inference plot: dynamic prediction column detection (no longer hardcoded to `pred`)
+- JS test infrastructure: Vitest + @testing-library/preact + jsdom (114 JS tests)
+- E2E test infrastructure: Playwright + pytest-playwright (10 E2E scenarios)
+- Component tests: DataTab, DynForm, SearchSpace, ConfigFooter, ProgressView (51 tests)
+- Hook tests: useJobPolling (Colab + non-Colab), usePlot, useModel, useTheme (63 tests)
+- `pnpm test` and `pnpm lint` now run in CI
+- Binary buffer plot transfer for large Plotly JSON (>800KB) on Colab (D-1)
+- Download fallback: DataURL fallback when Blob URL is blocked by Colab sandbox (D-2)
+- CV strategy metadata exposed in `backend_contract.capabilities` (P-025)
+- `special_search_space_fields` in uiSchema for contract-driven SearchSpace rendering
+
+### Changed
+- Backend Contract driven CV decoupling: DataTab reads CV strategy fields from contract with fallback (P-025)
+- Service CV defaults delegated to adapter contract (P-025)
+- SearchSpace special field keys read from uiSchema instead of hardcoded (P-025)
+- Export Code button styled with accent-outline for better visibility
+- Apply to Fit button styled with primary color to prevent oversight after Tune
+- `auto-release.yml` now has `actions:write` permission for PyPI workflow dispatch
+
+### Fixed
+- Redundant `if task:` guard in `_handle_set_task` after early return
+- Redundant `|| status === "running"` in ConfigTab `canRun` expression
+
 ## [0.4.2] - 2026-03-27
 
 ### Fixed
