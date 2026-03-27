@@ -1047,3 +1047,29 @@
   - `load_model(path)` で `status == "completed"` かつ `available_plots` が取得される
   - `model_info` がモデル未ロード時に `None`、ロード後に `dict` を返す
   - 既存テスト全パス + 新規テストでカバー
+
+---
+
+### P-025: CV Strategy Metadata in Backend Contract + Service Default Delegation
+
+- **日付**: 2026-03-27
+- **ステータス**: 承認・実装
+- **目的**:
+  JS の DataTab に残る CV 戦略固有の定数 (NEEDS_GROUP, NEEDS_TIME 等) を backend_contract.capabilities に移動し、
+  Service の CV デフォルトロジックを Adapter に委譲する。
+- **影響範囲**:
+  - `BackendContract.capabilities` に `cv_strategy_fields` / `cv_defaults` / `cv_default_strategy` を追加
+  - `adapter_contract.py` の `build_capabilities()` を拡張
+  - `service.py` の `_default_cv_state` / `_default_strategy_for_task` を adapter contract 経由に変更
+  - `js/src/tabs/DataTab.tsx` — contract から CV strategy fields を読み取り、ハードコード値をフォールバックに格下げ
+  - `js/src/components/SearchSpace.tsx` — `special_search_space_fields` を ui_schema から読み取り
+- **互換性**:
+  - JS: backend_contract から読み取り、フォールバックでハードコード値を保持
+  - Python: build_capabilities に追加のみ（Adapter Protocol 変更なし）
+- **代替案**:
+  - 完全に JS 側のハードコードを維持 → backend 追加時にJS変更が必要になり拡張性が低い
+- **受け入れ基準**:
+  - DataTab が backend_contract.capabilities.cv_strategy_fields を使用
+  - Service の CV デフォルトが adapter contract 経由
+  - SearchSpace の special field 判定が ui_schema 経由
+  - 既存テスト全パス

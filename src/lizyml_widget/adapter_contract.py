@@ -360,6 +360,11 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
         },
         "calibration_methods": ["platt", "isotonic", "beta"],
         "inner_valid_options": ["holdout", "group_holdout", "time_holdout"],
+        "special_search_space_fields": {
+            "objective": "objective",
+            "metric": "model_metric",
+            "inner_valid": "inner_valid_picker",
+        },
     }
 
 
@@ -377,4 +382,43 @@ def build_capabilities() -> dict[str, Any]:
             "stratified_group_kfold",
             "blocked_group_kfold",
         ],
+        "cv_strategy_fields": {
+            "kfold": ["n_splits", "shuffle", "random_state"],
+            "stratified_kfold": ["n_splits", "shuffle", "random_state"],
+            "group_kfold": ["n_splits", "group_col"],
+            "stratified_group_kfold": ["n_splits", "group_col"],
+            "time_series": ["n_splits", "gap", "max_train_size", "max_test_size"],
+            "purged_time_series": [
+                "n_splits",
+                "time_col",
+                "purge_gap",
+                "embargo",
+            ],
+            "group_time_series": [
+                "n_splits",
+                "group_col",
+                "gap",
+                "max_train_size",
+                "max_test_size",
+            ],
+            "blocked_group_kfold": [
+                "blocks_col",
+                "groups_col",
+                "mode",
+                "train_window",
+                "min_train_rows",
+                "min_valid_rows",
+            ],
+        },
+        "cv_defaults": {
+            "n_splits": 5,
+            "shuffle": True,
+            "random_state": 42,
+            "gap": 0,
+        },
+        "cv_default_strategy": {
+            "binary": "stratified_kfold",
+            "multiclass": "stratified_kfold",
+            "regression": "kfold",
+        },
     }
