@@ -60,19 +60,36 @@ export function App({ model, rootEl }: AppProps) {
       setSplitPreview(msg);
     } else if (msg.type === "code_export_download" && buffers && buffers.length > 0) {
       const blob = new Blob([buffers[0]], { type: "application/zip" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = msg.filename || "exported_code.zip";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      // D-2: Try Blob URL first; fall back to data URL for Colab sandbox
+      try {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = msg.filename || "exported_code.zip";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch {
+        // Colab sandbox may block Blob URL — fall back to data URL
+        const reader = new FileReader();
+        reader.onload = () => {
+          const a = document.createElement("a");
+          a.href = reader.result as string;
+          a.download = msg.filename || "exported_code.zip";
+          a.click();
+        };
+        reader.readAsDataURL(blob);
+      }
       setExportLoading(false);
     }
   }, []);
   useCustomMsg(model, handleCustomMsg);
 
+  // B-4 note: msg:custom listeners live in App (handleCustomMsg), usePlot, and
+  // ConfigTab.  Each uses useEffect cleanup (model.off) so listener accumulation
+  // is not a risk.  Full consolidation into App was considered but deferred —
+  // the refactoring surface is large and current cleanup is correct.
   const { plots, loading: plotLoading, requestPlot, clearCache } = usePlot(model);
 
   // Clear plot cache when a new job starts

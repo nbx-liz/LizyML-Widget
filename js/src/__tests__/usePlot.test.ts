@@ -189,6 +189,74 @@ describe("usePlot", () => {
     });
   });
 
+  // ── D-1: Binary buffer handling ──
+
+  describe("binary buffer plot response (D-1)", () => {
+    it("decodes plot from binary buffer when binary flag is set", () => {
+      const { result } = renderHook(() => usePlot(model));
+
+      act(() => { result.current.requestPlot("shap-summary"); });
+      const rid = model.sentMessages[0].payload.request_id;
+
+      const jsonStr = '{"data": [{"x": [42]}]}';
+      const buffer = new TextEncoder().encode(jsonStr).buffer;
+
+      act(() => {
+        model.simulateCustomMessage(
+          { type: "plot_data", plot_type: "shap-summary", binary: true, request_id: rid },
+          [buffer],
+        );
+      });
+
+      expect(result.current.plots["shap-summary"]).toBeDefined();
+      expect(result.current.plots["shap-summary"].data[0].x[0]).toBe(42);
+      expect(result.current.loading["shap-summary"]).toBe(false);
+    });
+
+    it("ignores binary response when no buffers provided", () => {
+      const { result } = renderHook(() => usePlot(model));
+
+      act(() => { result.current.requestPlot("shap-summary"); });
+      const rid = model.sentMessages[0].payload.request_id;
+
+      act(() => {
+        model.simulateCustomMessage(
+          { type: "plot_data", plot_type: "shap-summary", binary: true, request_id: rid },
+          // no buffers
+        );
+      });
+
+      // Should not crash and should not cache (no jsonStr)
+      expect(result.current.plots["shap-summary"]).toBeUndefined();
+    });
+
+    it("prefers binary buffer over inline plotly_json when binary flag is set", () => {
+      const { result } = renderHook(() => usePlot(model));
+
+      act(() => { result.current.requestPlot("roc-curve"); });
+      const rid = model.sentMessages[0].payload.request_id;
+
+      const bufferJson = '{"data": [{"from": "buffer"}]}';
+      const buffer = new TextEncoder().encode(bufferJson).buffer;
+
+      act(() => {
+        model.simulateCustomMessage(
+          {
+            type: "plot_data",
+            plot_type: "roc-curve",
+            binary: true,
+            plotly_json: '{"data": [{"from": "inline"}]}',
+            request_id: rid,
+          },
+          [buffer],
+        );
+      });
+
+      // Should use buffer data, not inline
+      expect(result.current.plots["roc-curve"].data[0].from).toBe("buffer");
+    });
+  });
+
   // ── Cache clearing ──
 
   describe("clearCache", () => {
