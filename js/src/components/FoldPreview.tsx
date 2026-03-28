@@ -64,7 +64,7 @@ export function FoldPreview({
   groupFolds,
   periods,
   folds,
-  mode,
+  mode: _mode,
 }: FoldPreviewProps) {
   const flowRows = buildTimeFoldRows(folds, groupFolds, periods);
 
