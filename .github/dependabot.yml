@@ -4,13 +4,16 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    target-branch: develop
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    target-branch: develop
 
   - package-ecosystem: npm
     directory: /js
     schedule:
       interval: weekly
+    target-branch: develop
