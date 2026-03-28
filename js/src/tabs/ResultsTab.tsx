@@ -1,5 +1,5 @@
 /** ResultsTab — status-based view: running/completed/failed + inference. */
-import { useState, useEffect } from "preact/hooks";
+import { useState, useEffect, useMemo, useCallback } from "preact/hooks";
 import { Accordion } from "../components/Accordion";
 import { ProgressView } from "../components/ProgressView";
 import { ScoreTable } from "../components/ScoreTable";
@@ -7,6 +7,7 @@ import { ParamsTable } from "../components/ParamsTable";
 import { PlotViewer } from "../components/PlotViewer";
 import { PredTable } from "../components/PredTable";
 import type { ResolvedTheme } from "../hooks/useTheme";
+import type { PlotRequestOptions } from "../hooks/usePlot";
 
 interface ResultsTabProps {
   status: string;
@@ -21,7 +22,7 @@ interface ResultsTabProps {
   error: Record<string, any>;
   plots: Record<string, any>;
   plotLoading: Record<string, boolean>;
-  onRequestPlot: (plotType: string) => void;
+  onRequestPlot: (plotType: string, options?: PlotRequestOptions) => void;
   sendAction: (type: string, payload?: Record<string, any>) => void;
   onSwitchToFit?: () => void;
   /** Evaluation params for metric display annotations. */
@@ -132,6 +133,61 @@ export function ResultsTab({
     ? selectedPlot
     : availablePlots[0] ?? null;
 
+  // P-026: Extract model metric list from fitSummary.params for learning curve selector.
+  // Combines native metrics (from "metric" row) and feval display names
+  // (from "feval_metrics" row, e.g. "precision_at_k (k=20)").
+  const modelMetrics: string[] = useMemo(() => {
+    const params = fitSummary?.params;
+    if (!Array.isArray(params)) return [];
+    const result: string[] = [];
+    // Native metrics from "metric" row (skip "None" — means feval-only)
+    const metricRow = params.find((r: Record<string, any>) => r.parameter === "metric");
+    if (metricRow) {
+      const val = metricRow.value;
+      if (Array.isArray(val)) {
+        for (const item of val) {
+          if (typeof item === "string" && item !== "None") result.push(item);
+        }
+      } else if (typeof val === "string" && val !== "None") {
+        result.push(val);
+      }
+    }
+    // Feval display names from "feval_metrics" row (comma-separated string)
+    const fevalRow = params.find((r: Record<string, any>) => r.parameter === "feval_metrics");
+    if (fevalRow && typeof fevalRow.value === "string") {
+      for (const name of fevalRow.value.split(",")) {
+        const trimmed = name.trim();
+        if (trimmed) result.push(trimmed);
+      }
+    }
+    return result;
+  }, [fitSummary?.params]);
+
+  // P-026: Track selected metric for learning curve (default: first metric)
+  const [lcMetric, setLcMetric] = useState<string | null>(null);
+  const activeLcMetric = lcMetric && modelMetrics.includes(lcMetric) ? lcMetric : modelMetrics[0] ?? null;
+
+  // P-026: Request learning curve with selected metric
+  const handleLcMetricChange = useCallback(
+    (metric: string) => {
+      setLcMetric(metric);
+      onRequestPlot("learning-curve", { metrics: [metric] });
+    },
+    [onRequestPlot],
+  );
+
+  // P-026: Stable wrapper for PlotViewer — always applies metric filter for learning-curve
+  const handlePlotRequest = useCallback(
+    (pt: string) => {
+      if (pt === "learning-curve" && activeLcMetric) {
+        onRequestPlot(pt, { metrics: [activeLcMetric] });
+      } else {
+        onRequestPlot(pt);
+      }
+    },
+    [onRequestPlot, activeLcMetric],
+  );
+
   return (
     <div class="lzw-results">
       <div class="lzw-results__header">
@@ -221,19 +277,34 @@ export function ResultsTab({
                 class={`lzw-chip ${activePlot === p ? "lzw-chip--active" : ""}`}
                 onClick={() => {
                   setSelectedPlot(p);
-                  if (!plots[p]) onRequestPlot(p);
+                  handlePlotRequest(p);
                 }}
               >
                 {plotLabel(p)}
               </button>
             ))}
           </div>
+          {/* P-026: Metric selector for learning curve */}
+          {activePlot === "learning-curve" && modelMetrics.length > 1 && (
+            <div class="lzw-chip-group" style="margin-bottom: 8px;">
+              {modelMetrics.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  class={`lzw-chip ${activeLcMetric === m ? "lzw-chip--active" : ""}`}
+                  onClick={() => handleLcMetricChange(m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          )}
           {activePlot && (
             <PlotViewer
               plotType={activePlot}
               plots={plots}
               loading={plotLoading}
-              onRequest={onRequestPlot}
+              onRequest={handlePlotRequest}
               theme={theme}
             />
           )}
