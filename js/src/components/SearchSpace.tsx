@@ -388,16 +388,42 @@ export function SearchSpace({
               }
               const paramConfig = getParamConfig(entry);
               const fieldSchema = buildFieldSchema(entry);
+              const fixedMetric = paramConfig.mode === "fixed" && entry.key === "metric"
+                ? (Array.isArray(paramConfig.fixed) ? paramConfig.fixed : [])
+                : null;
               return (
-                <SearchSpaceRow
-                  key={entry.key}
-                  name={entry.key}
-                  fieldSchema={fieldSchema}
-                  config={paramConfig}
-                  modes={entry.modes}
-                  onChange={(c) => handleUpdate(entry, c)}
-                  stepMap={stepMap}
-                />
+                <>
+                  <SearchSpaceRow
+                    key={entry.key}
+                    name={entry.key}
+                    fieldSchema={fieldSchema}
+                    config={paramConfig}
+                    modes={entry.modes}
+                    onChange={(c) => handleUpdate(entry, c)}
+                    stepMap={stepMap}
+                  />
+                  {fixedMetric && fixedMetric.includes("precision_at_k") && (
+                    <div class="lzw-search-space-grid__row" role="row">
+                      <div class="lzw-table__name" role="cell">precision_at_k: k</div>
+                      <div role="cell" />
+                      <div role="cell">
+                        <NumericStepper
+                          value={fixedModelParams._precision_at_k_k ?? 10}
+                          min={1}
+                          max={100}
+                          step={1}
+                          onChange={(v) =>
+                            onChange({
+                              space: spaceValue,
+                              fixedModelParams: { ...fixedModelParams, _precision_at_k_k: v ?? 10 },
+                              fixedTraining,
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                </>
               );
             })}
           </div>

@@ -600,13 +600,13 @@ class WidgetService:
 
     # ── Results ──────────────────────────────────────────────
 
-    def get_plot(self, plot_type: str) -> PlotData:
+    def get_plot(self, plot_type: str, **kwargs: Any) -> PlotData:
         with self._model_lock:
             model = self._model
         if model is None:
             msg = "No trained model"
             raise ValueError(msg)
-        return self._adapter.plot(model, plot_type)
+        return self._adapter.plot(model, plot_type, **kwargs)
 
     def get_inference_plot(self, predictions: pd.DataFrame, plot_type: str) -> PlotData:
         """Generate an inference plot (prediction-distribution or shap-summary)."""

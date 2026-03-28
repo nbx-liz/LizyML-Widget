@@ -154,6 +154,23 @@ export function TuneSubTab({
               ))}
           </div>
         </div>
+        {tuneMetrics.includes("precision_at_k") && (
+          <div class="lzw-form-row">
+            <label class="lzw-label">precision_at_k: k</label>
+            <NumericStepper
+              value={(tuneEvaluation.params ?? {}).precision_at_k_k ?? 10}
+              min={1}
+              max={100}
+              step={1}
+              onChange={(v) =>
+                handleTuningField("evaluation", {
+                  ...tuneEvaluation,
+                  params: { ...(tuneEvaluation.params ?? {}), precision_at_k_k: v ?? 10 },
+                })
+              }
+            />
+          </div>
+        )}
       </Accordion>
 
       <ConfigFooter sendAction={sendAction} rawYaml={rawYaml} setRawYaml={setRawYaml} yamlExportCount={yamlExportCount} />

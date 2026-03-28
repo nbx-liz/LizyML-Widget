@@ -106,7 +106,7 @@ class BackendAdapter(Protocol):
 
     def importance(self, model: Any, kind: str) -> dict[str, float]: ...
 
-    def plot(self, model: Any, plot_type: str) -> PlotData: ...
+    def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData: ...
 
     def available_plots(self, model: Any) -> list[str]: ...
 
@@ -371,7 +371,38 @@ class LizyMLAdapter:
 
         result = normalize_inner_valid(result)
         result = enforce_iv_exclusivity(result)
+        result = self._convert_metric_entries(result)
         return strip_for_backend(result)
+
+    @staticmethod
+    def _convert_metric_entries(config: dict[str, Any]) -> dict[str, Any]:
+        """Convert widget-only _precision_at_k_k to MetricEntry dict form.
+
+        Transforms ``model.params.metric`` entries:
+        - ``"precision_at_k"`` + ``_precision_at_k_k=20``
+          → ``{"precision_at_k": {"k": 20}}``
+        - Strips ``_precision_at_k_k`` from params regardless.
+        """
+        model = config.get("model")
+        if not isinstance(model, dict):
+            return config
+        params = model.get("params")
+        if not isinstance(params, dict):
+            return config
+
+        metric = params.get("metric")
+        pak_k = params.get("_precision_at_k_k")
+
+        new_params = {k: v for k, v in params.items() if k != "_precision_at_k_k"}
+
+        if isinstance(metric, list) and "precision_at_k" in metric and pak_k is not None:
+            new_metric = [
+                {"precision_at_k": {"k": int(pak_k)}} if m == "precision_at_k" else m
+                for m in metric
+            ]
+            new_params = {**new_params, "metric": new_metric}
+
+        return {**config, "model": {**model, "params": new_params}}
 
     # ── Config patch helpers ──────────────────────────────────
 
@@ -686,7 +717,7 @@ class LizyMLAdapter:
     def importance(self, model: Any, kind: str) -> dict[str, float]:
         return model.importance(kind=kind)  # type: ignore[no-any-return]
 
-    def plot(self, model: Any, plot_type: str) -> PlotData:
+    def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData:
         plot_methods: dict[str, Callable[..., Any]] = {
             "learning-curve": model.plot_learning_curve,
             "oof-distribution": model.plot_oof_distribution,
@@ -703,7 +734,15 @@ class LizyMLAdapter:
         if method is None:
             msg = f"Unknown plot type: {plot_type}"
             raise ValueError(msg)
-        fig = method()
+        # Forward metrics filter to learning-curve only (P-026)
+        if plot_type == "learning-curve":
+            lc_kwargs: dict[str, Any] = {}
+            metrics = kwargs.get("metrics")
+            if metrics:  # skip None and empty list → fall back to all metrics
+                lc_kwargs["metrics"] = metrics
+            fig = method(**lc_kwargs) if lc_kwargs else method()
+        else:
+            fig = method()
         return PlotData(plotly_json=fig.to_json())
 
     def available_plots(self, model: Any) -> list[str]:

@@ -26,20 +26,38 @@ MODEL_METRIC_TO_EVAL: Mapping[str, str] = _types.MappingProxyType(
         "multi_error": "accuracy",
         # Binary-specific
         "binary_logloss": "logloss",
+        "binary_error": "accuracy",
+        "average_precision": "auc_pr",
+        "cross_entropy": "logloss",
+        "cross_entropy_lambda": "logloss",
+        "kullback_leibler": "logloss",
         # Identity mappings (names that match between model_metric and eval_metric)
         "auc": "auc",
-        "auc_pr": "auc_pr",
         "f1": "f1",
         "accuracy": "accuracy",
         "brier": "brier",
+        "ece": "ece",
+        "precision_at_k": "precision_at_k",
+        # Legacy/translated names — kept for backward compat with saved configs
+        "auc_pr": "auc_pr",
         "logloss": "logloss",
-        # Regression
-        "huber": "huber",
         "mae": "mae",
+        # Regression
+        "l1": "mae",
+        "l2": "rmse",
+        "huber": "huber",
         "mape": "mape",
         "rmse": "rmse",
         "r2": "r2",
         "rmsle": "rmsle",
+        # Regression native metrics without LizyML eval equivalent — map to
+        # nearest eval metric for tune direction resolution (all minimize)
+        "fair": "mae",
+        "poisson": "mae",
+        "gamma": "mae",
+        "gamma_deviance": "mae",
+        "tweedie": "mae",
+        "quantile": "mae",
     }
 )
 

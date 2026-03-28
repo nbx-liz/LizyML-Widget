@@ -36,7 +36,7 @@ Homepage = "https://github.com/nbx-liz/LizyML-Widget"
 Repository = "https://github.com/nbx-liz/LizyML-Widget"
 
 [project.optional-dependencies]
-lizyml = ["lizyml[plots,tuning,calibration,explain]>=0.4.0"]
+lizyml = ["lizyml[plots,tuning,calibration,explain]>=0.7.0"]
 dev = [
     "pytest>=7.0",
     "ruff>=0.4",
@@ -90,7 +90,7 @@ dev = [
     "jupyterlab>=4.0",
     "ipykernel>=6.0",
     "pandas-stubs>=2.0",
-    "lizyml[plots,tuning,calibration,explain]>=0.4.0",
+    "lizyml[plots,tuning,calibration,explain]>=0.7.0",
     "scikit-learn>=1.0",
     "watchfiles>=1.1",
     "twine>=6.2.0",

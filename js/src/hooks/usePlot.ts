@@ -12,12 +12,19 @@ interface PlotCache {
   [plotType: string]: any; // parsed Plotly JSON spec
 }
 
+/** Options forwarded to Python's request_plot (P-026). */
+export interface PlotRequestOptions {
+  metrics?: string[];
+}
+
 export function usePlot(model: any) {
   const [plots, setPlots] = useState<PlotCache>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   // Track the latest request_id per plot_type for stale-response filtering
   const pendingRef = useRef<Record<string, string>>({});
   const nextRequestIdRef = useRef(1);
+  // Track options used for cached plots to invalidate on change (P-026)
+  const cachedOptionsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     /** Check if a response should be accepted.
@@ -62,16 +69,23 @@ export function usePlot(model: any) {
   }, [model]);
 
   const requestPlot = useCallback(
-    (plotType: string) => {
-      if (plots[plotType]) return; // already cached
-      if (loading[plotType]) return; // already loading
+    (plotType: string, options?: PlotRequestOptions) => {
+      const optionsKey = options ? JSON.stringify(options) : "";
+      const optionsChanged = cachedOptionsRef.current[plotType] !== optionsKey;
+      // Skip if already cached with same options (P-026)
+      if (plots[plotType] && !optionsChanged) return;
+      // Skip if already loading with same options; allow re-request on options change
+      if (loading[plotType] && !optionsChanged) return;
       const rid = `req-${nextRequestIdRef.current++}`;
       pendingRef.current[plotType] = rid;
+      cachedOptionsRef.current[plotType] = optionsKey;
       setLoading((prev) => ({ ...prev, [plotType]: true }));
+      const payload: Record<string, any> = { plot_type: plotType, request_id: rid };
+      if (options) payload.options = options;
       model.send({
         type: "action",
         action_type: "request_plot",
-        payload: { plot_type: plotType, request_id: rid },
+        payload,
       });
     },
     [model, plots, loading],
@@ -81,6 +95,7 @@ export function usePlot(model: any) {
     setPlots({});
     setLoading({});
     pendingRef.current = {};
+    cachedOptionsRef.current = {};
   }, []);
 
   return { plots, loading, requestPlot, clearCache };
