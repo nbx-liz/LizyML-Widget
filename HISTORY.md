@@ -1050,6 +1050,52 @@
 
 ---
 
+### P-026: Learning Curve Plot に metrics フィルタを追加
+
+- **日付**: 2026-03-28
+- **ステータス**: 承認・実装
+- **バグ修正（実装中に発見）**:
+  - `model_metric` option set の binary に `logloss`, `auc_pr`, `f1`, `accuracy`, `brier` が含まれていたが、
+    これらは LizyML 評価 metric 名であり LightGBM ネイティブ metric 名ではない。
+    LightGBM がサイレントに無視するため Learning Curve に表示されなかった。
+    LightGBM ネイティブ名のみに修正: `auc`, `binary_logloss`, `binary_error`, `average_precision`。
+  - regression の `r2`, `rmsle` も LightGBM ネイティブではないため除去。
+  - `MODEL_METRIC_TO_EVAL` に `binary_error` → `accuracy`, `average_precision` → `auc_pr` を追加。
+  - PlotViewer の `onRequest` を `useCallback` で安定化し、metric フィルタが上書きされないよう修正。
+- **背景**:
+  LizyML v0.5.0 で `plot_learning_curve(metrics=...)` フィルタ引数が追加された（LizyML#52）。
+  Widget 幅（~600px）では metric 3個以上の横並び subplot が溢れるため、
+  Widget 側で metric 選択 UI を提供し、Python 側でフィルタして返す仕組みが必要。
+- **提案内容**:
+  - `BackendAdapter.plot()` のシグネチャに `**kwargs` を追加（learning-curve の `metrics` 等を透過）
+  - `WidgetService.get_plot()` に `**kwargs` を追加して Adapter に透過
+  - `LizyMLAdapter.plot()` で `learning-curve` の場合に `metrics` kwarg を `plot_learning_curve()` に渡す
+  - `Widget._handle_request_plot()` が payload の `options` dict を `get_plot()` に透過
+  - JS: `request_plot` action の payload に `options: { metrics?: string[] }` を追加
+  - JS: ResultsTab で Learning Curve 選択時に metric セレクタ UI（セグメントボタン）を表示
+  - デフォルトは先頭 metric のみ表示（Widget 幅制約）、全選択も可能
+- **影響範囲**:
+  - `BackendAdapter` Protocol: `plot()` に `**kwargs` 追加（後方互換）
+  - `service.py`: `get_plot()` に `**kwargs` 透過
+  - `adapter.py` (`LizyMLAdapter`): `plot()` で kwargs を learning-curve に渡す
+  - `widget.py`: `_handle_request_plot` が payload.options を透過
+  - `js/src/hooks/usePlot.ts`: `requestPlot` に options パラメータ追加
+  - `js/src/tabs/ResultsTab.tsx`: Learning Curve 用 metric セレクタ追加
+- **互換性**:
+  - `**kwargs` のため既存の Adapter 実装は変更不要（後方互換）
+  - `options` が省略された場合は従来通り全 metric 表示
+  - traitlets 変更なし、msg:custom payload の拡張のみ
+- **代替案**:
+  - JS 側で Plotly subplot を表示切替 → サーバー側フィルタの方がデータ転送量が少なく実装がシンプル
+  - 全 metric を常に送信 → Widget 幅超過の根本問題が解決しない
+- **受け入れ基準**:
+  - Learning Curve リクエスト時に metrics フィルタが LizyML に渡される
+  - ResultsTab に Learning Curve 用 metric セレクタが表示される
+  - デフォルトで先頭 metric のみ表示、切替可能
+  - 既存テスト全パス + 新規テスト追加
+
+---
+
 ### P-025: CV Strategy Metadata in Backend Contract + Service Default Delegation
 
 - **日付**: 2026-03-27

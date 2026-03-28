@@ -549,8 +549,16 @@ class LizyWidget(anywidget.AnyWidget):
             return
         raw_rid = payload.get("request_id")
         request_id: str | None = raw_rid if isinstance(raw_rid, str) else None
+        # Extract options and forward as kwargs (P-026)
+        # Whitelist allowed keys and validate types to prevent untrusted input
+        options = payload.get("options")
+        kwargs: dict[str, Any] = {}
+        if isinstance(options, dict):
+            metrics = options.get("metrics")
+            if isinstance(metrics, list) and all(isinstance(m, str) for m in metrics):
+                kwargs["metrics"] = metrics
         try:
-            plot_data = self._service.get_plot(plot_type)
+            plot_data = self._service.get_plot(plot_type, **kwargs)
             self._send_plot_response(plot_type, plot_data.plotly_json, request_id)
         except Exception as e:
             err: dict[str, Any] = {

@@ -65,27 +65,42 @@ function TypedParamsEditor({
         if (kind === "model_metric") {
           const opts = optionSets.model_metric?.[task] ?? [];
           const selected: string[] = Array.isArray(current) ? current : [];
+          const hasPrecisionAtK = selected.includes("precision_at_k");
           return (
-            <div key={key} class="lzw-form-row" style="align-items:flex-start">
-              <label class="lzw-label">{label}</label>
-              <div class="lzw-chip-group">
-                {opts.map((opt) => (
-                  <button
-                    key={opt}
-                    type="button"
-                    class={`lzw-chip ${selected.includes(opt) ? "lzw-chip--active" : ""}`}
-                    onClick={() => {
-                      const next = selected.includes(opt)
-                        ? selected.filter((v) => v !== opt)
-                        : [...selected, opt];
-                      set(key, next);
-                    }}
-                  >
-                    {opt}
-                  </button>
-                ))}
+            <>
+              <div key={key} class="lzw-form-row" style="align-items:flex-start">
+                <label class="lzw-label">{label}</label>
+                <div class="lzw-chip-group">
+                  {opts.map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      class={`lzw-chip ${selected.includes(opt) ? "lzw-chip--active" : ""}`}
+                      onClick={() => {
+                        const next = selected.includes(opt)
+                          ? selected.filter((v) => v !== opt)
+                          : [...selected, opt];
+                        set(key, next);
+                      }}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+              {hasPrecisionAtK && (
+                <div class="lzw-form-row">
+                  <label class="lzw-label">precision_at_k: k</label>
+                  <NumericStepper
+                    value={value._precision_at_k_k ?? 10}
+                    min={1}
+                    max={100}
+                    step={1}
+                    onChange={(v) => set("_precision_at_k_k", v ?? 10)}
+                  />
+                </div>
+              )}
+            </>
           );
         }
 
