@@ -285,7 +285,7 @@ export function SearchSpace({
 
   /** Update handler: builds a single atomic update to avoid stale-closure races. */
   const handleUpdate = (entry: CatalogEntry, config: ParamConfig) => {
-    let newSpace = spaceValue;
+    let newSpace: Record<string, any>;
     let newFixedMP = fixedModelParams;
     let newFixedTr = fixedTraining;
 
