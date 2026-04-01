@@ -2,7 +2,7 @@
  * FitSubTab — Model/Evaluation/Calibration/Training sections with Accordion layout.
  * Renders backend-contract-driven sections for the Fit workflow.
  */
-import { useCallback, useEffect } from "preact/hooks";
+import { useCallback, useEffect, useRef } from "preact/hooks";
 import { Accordion } from "../components/Accordion";
 import { DynForm } from "../components/DynForm";
 import { ModelSection } from "../components/ModelEditors";
@@ -78,20 +78,23 @@ export function FitSubTab({
   const cvStrategy = dfInfo?.cv?.strategy ?? "kfold";
   const currentInnerValid =
     localConfig.training?.early_stopping?.inner_valid?.method ?? "holdout";
+  const handleSectionChangeRef = useRef(handleSectionChange);
+  handleSectionChangeRef.current = handleSectionChange;
+  const localConfigRef = useRef(localConfig);
+  localConfigRef.current = localConfig;
   useEffect(() => {
     const available = filterInnerValidOptions(allInnerValidOpts, { strategy: cvStrategy });
     if (available.length > 0 && !available.includes(currentInnerValid)) {
-      handleSectionChange("training", {
-        ...(localConfig.training ?? {}),
+      const cfg = localConfigRef.current;
+      handleSectionChangeRef.current("training", {
+        ...(cfg.training ?? {}),
         early_stopping: {
-          ...(localConfig.training?.early_stopping ?? {}),
+          ...(cfg.training?.early_stopping ?? {}),
           inner_valid: { method: "holdout" },
         },
       });
     }
-    // Only re-run when strategy or current method changes (primitives only)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cvStrategy, currentInnerValid]);
+  }, [cvStrategy, currentInnerValid, allInnerValidOpts]);
 
   // Calibration
   const calibrationEnabled = localConfig.calibration != null;
