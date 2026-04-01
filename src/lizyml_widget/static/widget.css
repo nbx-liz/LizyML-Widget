@@ -152,6 +152,9 @@
   border-bottom: 1px solid var(--lzw-border);
   background: var(--lzw-bg-1);
   flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 4;
 }
 
 .lzw-header__title {
@@ -171,6 +174,9 @@
   border-bottom: 1px solid var(--lzw-border);
   background: var(--lzw-bg-1);
   flex-shrink: 0;
+  position: sticky;
+  top: 40px;
+  z-index: 3;
 }
 
 .lzw-tabs__btn {
