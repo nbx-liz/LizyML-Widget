@@ -34,6 +34,10 @@ class WidgetService:
     any frontend concepts.
     """
 
+    # Keys injected by build_config at execution time; stripped when
+    # using a run snapshot as base for apply_best_params.
+    _DATA_SECTION_KEYS: frozenset[str] = frozenset(("data", "features", "split", "task"))
+
     def __init__(self, adapter: BackendAdapter) -> None:
         self._adapter = adapter
         self._df: pd.DataFrame | None = None
@@ -707,26 +711,31 @@ class WidgetService:
 
         Returns a canonicalized config with best params applied.
 
-        Uses tune_snapshot (run config) as the authoritative base for
-        model.params and training, and tune_ui_snapshot to recover
-        widget-only fields (smart params, calibration, tuning section)
-        that are stripped from the run config.
+        Uses *tune_snapshot* (the backend-ready run config) as the
+        authoritative base for ``model.params`` and ``training``, and
+        *tune_ui_snapshot* to recover widget-only fields (smart params,
+        calibration) that ``prepare_tune_overrides`` strips from the run
+        config.  Keys present in the run snapshot always win; UI snapshot
+        only fills in absent keys.
         """
         if not params:
             return self.canonicalize_config(copy.deepcopy(current_config))
 
-        # 1. Choose base config from run snapshot
-        _service_keys = frozenset(("data", "features", "split", "task"))
+        # 1. Choose base config from run snapshot, stripping Service-managed
+        #    keys that are re-injected by build_config at execution time.
         if tune_snapshot is not None:
-            base = {k: v for k, v in copy.deepcopy(tune_snapshot).items() if k not in _service_keys}
+            base = {
+                k: v
+                for k, v in copy.deepcopy(tune_snapshot).items()
+                if k not in self._DATA_SECTION_KEYS
+            }
         else:
             base = copy.deepcopy(current_config)
 
         # 2. Restore widget-only fields from UI snapshot.
-        #    prepare_tune_overrides strips smart params (auto_num_leaves, balanced,
-        #    num_leaves_ratio, etc.) and calibration from the run config, so they
-        #    only exist in the UI snapshot.  We restore keys that are absent in the
-        #    run snapshot, preserving run-snapshot values for everything else.
+        #    prepare_tune_overrides strips smart params (auto_num_leaves,
+        #    balanced, num_leaves_ratio, etc.) and calibration from the
+        #    run config, so they only exist in the UI snapshot.
         if tune_ui_snapshot is not None:
             ui = copy.deepcopy(tune_ui_snapshot)
             ui_model = ui.get("model", {})
@@ -738,8 +747,10 @@ class WidgetService:
             # Restore calibration (stripped by prepare_tune_overrides)
             if "calibration" not in base and "calibration" in ui:
                 base = {**base, "calibration": ui["calibration"]}
-            # Strip tuning section (not needed in Fit config)
-            base = {k: v for k, v in base.items() if k != "tuning"}
+
+        # 3. Strip tuning section — not needed in Fit config regardless
+        #    of which snapshot path was taken.
+        base = {k: v for k, v in base.items() if k != "tuning"}
 
         # 3. Classify params
         model_p, smart_p, training_p = self.classify_best_params(params)

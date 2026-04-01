@@ -596,7 +596,7 @@ function SearchSpaceRow({
                     onChange({ mode: m, low: base, high: typeof base === "number" ? base * 2 || 1 : 1, log: false });
                   } else {
                     // Fixed → Choice: build initial choices from available options
-                    let initChoices: any[];
+                    let initChoices: (string | number | boolean)[];
                     if (fieldSchema.enum) {
                       initChoices = fieldSchema.enum;
                     } else if (fieldSchema.items?.enum) {

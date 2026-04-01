@@ -6,6 +6,7 @@ write the failing test first, then fix the implementation.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -13,14 +14,15 @@ import pytest
 
 from lizyml_widget import adapter_params, adapter_schema
 from lizyml_widget.adapter import LizyMLAdapter
+from lizyml_widget.service import WidgetService
 
 
 @pytest.fixture(autouse=True)
-def _reset_caches() -> None:  # type: ignore[misc]
+def _reset_caches() -> Iterator[None]:
     """Reset module-level caches between tests."""
     adapter_params._eval_metrics_cache = None
     adapter_schema.reset_schema_cache()
-    yield  # type: ignore[misc]
+    yield
     adapter_params._eval_metrics_cache = None
     adapter_schema.reset_schema_cache()
 
@@ -201,8 +203,8 @@ class TestBug6DirectionFallback:
     """Direction must be resolved even when evaluation.metrics is empty."""
 
     def test_direction_set_when_eval_metrics_empty(self) -> None:
-        """When tune_evaluation exists but metrics=[], direction should still be set
-        from model.params.metric."""
+        """tuning.evaluation exists with metrics=[] — direction should fall back
+        to model.params.metric[0] via MODEL_METRIC_TO_EVAL mapping."""
         config: dict[str, Any] = {
             "model": {
                 "name": "lgbm",
@@ -303,8 +305,6 @@ class TestBug2DualSnapshot:
 # ── Helpers ──
 
 
-def _make_service(adapter: LizyMLAdapter) -> Any:
+def _make_service(adapter: LizyMLAdapter) -> WidgetService:
     """Create a WidgetService with the given adapter for testing."""
-    from lizyml_widget.service import WidgetService
-
     return WidgetService(adapter=adapter)

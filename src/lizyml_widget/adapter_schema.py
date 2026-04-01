@@ -372,11 +372,9 @@ def _resolve_tune_direction(
         # Fallback: derive direction from model.params.metric when eval_metrics
         # is empty (e.g. tune_evaluation exists but has metrics=[]).
         model_metric = (result.get("model") or {}).get("params", {}).get("metric")
-        if isinstance(model_metric, list) and model_metric:
-            fallback = MODEL_METRIC_TO_EVAL.get(model_metric[0], model_metric[0])
-            cur_params = {**cur_params, "direction": resolve_direction(fallback)}
-        elif isinstance(model_metric, str) and model_metric:
-            fallback = MODEL_METRIC_TO_EVAL.get(model_metric, model_metric)
+        raw = model_metric[0] if isinstance(model_metric, list) else model_metric
+        if isinstance(raw, str) and raw:
+            fallback = MODEL_METRIC_TO_EVAL.get(raw, raw)
             cur_params = {**cur_params, "direction": resolve_direction(fallback)}
 
     return {
