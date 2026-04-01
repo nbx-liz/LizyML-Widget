@@ -615,7 +615,8 @@ class TestP014PrepareRunConfigTuneNewFields:
         assert result["model"]["params"]["n_estimators"] == 2000
         assert result["training"]["seed"] == 42
 
-    def test_smart_params_removed_for_tune(self) -> None:
+    def test_smart_params_preserved_for_tune(self) -> None:
+        """Smart params must be preserved for tune (LizyML uses them per trial)."""
         adapter = LizyMLAdapter()
         config = self._base_config(adapter)
         config["model"]["auto_num_leaves"] = True
@@ -630,11 +631,13 @@ class TestP014PrepareRunConfigTuneNewFields:
 
         result = adapter.prepare_run_config(config, job_type="tune", task="binary")
 
-        # Smart params should not be in the output model section
-        assert "auto_num_leaves" not in result.get("model", {})
-        assert "num_leaves_ratio" not in result.get("model", {})
-        assert "min_data_in_leaf_ratio" not in result.get("model", {})
-        assert "balanced" not in result.get("model", {})
+        # Smart params must be preserved in the output model section
+        model = result.get("model", {})
+        assert model.get("auto_num_leaves") is True
+        assert model.get("num_leaves_ratio") == 0.8
+        assert model.get("min_data_in_leaf_ratio") == 0.01
+        assert model.get("balanced") is True
+        # Calibration must still be stripped (LizyML tune does not use it)
         assert "calibration" not in result
 
     def test_fit_job_not_affected(self) -> None:

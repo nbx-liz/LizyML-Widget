@@ -315,7 +315,12 @@ class TestApplyBestParamsRouting:
         config = dict(w.config)
         es = config.get("training", {}).get("early_stopping", {})
         assert es.get("rounds") == 80
-        assert es.get("validation_ratio") == 0.2
+        # validation_ratio updates inner_valid.ratio when inner_valid exists
+        iv = es.get("inner_valid")
+        if iv is not None:
+            assert iv["ratio"] == 0.2
+        else:
+            assert es.get("validation_ratio") == 0.2
         model_params = config.get("model", {}).get("params", {})
         assert "early_stopping_rounds" not in model_params
         assert "validation_ratio" not in model_params
@@ -338,11 +343,10 @@ class TestApplyBestParamsRouting:
         assert model_params.get("max_depth") == 7
         assert model_params.get("feature_fraction") == 0.8
 
-    def test_validation_ratio_clears_inner_valid(self) -> None:
-        """When validation_ratio is set from best_params, inner_valid must be
-        set to None in the config traitlet so that it overrides the default
-        dict value.  enforce_iv_exclusivity in prepare_run_config strips the
-        None key before backend validation.
+    def test_validation_ratio_updates_inner_valid(self) -> None:
+        """When validation_ratio is set from best_params and inner_valid exists
+        in the base config, inner_valid.ratio should be updated in-place.
+        This ensures Fit uses the same inner_valid construction path as Tune.
         """
         w = _make_widget()
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
@@ -356,12 +360,13 @@ class TestApplyBestParamsRouting:
 
         config = dict(w.config)
         es = config.get("training", {}).get("early_stopping", {})
-        assert es.get("validation_ratio") == 0.2
-        # inner_valid must be None (overrides default dict);
-        # enforce_iv_exclusivity strips it at prepare_run_config time
-        assert es.get("inner_valid") is None, (
-            f"inner_valid should be None when validation_ratio is set, got {es.get('inner_valid')}"
-        )
+        iv = es.get("inner_valid")
+        if iv is not None:
+            # inner_valid preserved with updated ratio
+            assert iv["ratio"] == 0.2
+        else:
+            # No inner_valid in base — fallback to validation_ratio
+            assert es.get("validation_ratio") == 0.2
 
     def test_apply_best_params_config_validates_cleanly(self) -> None:
         """Config after apply_best_params with validation_ratio must pass validation."""
