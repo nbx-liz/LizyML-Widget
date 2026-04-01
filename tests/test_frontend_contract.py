@@ -74,11 +74,11 @@ class TestChipSelectionContract:
         assert "lzw-segment" in task_section, "Task should use segment buttons"
         assert "<select" not in task_section, "Task should not use <select>"
 
-    def test_data_tab_cv_strategy_uses_segment(self) -> None:
+    def test_data_tab_cv_strategy_uses_chip_buttons(self) -> None:
         data_tab = (JS_SRC / "tabs" / "DataTab.tsx").read_text()
         strategy_idx = data_tab.index(">Strategy<")
         strategy_section = data_tab[strategy_idx : strategy_idx + 500]
-        assert "lzw-segment" in strategy_section, "CV Strategy should use segment buttons"
+        assert "lzw-chip" in strategy_section, "CV Strategy should use chip buttons"
         assert "<select" not in strategy_section, "CV Strategy should not use <select>"
 
 

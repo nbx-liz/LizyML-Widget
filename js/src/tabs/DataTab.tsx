@@ -168,12 +168,12 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
       <Accordion title="Cross Validation">
         <div class="lzw-form-row" style="align-items:flex-start">
           <label class="lzw-label">Strategy</label>
-          <div class="lzw-segment lzw-segment--wrap">
+          <div class="lzw-chip-group">
             {CV_STRATEGIES.map((s) => (
               <button
                 key={s.value}
                 type="button"
-                class={`lzw-segment__btn ${cv.strategy === s.value ? "lzw-segment__btn--active" : ""}`}
+                class={`lzw-chip lzw-chip--square ${cv.strategy === s.value ? "lzw-chip--active" : ""}`}
                 aria-pressed={cv.strategy === s.value}
                 onClick={() => sendCv({ ...cv, strategy: s.value })}
               >
@@ -225,36 +225,40 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
             />
           </div>
         )}
-        <div class="lzw-form-row">
-          <label class="lzw-label">Group column</label>
-          <select
-            class="lzw-select"
-            value={cv.group_column ?? ""}
-            onChange={(e) =>
-              sendCv({ ...cv, group_column: (e.target as HTMLSelectElement).value || null })
-            }
-          >
-            <option value="">-- None --</option>
-            {featureCols.map((c: string) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </div>
-        <div class="lzw-form-row">
-          <label class="lzw-label">Time column</label>
-          <select
-            class="lzw-select"
-            value={cv.time_column ?? ""}
-            onChange={(e) =>
-              sendCv({ ...cv, time_column: (e.target as HTMLSelectElement).value || null })
-            }
-          >
-            <option value="">-- None --</option>
-            {featureCols.map((c: string) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </div>
+        {NEEDS_GROUP.has(cv.strategy) && (
+          <div class="lzw-form-row">
+            <label class="lzw-label">Group column</label>
+            <select
+              class="lzw-select"
+              value={cv.group_column ?? ""}
+              onChange={(e) =>
+                sendCv({ ...cv, group_column: (e.target as HTMLSelectElement).value || null })
+              }
+            >
+              <option value="">-- Select --</option>
+              {featureCols.map((c: string) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        {NEEDS_TIME.has(cv.strategy) && (
+          <div class="lzw-form-row">
+            <label class="lzw-label">Time column</label>
+            <select
+              class="lzw-select"
+              value={cv.time_column ?? ""}
+              onChange={(e) =>
+                sendCv({ ...cv, time_column: (e.target as HTMLSelectElement).value || null })
+              }
+            >
+              <option value="">-- Select --</option>
+              {featureCols.map((c: string) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+        )}
         {NEEDS_GAP.has(cv.strategy) && (
           <div class="lzw-form-row">
             <label class="lzw-label">Gap</label>

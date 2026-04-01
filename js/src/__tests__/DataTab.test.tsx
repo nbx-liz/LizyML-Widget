@@ -151,45 +151,59 @@ describe("DataTab — DataFrame shape display", () => {
   });
 });
 
-describe("DataTab — Group/Time column always visible", () => {
-  it("shows group column selector for non-group CV strategy (kfold)", () => {
-    render(<DataTab {...defaultProps} />);
-    expect(screen.getByText("Group column")).toBeDefined();
+describe("DataTab — Group/Time column conditional display", () => {
+  it("hides group column selector for non-group strategy (kfold)", () => {
+    const { container } = render(<DataTab {...defaultProps} />);
+    expect(container.textContent).not.toContain("Group column");
   });
 
-  it("shows time column selector for non-time CV strategy (kfold)", () => {
-    render(<DataTab {...defaultProps} />);
-    expect(screen.getByText("Time column")).toBeDefined();
+  it("hides time column selector for non-time strategy (kfold)", () => {
+    const { container } = render(<DataTab {...defaultProps} />);
+    expect(container.textContent).not.toContain("Time column");
   });
 
-  it("shows group column selector for group CV strategy (group_kfold)", () => {
+  it("shows group column selector for group_kfold", () => {
     render(
       <DataTab
         {...defaultProps}
-        dfInfo={{ ...baseDfInfo, cv: { strategy: "group_kfold", n_splits: 5, group_column: "x1" } }}
+        dfInfo={{ ...baseDfInfo, cv: { strategy: "group_kfold", n_splits: 5 } }}
       />,
     );
     expect(screen.getByText("Group column")).toBeDefined();
   });
 
-  it("fires update_cv with group_column when changed", () => {
-    const sendAction = vi.fn();
-    const { container } = render(
-      <DataTab {...defaultProps} sendAction={sendAction} />,
+  it("shows time column selector for time_series", () => {
+    render(
+      <DataTab
+        {...defaultProps}
+        dfInfo={{ ...baseDfInfo, cv: { strategy: "time_series", n_splits: 5 } }}
+        backendContract={{
+          capabilities: {
+            cv_strategy_fields: {
+              time_series: ["n_splits", "time_col", "gap", "max_train_size", "max_test_size"],
+            },
+          },
+        }}
+      />,
     );
-    // Find the Group column select (second .lzw-select after target)
-    const selects = container.querySelectorAll(".lzw-select");
-    // Target select is first in the Target/Task accordion
-    // Group column and Time column are in the CV accordion
-    const groupSelect = Array.from(selects).find((sel) => {
-      const options = Array.from(sel.querySelectorAll("option"));
-      return options.some((o) => o.textContent === "-- None --");
-    });
-    expect(groupSelect).toBeDefined();
-    fireEvent.change(groupSelect!, { target: { value: "x1" } });
-    expect(sendAction).toHaveBeenCalledWith(
-      "update_cv",
-      expect.objectContaining({ group_column: "x1" }),
+    expect(screen.getByText("Time column")).toBeDefined();
+  });
+
+  it("shows both for group_time_series", () => {
+    render(
+      <DataTab
+        {...defaultProps}
+        dfInfo={{ ...baseDfInfo, cv: { strategy: "group_time_series", n_splits: 5 } }}
+        backendContract={{
+          capabilities: {
+            cv_strategy_fields: {
+              group_time_series: ["n_splits", "group_col", "time_col", "gap"],
+            },
+          },
+        }}
+      />,
     );
+    expect(screen.getByText("Group column")).toBeDefined();
+    expect(screen.getByText("Time column")).toBeDefined();
   });
 });

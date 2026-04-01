@@ -1,11 +1,11 @@
 /**
- * Tests for inner validation options filtering based on group_column / time_column availability.
- * - group_holdout: only visible when dfInfo.cv.group_column is set
- * - time_holdout: only visible when dfInfo.cv.time_column is set
+ * Tests for inner validation options filtering based on CV strategy.
+ * - group_holdout: only visible when CV strategy uses group column
+ * - time_holdout: only visible when CV strategy uses time column
  * - holdout: always visible
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/preact";
+import { render } from "@testing-library/preact";
 import { FitSubTab } from "../tabs/FitSubTab";
 
 const baseUiSchema = {
@@ -67,7 +67,6 @@ const baseProps = {
 };
 
 function getInnerValidOptions(container: HTMLElement): string[] {
-  // Find the Inner Validation select element and extract its option values
   const selects = container.querySelectorAll("select.lzw-select");
   for (const sel of selects) {
     const options = Array.from(sel.querySelectorAll("option"));
@@ -79,8 +78,8 @@ function getInnerValidOptions(container: HTMLElement): string[] {
   return [];
 }
 
-describe("FitSubTab — Inner Validation filtering", () => {
-  it("shows only 'holdout' when neither group_column nor time_column is set", () => {
+describe("FitSubTab — Inner Validation filtering by CV strategy", () => {
+  it("shows only 'holdout' for non-group/non-time strategy (kfold)", () => {
     const { container } = render(<FitSubTab {...baseProps} />);
     const options = getInnerValidOptions(container);
     expect(options).toContain("holdout");
@@ -88,12 +87,12 @@ describe("FitSubTab — Inner Validation filtering", () => {
     expect(options).not.toContain("time_holdout");
   });
 
-  it("shows 'holdout' and 'group_holdout' when group_column is set", () => {
+  it("shows 'group_holdout' for group_kfold strategy", () => {
     const props = {
       ...baseProps,
       dfInfo: {
         ...baseProps.dfInfo,
-        cv: { strategy: "group_kfold", n_splits: 5, group_column: "user_id" },
+        cv: { strategy: "group_kfold", n_splits: 5 },
       },
     };
     const { container } = render(<FitSubTab {...props} />);
@@ -103,12 +102,12 @@ describe("FitSubTab — Inner Validation filtering", () => {
     expect(options).not.toContain("time_holdout");
   });
 
-  it("shows 'holdout' and 'time_holdout' when time_column is set", () => {
+  it("shows 'time_holdout' for time_series strategy", () => {
     const props = {
       ...baseProps,
       dfInfo: {
         ...baseProps.dfInfo,
-        cv: { strategy: "time_series", n_splits: 5, time_column: "date" },
+        cv: { strategy: "time_series", n_splits: 5 },
       },
     };
     const { container } = render(<FitSubTab {...props} />);
@@ -118,17 +117,12 @@ describe("FitSubTab — Inner Validation filtering", () => {
     expect(options).toContain("time_holdout");
   });
 
-  it("shows all options when both group_column and time_column are set", () => {
+  it("shows both group_holdout and time_holdout for group_time_series", () => {
     const props = {
       ...baseProps,
       dfInfo: {
         ...baseProps.dfInfo,
-        cv: {
-          strategy: "group_time_series",
-          n_splits: 5,
-          group_column: "user_id",
-          time_column: "date",
-        },
+        cv: { strategy: "group_time_series", n_splits: 5 },
       },
     };
     const { container } = render(<FitSubTab {...props} />);
@@ -138,8 +132,35 @@ describe("FitSubTab — Inner Validation filtering", () => {
     expect(options).toContain("time_holdout");
   });
 
-  it("resets inner_valid to 'holdout' if current method becomes unavailable", () => {
-    // Scenario: inner_valid is set to group_holdout but group_column is removed
+  it("shows 'group_holdout' for stratified_group_kfold", () => {
+    const props = {
+      ...baseProps,
+      dfInfo: {
+        ...baseProps.dfInfo,
+        cv: { strategy: "stratified_group_kfold", n_splits: 5 },
+      },
+    };
+    const { container } = render(<FitSubTab {...props} />);
+    const options = getInnerValidOptions(container);
+    expect(options).toContain("group_holdout");
+    expect(options).not.toContain("time_holdout");
+  });
+
+  it("shows 'time_holdout' for purged_time_series", () => {
+    const props = {
+      ...baseProps,
+      dfInfo: {
+        ...baseProps.dfInfo,
+        cv: { strategy: "purged_time_series", n_splits: 5 },
+      },
+    };
+    const { container } = render(<FitSubTab {...props} />);
+    const options = getInnerValidOptions(container);
+    expect(options).not.toContain("group_holdout");
+    expect(options).toContain("time_holdout");
+  });
+
+  it("resets inner_valid to 'holdout' when strategy changes to non-group", () => {
     const handleSectionChange = vi.fn();
     const props = {
       ...baseProps,
@@ -155,22 +176,13 @@ describe("FitSubTab — Inner Validation filtering", () => {
       },
       dfInfo: {
         ...baseProps.dfInfo,
-        cv: { strategy: "kfold", n_splits: 5 },  // no group_column
+        cv: { strategy: "kfold", n_splits: 5 },  // non-group strategy
       },
       handleSectionChange,
     };
     const { container } = render(<FitSubTab {...props} />);
     const options = getInnerValidOptions(container);
-    // group_holdout should not be in the options list
     expect(options).not.toContain("group_holdout");
-    // The select value should fall back to holdout
-    const selects = container.querySelectorAll("select.lzw-select");
-    for (const sel of selects) {
-      const opts = Array.from(sel.querySelectorAll("option")).map((o) => o.value);
-      if (opts.includes("holdout")) {
-        expect((sel as HTMLSelectElement).value).toBe("holdout");
-      }
-    }
     // useEffect should auto-reset config to holdout
     expect(handleSectionChange).toHaveBeenCalledWith(
       "training",

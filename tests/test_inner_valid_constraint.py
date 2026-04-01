@@ -1,7 +1,7 @@
 """Tests for inner_valid constraint validation.
 
-group_holdout requires group_column set in cv config.
-time_holdout requires time_column set in cv config.
+group_holdout requires a group-based CV strategy.
+time_holdout requires a time-based CV strategy.
 """
 
 from __future__ import annotations
@@ -33,94 +33,113 @@ def _mock_adapter() -> Any:
     return adapter
 
 
-def _make_service(
-    *,
-    group_column: str | None = None,
-    time_column: str | None = None,
-) -> WidgetService:
-    """Create a WidgetService with data loaded and optional column settings."""
+def _make_service(strategy: str = "kfold") -> WidgetService:
+    """Create a WidgetService with data loaded and given CV strategy."""
     adapter = _mock_adapter()
     svc = WidgetService(adapter=adapter)
     df = pd.DataFrame({"x": range(50), "grp": [0, 1] * 25, "ts": range(50), "y": [0, 1] * 25})
     svc.load_data(df, target="y")
-
-    # Set group/time columns via CV update
-    svc.update_cv(
-        "kfold",
-        5,
-        group_column=group_column,
-        time_column=time_column,
-    )
+    svc.update_cv(strategy, 5)
     return svc
 
 
-class TestInnerValidGroupHoldout:
-    """group_holdout requires group_column."""
-
-    def test_validate_rejects_group_holdout_without_group_column(self) -> None:
-        svc = _make_service(group_column=None)
-        config = svc.initialize_config()
-        config["training"] = {
+def _config_with_inner_valid(method: str) -> dict[str, Any]:
+    """Build a config dict with the given inner_valid method."""
+    return {
+        "training": {
             "early_stopping": {
                 "enabled": True,
-                "inner_valid": {"method": "group_holdout"},
+                "inner_valid": {"method": method},
             },
-        }
+        },
+    }
+
+
+class TestInnerValidGroupHoldout:
+    """group_holdout requires a group-based CV strategy."""
+
+    def test_rejects_group_holdout_with_kfold(self) -> None:
+        svc = _make_service("kfold")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("group_holdout")}
         errors = svc.validate_config(config)
         assert any("group_holdout" in e["message"] for e in errors)
 
-    def test_validate_accepts_group_holdout_with_group_column(self) -> None:
-        svc = _make_service(group_column="grp")
-        config = svc.initialize_config()
-        config["training"] = {
-            "early_stopping": {
-                "enabled": True,
-                "inner_valid": {"method": "group_holdout"},
-            },
-        }
+    def test_rejects_group_holdout_with_time_series(self) -> None:
+        svc = _make_service("time_series")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("group_holdout")}
+        errors = svc.validate_config(config)
+        assert any("group_holdout" in e["message"] for e in errors)
+
+    def test_accepts_group_holdout_with_group_kfold(self) -> None:
+        svc = _make_service("group_kfold")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("group_holdout")}
+        errors = svc.validate_config(config)
+        assert not any("group_holdout" in e.get("message", "") for e in errors)
+
+    def test_accepts_group_holdout_with_stratified_group_kfold(self) -> None:
+        svc = _make_service("stratified_group_kfold")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("group_holdout")}
+        errors = svc.validate_config(config)
+        assert not any("group_holdout" in e.get("message", "") for e in errors)
+
+    def test_accepts_group_holdout_with_group_time_series(self) -> None:
+        svc = _make_service("group_time_series")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("group_holdout")}
+        errors = svc.validate_config(config)
+        assert not any("group_holdout" in e.get("message", "") for e in errors)
+
+    def test_accepts_group_holdout_with_blocked_group_kfold(self) -> None:
+        svc = _make_service("blocked_group_kfold")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("group_holdout")}
         errors = svc.validate_config(config)
         assert not any("group_holdout" in e.get("message", "") for e in errors)
 
 
 class TestInnerValidTimeHoldout:
-    """time_holdout requires time_column."""
+    """time_holdout requires a time-based CV strategy."""
 
-    def test_validate_rejects_time_holdout_without_time_column(self) -> None:
-        svc = _make_service(time_column=None)
-        config = svc.initialize_config()
-        config["training"] = {
-            "early_stopping": {
-                "enabled": True,
-                "inner_valid": {"method": "time_holdout"},
-            },
-        }
+    def test_rejects_time_holdout_with_kfold(self) -> None:
+        svc = _make_service("kfold")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("time_holdout")}
         errors = svc.validate_config(config)
         assert any("time_holdout" in e["message"] for e in errors)
 
-    def test_validate_accepts_time_holdout_with_time_column(self) -> None:
-        svc = _make_service(time_column="ts")
-        config = svc.initialize_config()
-        config["training"] = {
-            "early_stopping": {
-                "enabled": True,
-                "inner_valid": {"method": "time_holdout"},
-            },
-        }
+    def test_rejects_time_holdout_with_group_kfold(self) -> None:
+        svc = _make_service("group_kfold")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("time_holdout")}
+        errors = svc.validate_config(config)
+        assert any("time_holdout" in e["message"] for e in errors)
+
+    def test_accepts_time_holdout_with_time_series(self) -> None:
+        svc = _make_service("time_series")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("time_holdout")}
+        errors = svc.validate_config(config)
+        assert not any("time_holdout" in e.get("message", "") for e in errors)
+
+    def test_accepts_time_holdout_with_purged_time_series(self) -> None:
+        svc = _make_service("purged_time_series")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("time_holdout")}
+        errors = svc.validate_config(config)
+        assert not any("time_holdout" in e.get("message", "") for e in errors)
+
+    def test_accepts_time_holdout_with_group_time_series(self) -> None:
+        svc = _make_service("group_time_series")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("time_holdout")}
         errors = svc.validate_config(config)
         assert not any("time_holdout" in e.get("message", "") for e in errors)
 
 
 class TestInnerValidHoldoutAlwaysOk:
-    """plain holdout always accepted regardless of column settings."""
+    """plain holdout always accepted regardless of strategy."""
 
-    def test_validate_accepts_holdout_without_any_columns(self) -> None:
-        svc = _make_service()
-        config = svc.initialize_config()
-        config["training"] = {
-            "early_stopping": {
-                "enabled": True,
-                "inner_valid": {"method": "holdout"},
-            },
-        }
+    def test_accepts_holdout_with_kfold(self) -> None:
+        svc = _make_service("kfold")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("holdout")}
+        errors = svc.validate_config(config)
+        assert not any("holdout" in e.get("message", "") for e in errors)
+
+    def test_accepts_holdout_with_group_kfold(self) -> None:
+        svc = _make_service("group_kfold")
+        config = {**svc.initialize_config(), **_config_with_inner_valid("holdout")}
         errors = svc.validate_config(config)
         assert not any("holdout" in e.get("message", "") for e in errors)

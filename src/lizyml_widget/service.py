@@ -398,8 +398,13 @@ class WidgetService:
         errors.extend(self._adapter.validate_config(config))
         return errors
 
+    _GROUP_STRATEGIES = frozenset(
+        {"group_kfold", "stratified_group_kfold", "group_time_series", "blocked_group_kfold"}
+    )
+    _TIME_STRATEGIES = frozenset({"time_series", "purged_time_series", "group_time_series"})
+
     def _validate_inner_valid(self, config: dict[str, Any]) -> list[dict[str, Any]]:
-        """Check inner_valid method is compatible with column settings."""
+        """Check inner_valid method is compatible with CV strategy."""
         training = config.get("training") or {}
         early_stopping = training.get("early_stopping") or {}
         inner_valid = early_stopping.get("inner_valid") or {}
@@ -408,26 +413,27 @@ class WidgetService:
         )
 
         cv = self._df_info.get("cv") or {}
+        strategy = cv.get("strategy", "kfold")
         errors: list[dict[str, Any]] = []
 
-        if method == "group_holdout" and not cv.get("group_column"):
+        if method == "group_holdout" and strategy not in self._GROUP_STRATEGIES:
             errors.append(
                 {
                     "field": "training.early_stopping.inner_valid.method",
                     "message": (
-                        "group_holdout requires a group column. "
-                        "Set 'Group column' in the Data tab first."
+                        "group_holdout requires a group-based CV strategy "
+                        "(e.g. group_kfold, stratified_group_kfold, group_time_series)."
                     ),
                     "type": "inner_valid_constraint",
                 }
             )
-        elif method == "time_holdout" and not cv.get("time_column"):
+        elif method == "time_holdout" and strategy not in self._TIME_STRATEGIES:
             errors.append(
                 {
                     "field": "training.early_stopping.inner_valid.method",
                     "message": (
-                        "time_holdout requires a time column. "
-                        "Set 'Time column' in the Data tab first."
+                        "time_holdout requires a time-based CV strategy "
+                        "(e.g. time_series, purged_time_series, group_time_series)."
                     ),
                     "type": "inner_valid_constraint",
                 }

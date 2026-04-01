@@ -25,13 +25,24 @@ interface FitSubTabProps {
   yamlExportCount?: number;
 }
 
-/** Filter inner validation options based on column availability. */
+/** Strategies that use a group column. */
+const GROUP_STRATEGIES = new Set([
+  "group_kfold", "stratified_group_kfold", "group_time_series", "blocked_group_kfold",
+]);
+
+/** Strategies that use a time column. */
+const TIME_STRATEGIES = new Set([
+  "time_series", "purged_time_series", "group_time_series",
+]);
+
+/** Filter inner validation options based on CV strategy. */
 function filterInnerValidOptions(
   options: string[],
   cv: Record<string, any> | undefined,
 ): string[] {
-  const hasGroup = Boolean(cv?.group_column);
-  const hasTime = Boolean(cv?.time_column);
+  const strategy = cv?.strategy ?? "kfold";
+  const hasGroup = GROUP_STRATEGIES.has(strategy);
+  const hasTime = TIME_STRATEGIES.has(strategy);
   return options.filter((opt) => {
     if (opt === "group_holdout") return hasGroup;
     if (opt === "time_holdout") return hasTime;

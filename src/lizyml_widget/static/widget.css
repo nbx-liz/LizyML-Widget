@@ -916,6 +916,10 @@
   background: var(--lzw-bg-2);
 }
 
+.lzw-chip--square {
+  border-radius: 4px;
+}
+
 /* ── Tag Input ───────────────────────────────────────────── */
 .lzw-tag-input {
   display: flex;
