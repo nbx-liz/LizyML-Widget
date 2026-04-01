@@ -111,9 +111,17 @@ class TestBug1SmartParamsSync:
         assert "balanced" in smart_p
         assert "balanced" not in model_p
 
-    def test_smart_params_matches_smart_param_keys(self) -> None:
-        """SMART_PARAMS (classify) must be a superset of SMART_PARAM_KEYS (strip)."""
-        assert adapter_schema.SMART_PARAM_KEYS <= adapter_params.SMART_PARAMS
+    def test_smart_params_covers_all_known_keys(self) -> None:
+        """SMART_PARAMS (classify) must include all known smart param keys."""
+        expected = {
+            "auto_num_leaves",
+            "num_leaves_ratio",
+            "min_data_in_leaf_ratio",
+            "min_data_in_bin_ratio",
+            "feature_weights",
+            "balanced",
+        }
+        assert expected <= adapter_params.SMART_PARAMS
 
 
 # ── Bug 4: prepare_tune_overrides replaces training instead of merging ──
@@ -226,15 +234,17 @@ class TestBug6DirectionFallback:
 
 
 class TestBug2DualSnapshot:
-    """apply_best_params must restore Tune execution config accurately,
-    including smart params and calibration that are stripped in run config."""
+    """apply_best_params must restore calibration from UI snapshot.
 
-    def test_apply_best_params_preserves_smart_params(self) -> None:
-        """Smart params from UI config must survive apply_best_params."""
+    After the fix for Bug 7, smart params are no longer stripped from
+    tune_snapshot, so only calibration needs restoration from UI snapshot.
+    """
+
+    def test_apply_best_params_preserves_smart_params_from_snapshot(self) -> None:
+        """Smart params in tune_snapshot must survive apply_best_params."""
         with patch.dict("sys.modules", _mock_schema_modules()):
             adapter = LizyMLAdapter()
             service = _make_service(adapter)
-            # UI config has smart params
             ui_config: dict[str, Any] = {
                 "config_version": 1,
                 "model": {
@@ -253,12 +263,16 @@ class TestBug2DualSnapshot:
                 "training": {"seed": 42, "early_stopping": {"rounds": 150}},
                 "calibration": {"method": "platt"},
             }
-            # Simulate tune_snapshot that is the run config (stripped):
-            # - smart params removed, calibration removed (as prepare_tune_overrides does)
+            # tune_snapshot now includes smart params (calibration still stripped)
             run_snapshot: dict[str, Any] = {
                 "config_version": 1,
                 "model": {
                     "name": "lgbm",
+                    "auto_num_leaves": True,
+                    "num_leaves_ratio": 0.8,
+                    "min_data_in_leaf_ratio": 0.02,
+                    "min_data_in_bin_ratio": 0.01,
+                    "balanced": False,
                     "params": {"learning_rate": 0.001, "n_estimators": 1500},
                 },
                 "training": {"seed": 42, "early_stopping": {"rounds": 100}},
@@ -269,7 +283,6 @@ class TestBug2DualSnapshot:
                 tune_snapshot=run_snapshot,
                 tune_ui_snapshot=ui_config,
             )
-            # Smart params must be restored from UI snapshot
             model = result.get("model", {})
             assert model.get("auto_num_leaves") is True
             assert model.get("num_leaves_ratio") == 0.8
@@ -288,6 +301,7 @@ class TestBug2DualSnapshot:
                 "training": {"seed": 42, "early_stopping": {"rounds": 150}},
                 "calibration": {"method": "platt"},
             }
+            # calibration is stripped from tune_snapshot
             run_snapshot: dict[str, Any] = {
                 "config_version": 1,
                 "model": {"name": "lgbm", "params": {"learning_rate": 0.001}},
@@ -300,6 +314,237 @@ class TestBug2DualSnapshot:
                 tune_ui_snapshot=ui_config,
             )
             assert result.get("calibration") == {"method": "platt"}
+
+
+# ── Bug 7: prepare_tune_overrides strips smart params that LizyML supports ──
+
+
+class TestBug7TuneSmartParamsPreserved:
+    """prepare_tune_overrides must NOT strip smart params.
+
+    LizyML backend supports smart params during tuning (search space can
+    include category='smart' dimensions, and resolve_smart_params() is
+    called per trial).  Stripping them causes Tune→Apply→Fit score mismatch.
+    """
+
+    def test_prepare_tune_overrides_preserves_smart_params(self) -> None:
+        """Smart params in model.* must survive prepare_tune_overrides."""
+        config: dict[str, Any] = {
+            "model": {
+                "name": "lgbm",
+                "auto_num_leaves": True,
+                "num_leaves_ratio": 0.8,
+                "min_data_in_leaf_ratio": 0.02,
+                "min_data_in_bin_ratio": 0.01,
+                "balanced": False,
+                "feature_weights": {"col_a": 2.0},
+                "params": {"learning_rate": 0.01, "metric": ["auc"]},
+            },
+            "training": {"seed": 42},
+            "tuning": {"optuna": {"params": {"n_trials": 20}, "space": {}}},
+        }
+        result = adapter_schema.prepare_tune_overrides(config)
+        model = result.get("model", {})
+        assert model.get("auto_num_leaves") is True
+        assert model.get("num_leaves_ratio") == 0.8
+        assert model.get("min_data_in_leaf_ratio") == 0.02
+        assert model.get("min_data_in_bin_ratio") == 0.01
+        assert model.get("balanced") is False
+        assert model.get("feature_weights") == {"col_a": 2.0}
+
+    def test_prepare_tune_overrides_still_strips_calibration(self) -> None:
+        """Calibration must still be stripped (LizyML tune does not use it)."""
+        config: dict[str, Any] = {
+            "model": {"name": "lgbm", "params": {}},
+            "training": {"seed": 42},
+            "calibration": {"method": "platt"},
+            "tuning": {"optuna": {"params": {"n_trials": 20}, "space": {}}},
+        }
+        result = adapter_schema.prepare_tune_overrides(config)
+        assert "calibration" not in result
+
+
+class TestBug7TuneApplyFitConfigIdentity:
+    """Tune→Apply to Fit→Fit must produce the same effective config as Tune.
+
+    When best_params from Tune are applied to Fit config, the resulting
+    config (after prepare_run_config) must match the config that Tune
+    actually used for its best trial, except for the tuning section itself.
+    """
+
+    def test_tune_apply_fit_config_matches(self) -> None:
+        """Config used by Tune's best trial == config used by Fit after Apply."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            service = _make_service(adapter)
+
+            # User's original config with smart params
+            user_config: dict[str, Any] = {
+                "config_version": 1,
+                "model": {
+                    "name": "lgbm",
+                    "auto_num_leaves": True,
+                    "num_leaves_ratio": 0.8,
+                    "min_data_in_leaf_ratio": 0.02,
+                    "balanced": False,
+                    "params": {
+                        "learning_rate": 0.001,
+                        "n_estimators": 1500,
+                        "metric": ["auc", "binary_logloss"],
+                    },
+                },
+                "training": {
+                    "seed": 42,
+                    "early_stopping": {"enabled": True, "rounds": 150},
+                },
+            }
+
+            # Step 1: Simulate prepare_run_config for tune
+            tune_config = adapter.prepare_run_config(user_config, job_type="tune", task="binary")
+
+            # Step 2: Simulate best_params from Optuna
+            best_params: dict[str, Any] = {
+                "learning_rate": 0.05,
+                "num_leaves_ratio": 0.7,
+                "early_stopping_rounds": 80,
+            }
+
+            # Step 3: Apply best params (as Widget does)
+            applied_config = service.apply_best_params(
+                best_params,
+                user_config,
+                tune_snapshot=tune_config,
+                tune_ui_snapshot=user_config,
+            )
+
+            # Step 4: Prepare fit config from applied result
+            fit_config = adapter.prepare_run_config(applied_config, job_type="fit", task="binary")
+
+            # The model section (smart params + best params) should match
+            # what Tune would have used for the best trial.
+            # Key invariant: smart params present in tune_config must also
+            # be present in fit_config with the same values (unless overridden
+            # by best_params).
+            tune_model = tune_config.get("model", {})
+            fit_model = fit_config.get("model", {})
+
+            # Smart params must be present in BOTH configs
+            for key in (
+                "auto_num_leaves",
+                "num_leaves_ratio",
+                "min_data_in_leaf_ratio",
+                "balanced",
+            ):
+                assert key in tune_model, f"{key} missing from tune config"
+                assert key in fit_model, f"{key} missing from fit config"
+
+            # Values from best_params should be applied to fit
+            assert fit_model.get("num_leaves_ratio") == 0.7  # from best_params
+
+            # Values NOT in best_params should match tune config
+            assert fit_model.get("auto_num_leaves") == tune_model.get("auto_num_leaves")
+            assert fit_model.get("balanced") == tune_model.get("balanced")
+
+            # Training best params should be applied
+            fit_es = fit_config.get("training", {}).get("early_stopping", {})
+            assert fit_es.get("rounds") == 80  # from best_params
+
+
+# ── Bug 8: Tune fixed params (first_metric_only) not carried to Fit ──
+
+
+class TestBug8TuneFixedParamsCarried:
+    """LizyML's default_fixed_params (e.g. first_metric_only=True) are applied
+    to every trial during Tune but are NOT in best_params.  apply_best_params
+    must carry these values to the Fit config via the tune snapshot so the
+    Fit execution matches the Tune conditions.
+    """
+
+    def test_prepare_tune_overrides_sets_first_metric_only(self) -> None:
+        """prepare_tune_overrides must set first_metric_only=True in the tune
+        config so the tune snapshot carries it to Fit via apply_best_params.
+
+        LizyML's default_fixed_params applies first_metric_only=True to every
+        trial.  The Widget's tune config must mirror this so the snapshot used
+        by apply_best_params contains the same value.
+        """
+        config: dict[str, Any] = {
+            "model": {
+                "name": "lgbm",
+                "params": {"learning_rate": 0.01, "first_metric_only": False},
+            },
+            "training": {"seed": 42},
+            "tuning": {"optuna": {"params": {"n_trials": 20}, "space": {}}},
+        }
+        result = adapter_schema.prepare_tune_overrides(config)
+        params = result.get("model", {}).get("params", {})
+        assert params.get("first_metric_only") is True
+
+
+# ── Bug 9: inner_valid path divergence between Tune and Fit ──
+
+
+class TestBug9InnerValidPathPreserved:
+    """When validation_ratio is in best_params, apply_best_params should
+    update the existing inner_valid.ratio from tune_snapshot rather than
+    replacing inner_valid with None and setting validation_ratio separately.
+    This ensures Fit uses the same inner_valid construction path as Tune.
+    """
+
+    def test_validation_ratio_updates_inner_valid_ratio(self) -> None:
+        """inner_valid from snapshot should have its ratio updated, not be nullified."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            service = _make_service(adapter)
+
+            user_config: dict[str, Any] = {
+                "config_version": 1,
+                "model": {"name": "lgbm", "params": {"learning_rate": 0.001}},
+                "training": {
+                    "seed": 42,
+                    "early_stopping": {
+                        "enabled": True,
+                        "rounds": 150,
+                        "inner_valid": {
+                            "method": "holdout",
+                            "random_state": 42,
+                            "ratio": 0.1,
+                            "stratify": False,
+                        },
+                    },
+                },
+            }
+            # tune_snapshot with inner_valid
+            tune_snapshot: dict[str, Any] = {
+                "config_version": 1,
+                "model": {"name": "lgbm", "params": {"learning_rate": 0.001}},
+                "training": {
+                    "seed": 42,
+                    "early_stopping": {
+                        "enabled": True,
+                        "rounds": 150,
+                        "inner_valid": {
+                            "method": "holdout",
+                            "random_state": 42,
+                            "ratio": 0.1,
+                            "stratify": False,
+                        },
+                    },
+                },
+            }
+            result = service.apply_best_params(
+                {"validation_ratio": 0.25, "early_stopping_rounds": 80},
+                user_config,
+                tune_snapshot=tune_snapshot,
+                tune_ui_snapshot=user_config,
+            )
+            es = result.get("training", {}).get("early_stopping", {})
+            iv = es.get("inner_valid")
+            # inner_valid should be preserved with updated ratio, not None
+            assert iv is not None, "inner_valid should not be None"
+            assert iv["ratio"] == 0.25
+            assert iv["method"] == "holdout"
+            assert iv["random_state"] == 42
 
 
 # ── Helpers ──

@@ -713,10 +713,9 @@ class WidgetService:
 
         Uses *tune_snapshot* (the backend-ready run config) as the
         authoritative base for ``model.params`` and ``training``, and
-        *tune_ui_snapshot* to recover widget-only fields (smart params,
-        calibration) that ``prepare_tune_overrides`` strips from the run
-        config.  Keys present in the run snapshot always win; UI snapshot
-        only fills in absent keys.
+        *tune_ui_snapshot* to recover calibration (stripped by
+        ``prepare_tune_overrides``) and smart params from older snapshots
+        that were generated before the smart-params-preservation fix.
         """
         if not params:
             return self.canonicalize_config(copy.deepcopy(current_config))
@@ -732,10 +731,10 @@ class WidgetService:
         else:
             base = copy.deepcopy(current_config)
 
-        # 2. Restore widget-only fields from UI snapshot.
-        #    prepare_tune_overrides strips smart params (auto_num_leaves,
-        #    balanced, num_leaves_ratio, etc.) and calibration from the
-        #    run config, so they only exist in the UI snapshot.
+        # 2. Restore calibration and back-fill smart params from UI snapshot.
+        #    prepare_tune_overrides strips only calibration.  Smart params are
+        #    now preserved in new snapshots, but older snapshots (generated
+        #    before this fix) may still lack them — back-fill from UI snapshot.
         if tune_ui_snapshot is not None:
             ui = copy.deepcopy(tune_ui_snapshot)
             ui_model = ui.get("model", {})
@@ -744,7 +743,6 @@ class WidgetService:
                 if k != "params" and k != "name" and k not in base_model:
                     base_model = {**base_model, k: v}
             base = {**base, "model": base_model}
-            # Restore calibration (stripped by prepare_tune_overrides)
             if "calibration" not in base and "calibration" in ui:
                 base = {**base, "calibration": ui["calibration"]}
 
@@ -772,8 +770,18 @@ class WidgetService:
             if "early_stopping_rounds" in training_p:
                 es_updates["rounds"] = training_p["early_stopping_rounds"]
             if "validation_ratio" in training_p:
-                es_updates["validation_ratio"] = training_p["validation_ratio"]
-                es_updates["inner_valid"] = None
+                # Update inner_valid.ratio in-place (if present) so Fit uses
+                # the same inner_valid construction path as the Tune trial.
+                existing_iv = es.get("inner_valid")
+                if isinstance(existing_iv, dict):
+                    es_updates["inner_valid"] = {
+                        **existing_iv,
+                        "ratio": training_p["validation_ratio"],
+                    }
+                else:
+                    # No inner_valid in snapshot — fall back to validation_ratio
+                    es_updates["validation_ratio"] = training_p["validation_ratio"]
+                    es_updates["inner_valid"] = None
             new_es = {**es, **es_updates}
             base = {**base, "training": {**training, "early_stopping": new_es}}
 
