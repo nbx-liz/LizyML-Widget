@@ -488,7 +488,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-bottom: 8px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--lzw-border-light);
   margin-bottom: 8px;
   position: sticky;
@@ -537,6 +537,8 @@
   background: var(--lzw-accent);
   color: var(--lzw-accent-fg);
   border-color: var(--lzw-accent);
+  padding: 4px 16px;
+  font-weight: 600;
 }
 
 .lzw-btn--primary:hover:not(:disabled) {

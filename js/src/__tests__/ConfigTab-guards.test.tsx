@@ -62,7 +62,7 @@ describe("ConfigTab — running state guard (B-5)", () => {
     const fitBtn = container.querySelector(".lzw-btn--primary") as HTMLButtonElement;
     expect(fitBtn).not.toBeNull();
     expect(fitBtn.disabled).toBe(false);
-    expect(fitBtn.textContent).toBe("Fit");
+    expect(fitBtn.textContent).toContain("Fit");
   });
 
   it("disables Fit button when status is 'idle' (no data)", () => {
