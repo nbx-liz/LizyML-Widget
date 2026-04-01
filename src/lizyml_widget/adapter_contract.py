@@ -421,7 +421,7 @@ def build_capabilities() -> dict[str, Any]:
             "stratified_kfold": ["n_splits", "shuffle", "random_state"],
             "group_kfold": ["n_splits", "group_col"],
             "stratified_group_kfold": ["n_splits", "group_col"],
-            "time_series": ["n_splits", "gap", "max_train_size", "max_test_size"],
+            "time_series": ["n_splits", "time_col", "gap", "max_train_size", "max_test_size"],
             "purged_time_series": [
                 "n_splits",
                 "time_col",
@@ -431,6 +431,7 @@ def build_capabilities() -> dict[str, Any]:
             "group_time_series": [
                 "n_splits",
                 "group_col",
+                "time_col",
                 "gap",
                 "max_train_size",
                 "max_test_size",

@@ -64,9 +64,12 @@ MODEL_METRIC_TO_EVAL: Mapping[str, str] = _types.MappingProxyType(
 # ── Param category classification for best_params routing ────
 SMART_PARAMS: frozenset[str] = frozenset(
     {
+        "auto_num_leaves",
         "num_leaves_ratio",
         "min_data_in_leaf_ratio",
         "min_data_in_bin_ratio",
+        "feature_weights",
+        "balanced",
     }
 )
 TRAINING_PARAMS: frozenset[str] = frozenset(
@@ -80,7 +83,12 @@ TRAINING_PARAMS: frozenset[str] = frozenset(
 def classify_best_params(
     params: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Split best_params into (model, smart, training) category dicts."""
+    """Split best_params into (model, smart, training) category dicts.
+
+    Also normalizes model params that require format conversion:
+    - ``metric``: Optuna returns a single string but LightGBM and the UI
+      expect a list, so a bare string is wrapped in ``[value]``.
+    """
     model_p: dict[str, Any] = {}
     smart_p: dict[str, Any] = {}
     training_p: dict[str, Any] = {}
@@ -91,6 +99,9 @@ def classify_best_params(
             training_p[k] = v
         else:
             model_p[k] = v
+    # Normalize metric: single string → list (LightGBM expects list)
+    if "metric" in model_p and isinstance(model_p["metric"], str):
+        model_p = {**model_p, "metric": [model_p["metric"]]}
     return model_p, smart_p, training_p
 
 

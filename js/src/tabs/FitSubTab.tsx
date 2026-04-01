@@ -2,7 +2,7 @@
  * FitSubTab — Model/Evaluation/Calibration/Training sections with Accordion layout.
  * Renders backend-contract-driven sections for the Fit workflow.
  */
-import { useCallback } from "preact/hooks";
+import { useCallback, useEffect, useRef } from "preact/hooks";
 import { Accordion } from "../components/Accordion";
 import { DynForm } from "../components/DynForm";
 import { ModelSection } from "../components/ModelEditors";
@@ -23,6 +23,31 @@ interface FitSubTabProps {
   rawYaml: string | null;
   setRawYaml: (value: string | null) => void;
   yamlExportCount?: number;
+}
+
+/** Strategies that use a group column. */
+const GROUP_STRATEGIES = new Set([
+  "group_kfold", "stratified_group_kfold", "group_time_series", "blocked_group_kfold",
+]);
+
+/** Strategies that use a time column. */
+const TIME_STRATEGIES = new Set([
+  "time_series", "purged_time_series", "group_time_series",
+]);
+
+/** Filter inner validation options based on CV strategy. */
+function filterInnerValidOptions(
+  options: string[],
+  cv: Record<string, any> | undefined,
+): string[] {
+  const strategy = cv?.strategy ?? "kfold";
+  const hasGroup = GROUP_STRATEGIES.has(strategy);
+  const hasTime = TIME_STRATEGIES.has(strategy);
+  return options.filter((opt) => {
+    if (opt === "group_holdout") return hasGroup;
+    if (opt === "time_holdout") return hasTime;
+    return true;
+  });
 }
 
 export function FitSubTab({
@@ -46,6 +71,30 @@ export function FitSubTab({
   const defaults: Record<string, any> = uiSchema.defaults ?? {};
   const sectionKeys = sections.map((s) => s.key);
   const unknownKeys = getUnknownKeys(configSchema, sectionKeys);
+
+  // Auto-reset inner_valid method when CV strategy changes
+  const allInnerValidOpts: string[] = uiSchema.inner_valid_options ?? [];
+  const availableInnerValidOpts = filterInnerValidOptions(allInnerValidOpts, dfInfo?.cv);
+  const cvStrategy = dfInfo?.cv?.strategy ?? "kfold";
+  const currentInnerValid =
+    localConfig.training?.early_stopping?.inner_valid?.method ?? "holdout";
+  const handleSectionChangeRef = useRef(handleSectionChange);
+  handleSectionChangeRef.current = handleSectionChange;
+  const localConfigRef = useRef(localConfig);
+  localConfigRef.current = localConfig;
+  useEffect(() => {
+    const available = filterInnerValidOptions(allInnerValidOpts, { strategy: cvStrategy });
+    if (available.length > 0 && !available.includes(currentInnerValid)) {
+      const cfg = localConfigRef.current;
+      handleSectionChangeRef.current("training", {
+        ...(cfg.training ?? {}),
+        early_stopping: {
+          ...(cfg.training?.early_stopping ?? {}),
+          inner_valid: { method: "holdout" },
+        },
+      });
+    }
+  }, [cvStrategy, currentInnerValid, allInnerValidOpts]);
 
   // Calibration
   const calibrationEnabled = localConfig.calibration != null;
@@ -246,7 +295,7 @@ export function FitSubTab({
         if (key === "training") {
           const training = (localConfig.training ?? {}) as Record<string, any>;
           const earlyStop = training.early_stopping ?? {};
-          const innerValidOpts: string[] = uiSchema.inner_valid_options ?? [];
+          const innerValidOpts = availableInnerValidOpts;
           return (
             <Accordion key="training" title="Training">
               <div class="lzw-form-row">
@@ -314,7 +363,9 @@ export function FitSubTab({
                     <label class="lzw-label">Inner Validation</label>
                     <select
                       class="lzw-select"
-                      value={earlyStop.inner_valid?.method ?? "holdout"}
+                      value={innerValidOpts.includes(earlyStop.inner_valid?.method ?? "holdout")
+                        ? (earlyStop.inner_valid?.method ?? "holdout")
+                        : "holdout"}
                       onChange={(e) => {
                         const v = (e.target as HTMLSelectElement).value;
                         handleSectionChange("training", {

@@ -150,3 +150,60 @@ describe("DataTab — DataFrame shape display", () => {
     expect(shape.textContent).toContain("5 cols");
   });
 });
+
+describe("DataTab — Group/Time column conditional display", () => {
+  it("hides group column selector for non-group strategy (kfold)", () => {
+    const { container } = render(<DataTab {...defaultProps} />);
+    expect(container.textContent).not.toContain("Group column");
+  });
+
+  it("hides time column selector for non-time strategy (kfold)", () => {
+    const { container } = render(<DataTab {...defaultProps} />);
+    expect(container.textContent).not.toContain("Time column");
+  });
+
+  it("shows group column selector for group_kfold", () => {
+    render(
+      <DataTab
+        {...defaultProps}
+        dfInfo={{ ...baseDfInfo, cv: { strategy: "group_kfold", n_splits: 5 } }}
+      />,
+    );
+    expect(screen.getByText("Group column")).toBeDefined();
+  });
+
+  it("shows time column selector for time_series", () => {
+    render(
+      <DataTab
+        {...defaultProps}
+        dfInfo={{ ...baseDfInfo, cv: { strategy: "time_series", n_splits: 5 } }}
+        backendContract={{
+          capabilities: {
+            cv_strategy_fields: {
+              time_series: ["n_splits", "time_col", "gap", "max_train_size", "max_test_size"],
+            },
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText("Time column")).toBeDefined();
+  });
+
+  it("shows both for group_time_series", () => {
+    render(
+      <DataTab
+        {...defaultProps}
+        dfInfo={{ ...baseDfInfo, cv: { strategy: "group_time_series", n_splits: 5 } }}
+        backendContract={{
+          capabilities: {
+            cv_strategy_fields: {
+              group_time_series: ["n_splits", "group_col", "time_col", "gap"],
+            },
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText("Group column")).toBeDefined();
+    expect(screen.getByText("Time column")).toBeDefined();
+  });
+});
