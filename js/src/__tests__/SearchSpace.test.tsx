@@ -120,3 +120,79 @@ describe("SearchSpace — empty catalog", () => {
     expect(screen.getByText("Parameter")).toBeDefined();
   });
 });
+
+// ── Bug 7: metric Fixed→Choice should not nest array in choices ──
+
+describe("SearchSpace — Bug 7: metric Fixed→Choice mode switch", () => {
+  const metricUiSchema = {
+    option_sets: {
+      objective: { binary: ["binary"] },
+      model_metric: { binary: ["auc", "binary_logloss", "binary_error"] },
+      metric: { binary: ["auc", "logloss", "accuracy"] },
+    },
+    step_map: {},
+    search_space_catalog: [
+      { key: "metric", title: "Metric", paramType: "string", modes: ["fixed", "choice"], group: "model_params" },
+    ],
+    special_search_space_fields: { metric: "model_metric" },
+    additional_params: [],
+    conditional_visibility: {},
+  };
+
+  it("initializes choices as flat array of strings when switching from Fixed", () => {
+    const onChange = vi.fn();
+    render(
+      <SearchSpace
+        {...defaultProps}
+        uiSchema={metricUiSchema}
+        fixedModelParams={{ metric: ["auc", "binary_logloss"] }}
+        modelConfig={{ params: { metric: ["auc", "binary_logloss"] } }}
+        onChange={onChange}
+      />,
+    );
+    // Switch from Fixed to Choice
+    const choiceBtn = screen.getByText("Choice");
+    fireEvent.click(choiceBtn);
+    expect(onChange).toHaveBeenCalled();
+    const update = onChange.mock.calls[0][0];
+    const choices = update.space.metric?.choices ?? [];
+    // Every element must be a string — no nested arrays
+    for (const c of choices) {
+      expect(typeof c).toBe("string");
+    }
+  });
+});
+
+// ── Bug 8: boolean Fixed→Choice should include both true and false ──
+
+describe("SearchSpace — Bug 8: boolean Fixed→Choice mode switch", () => {
+  const boolUiSchema = {
+    option_sets: { objective: { binary: ["binary"] } },
+    step_map: {},
+    search_space_catalog: [
+      { key: "auto_num_leaves", title: "Auto Num Leaves", paramType: "boolean", modes: ["fixed", "choice"], group: "smart_params", default: true },
+    ],
+    additional_params: [],
+    conditional_visibility: {},
+  };
+
+  it("initializes choices with both true and false", () => {
+    const onChange = vi.fn();
+    render(
+      <SearchSpace
+        {...defaultProps}
+        uiSchema={boolUiSchema}
+        fixedModelParams={{ auto_num_leaves: true }}
+        modelConfig={{ auto_num_leaves: true }}
+        onChange={onChange}
+      />,
+    );
+    const choiceBtn = screen.getByText("Choice");
+    fireEvent.click(choiceBtn);
+    expect(onChange).toHaveBeenCalled();
+    const update = onChange.mock.calls[0][0];
+    const choices = update.space.auto_num_leaves?.choices ?? [];
+    expect(choices).toContain(true);
+    expect(choices).toContain(false);
+  });
+});

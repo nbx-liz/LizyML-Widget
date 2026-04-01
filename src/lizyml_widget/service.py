@@ -34,6 +34,10 @@ class WidgetService:
     any frontend concepts.
     """
 
+    # Keys injected by build_config at execution time; stripped when
+    # using a run snapshot as base for apply_best_params.
+    _DATA_SECTION_KEYS: frozenset[str] = frozenset(("data", "features", "split", "task"))
+
     def __init__(self, adapter: BackendAdapter) -> None:
         self._adapter = adapter
         self._df: pd.DataFrame | None = None
@@ -701,36 +705,66 @@ class WidgetService:
         current_config: dict[str, Any],
         *,
         tune_snapshot: dict[str, Any] | None = None,
+        tune_ui_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Apply best_params from Tune to config, routing by category.
 
         Returns a canonicalized config with best params applied.
-        Uses tune_snapshot as base if available, otherwise current_config.
+
+        Uses *tune_snapshot* (the backend-ready run config) as the
+        authoritative base for ``model.params`` and ``training``, and
+        *tune_ui_snapshot* to recover widget-only fields (smart params,
+        calibration) that ``prepare_tune_overrides`` strips from the run
+        config.  Keys present in the run snapshot always win; UI snapshot
+        only fills in absent keys.
         """
         if not params:
             return self.canonicalize_config(copy.deepcopy(current_config))
 
-        # 1. Choose base config
+        # 1. Choose base config from run snapshot, stripping Service-managed
+        #    keys that are re-injected by build_config at execution time.
         if tune_snapshot is not None:
-            base = copy.deepcopy(tune_snapshot)
-            for key in ("data", "features", "split", "task"):
-                base.pop(key, None)
+            base = {
+                k: v
+                for k, v in copy.deepcopy(tune_snapshot).items()
+                if k not in self._DATA_SECTION_KEYS
+            }
         else:
             base = copy.deepcopy(current_config)
 
-        # 2. Classify params
+        # 2. Restore widget-only fields from UI snapshot.
+        #    prepare_tune_overrides strips smart params (auto_num_leaves,
+        #    balanced, num_leaves_ratio, etc.) and calibration from the
+        #    run config, so they only exist in the UI snapshot.
+        if tune_ui_snapshot is not None:
+            ui = copy.deepcopy(tune_ui_snapshot)
+            ui_model = ui.get("model", {})
+            base_model = base.get("model", {})
+            for k, v in ui_model.items():
+                if k != "params" and k != "name" and k not in base_model:
+                    base_model = {**base_model, k: v}
+            base = {**base, "model": base_model}
+            # Restore calibration (stripped by prepare_tune_overrides)
+            if "calibration" not in base and "calibration" in ui:
+                base = {**base, "calibration": ui["calibration"]}
+
+        # 3. Strip tuning section — not needed in Fit config regardless
+        #    of which snapshot path was taken.
+        base = {k: v for k, v in base.items() if k != "tuning"}
+
+        # 3. Classify params
         model_p, smart_p, training_p = self.classify_best_params(params)
 
-        # 3. Merge model params → model.params
+        # 4. Merge model params → model.params
         model_section = dict(base.get("model", {}))
         model_params = {**dict(model_section.get("params", {})), **model_p}
         model_section = {**model_section, "params": model_params}
 
-        # 4. Merge smart params → model.* level
+        # 5. Merge smart params → model.* level
         # smart_p already contains only smart-category keys (classified by adapter)
         base = {**base, "model": {**model_section, **smart_p}}
 
-        # 5. Merge training params → training.early_stopping.*
+        # 6. Merge training params → training.early_stopping.*
         if training_p:
             training = dict(base.get("training", {}))
             es = dict(training.get("early_stopping", {}))

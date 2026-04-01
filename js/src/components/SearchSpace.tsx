@@ -595,7 +595,20 @@ function SearchSpaceRow({
                     const base = config.fixed ?? fieldSchema.default ?? 0;
                     onChange({ mode: m, low: base, high: typeof base === "number" ? base * 2 || 1 : 1, log: false });
                   } else {
-                    onChange({ mode: m, choices: fieldSchema.enum ?? [config.fixed ?? fieldSchema.default] });
+                    // Fixed → Choice: build initial choices from available options
+                    let initChoices: (string | number | boolean)[];
+                    if (fieldSchema.enum) {
+                      initChoices = fieldSchema.enum;
+                    } else if (fieldSchema.items?.enum) {
+                      // array-type fields (e.g. metric): use item enum, flatten fixed value
+                      initChoices = Array.isArray(config.fixed) ? config.fixed : [config.fixed ?? fieldSchema.default];
+                    } else if (fieldSchema.type === "boolean") {
+                      // boolean fields: always offer both options
+                      initChoices = [true, false];
+                    } else {
+                      initChoices = [config.fixed ?? fieldSchema.default];
+                    }
+                    onChange({ mode: m, choices: initChoices });
                   }
                 }}
               >
