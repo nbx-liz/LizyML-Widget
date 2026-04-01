@@ -918,7 +918,7 @@ Search Space の全パラメータ一覧（初期 backend contract 例）:
 | `num_leaves` | LGBMParam | Fixed | `256` | Fixed / Range / Choice | `auto_num_leaves=false` 時、または `auto_num_leaves` が Choice モードの時に表示 |
 | `min_data_in_leaf_ratio` | LGBMConfig | Fixed | `0.01` | Fixed / Range |
 | `min_data_in_bin_ratio` | LGBMConfig | Fixed | `0.01` | Fixed / Range |
-| `feature_weights` | LGBMConfig | Fixed | `null` | Fixed | Fixed 限定。`lzw-toggle` で ON/OFF。Tune の `resolve_smart_params_from_dict` には feature_weights ロジックがないため探索不可 |
+| `feature_weights` | LGBMConfig | Fixed | `null` | Fixed | Fixed 限定。`lzw-toggle` で ON/OFF。LizyML の `default_space` に含まれず、特徴量名→重み値の dict 構造が Optuna の探索次元に適さないため Fixed のみ |
 | `balanced` | LGBMConfig | Fixed | `null` | Fixed / Choice |
 | `seed` | Training | Fixed | `42` | Fixed | Fixed 限定。`lzw-stepper` |
 | `early_stopping.enabled` | Training | Fixed | `true` | Fixed | Fixed 限定。`lzw-toggle` |
