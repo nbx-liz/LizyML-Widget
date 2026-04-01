@@ -759,15 +759,6 @@
   background: var(--lzw-bg-2);
 }
 
-.lzw-segment--wrap {
-  gap: 4px;
-}
-
-.lzw-segment--wrap .lzw-segment__btn {
-  border-radius: 4px;
-  border-right: 1px solid var(--lzw-border);
-}
-
 /* ── Search Space ────────────────────────────────────────── */
 .lzw-search-space__range {
   display: flex;

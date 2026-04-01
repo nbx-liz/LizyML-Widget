@@ -136,10 +136,10 @@ class TestInnerValidHoldoutAlwaysOk:
         svc = _make_service("kfold")
         config = {**svc.initialize_config(), **_config_with_inner_valid("holdout")}
         errors = svc.validate_config(config)
-        assert not any("holdout" in e.get("message", "") for e in errors)
+        assert not any(e.get("type") == "inner_valid_constraint" for e in errors)
 
     def test_accepts_holdout_with_group_kfold(self) -> None:
         svc = _make_service("group_kfold")
         config = {**svc.initialize_config(), **_config_with_inner_valid("holdout")}
         errors = svc.validate_config(config)
-        assert not any("holdout" in e.get("message", "") for e in errors)
+        assert not any(e.get("type") == "inner_valid_constraint" for e in errors)

@@ -72,24 +72,26 @@ export function FitSubTab({
   const sectionKeys = sections.map((s) => s.key);
   const unknownKeys = getUnknownKeys(configSchema, sectionKeys);
 
-  // Auto-reset inner_valid method when column becomes unavailable
+  // Auto-reset inner_valid method when CV strategy changes
   const allInnerValidOpts: string[] = uiSchema.inner_valid_options ?? [];
   const availableInnerValidOpts = filterInnerValidOptions(allInnerValidOpts, dfInfo?.cv);
+  const cvStrategy = dfInfo?.cv?.strategy ?? "kfold";
   const currentInnerValid =
     localConfig.training?.early_stopping?.inner_valid?.method ?? "holdout";
   useEffect(() => {
-    if (
-      availableInnerValidOpts.length > 0 &&
-      !availableInnerValidOpts.includes(currentInnerValid)
-    ) {
-      const training = localConfig.training ?? {};
-      const earlyStop = training.early_stopping ?? {};
+    const available = filterInnerValidOptions(allInnerValidOpts, { strategy: cvStrategy });
+    if (available.length > 0 && !available.includes(currentInnerValid)) {
       handleSectionChange("training", {
-        ...training,
-        early_stopping: { ...earlyStop, inner_valid: { method: "holdout" } },
+        ...(localConfig.training ?? {}),
+        early_stopping: {
+          ...(localConfig.training?.early_stopping ?? {}),
+          inner_valid: { method: "holdout" },
+        },
       });
     }
-  }, [currentInnerValid, availableInnerValidOpts, localConfig, handleSectionChange]);
+    // Only re-run when strategy or current method changes (primitives only)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cvStrategy, currentInnerValid]);
 
   // Calibration
   const calibrationEnabled = localConfig.calibration != null;
