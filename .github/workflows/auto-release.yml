@@ -73,10 +73,7 @@ jobs:
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file /tmp/release-notes.md
 
-      - name: Trigger PyPI release workflow
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run release.yml \
-            --ref "${{ steps.version.outputs.tag }}" \
-            -f tag="${{ steps.version.outputs.tag }}"
+      # Note: The tag push above already triggers release.yml via
+      # the "push: tags: v*" event.  No workflow_dispatch needed.
+      # Use "gh workflow run release.yml -f tag=vX.Y.Z" only for
+      # manual retries when the tag-triggered run fails.
