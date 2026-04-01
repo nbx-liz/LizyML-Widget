@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-02
+
+### Added
+- Sticky header and tab bar — headers stay visible when scrolling long config forms
+- Inner validation method filtering by column availability (group/time columns)
+- Run button visibility improvements in Config tab subtab bar
+
+### Changed
+- Config tab subtab bar padding and layout refined
+
+### Fixed
+- `classify_best_params` misclassified `auto_num_leaves`, `feature_weights`, `balanced` as model params instead of smart params
+- `prepare_tune_overrides` replaced entire `training` section instead of shallow-merging (lost `seed`)
+- `apply_best_params` lost smart params and calibration when using run-config snapshot (now uses dual snapshot: run config + UI config)
+- Optuna `best_params.metric` (single string) was not wrapped in list for LightGBM
+- Tune direction not resolved when `evaluation.metrics` was empty (now falls back to `model.params.metric`)
+- SearchSpace Fixed→Choice mode switch nested array values in choices for `metric` field
+- SearchSpace Fixed→Choice for boolean fields initialized with only one value instead of `[true, false]`
+- `useEffect` loop risk in ConfigTab
+
+## [0.6.0] - 2026-03-28
+
+### Added
+- `w.load_model(path)` — load trained model from file for inference without re-fitting (P-024)
+- `w.model_info` — property returning model metadata (loaded state, parameters)
+- Learning Curve metric filter with precision_at_k support
+- E2E test infrastructure: Playwright + pytest-playwright
+- Component tests: DataTab, DynForm, SearchSpace, ConfigFooter, ProgressView
+- JS tests integrated into CI pipeline
+
+### Changed
+- Backend Contract driven CV decoupling (P-025)
+- Dependabot PRs now target `develop` branch
+
+### Fixed
+- Binary buffer for large plots + download fallback on Colab
+- Redundant conditionals in widget.py and ConfigTab.tsx
+- CI: added actions:write to auto-release workflow
+
 ## [0.5.0] - 2026-03-28
 
 ### Added
