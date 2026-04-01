@@ -2,7 +2,7 @@
  * FitSubTab — Model/Evaluation/Calibration/Training sections with Accordion layout.
  * Renders backend-contract-driven sections for the Fit workflow.
  */
-import { useCallback } from "preact/hooks";
+import { useCallback, useEffect } from "preact/hooks";
 import { Accordion } from "../components/Accordion";
 import { DynForm } from "../components/DynForm";
 import { ModelSection } from "../components/ModelEditors";
@@ -23,6 +23,20 @@ interface FitSubTabProps {
   rawYaml: string | null;
   setRawYaml: (value: string | null) => void;
   yamlExportCount?: number;
+}
+
+/** Filter inner validation options based on column availability. */
+function filterInnerValidOptions(
+  options: string[],
+  cv: Record<string, any> | undefined,
+): string[] {
+  const hasGroup = Boolean(cv?.group_column);
+  const hasTime = Boolean(cv?.time_column);
+  return options.filter((opt) => {
+    if (opt === "group_holdout") return hasGroup;
+    if (opt === "time_holdout") return hasTime;
+    return true;
+  });
 }
 
 export function FitSubTab({
@@ -46,6 +60,25 @@ export function FitSubTab({
   const defaults: Record<string, any> = uiSchema.defaults ?? {};
   const sectionKeys = sections.map((s) => s.key);
   const unknownKeys = getUnknownKeys(configSchema, sectionKeys);
+
+  // Auto-reset inner_valid method when column becomes unavailable
+  const allInnerValidOpts: string[] = uiSchema.inner_valid_options ?? [];
+  const availableInnerValidOpts = filterInnerValidOptions(allInnerValidOpts, dfInfo?.cv);
+  const currentInnerValid =
+    localConfig.training?.early_stopping?.inner_valid?.method ?? "holdout";
+  useEffect(() => {
+    if (
+      availableInnerValidOpts.length > 0 &&
+      !availableInnerValidOpts.includes(currentInnerValid)
+    ) {
+      const training = localConfig.training ?? {};
+      const earlyStop = training.early_stopping ?? {};
+      handleSectionChange("training", {
+        ...training,
+        early_stopping: { ...earlyStop, inner_valid: { method: "holdout" } },
+      });
+    }
+  }, [currentInnerValid, availableInnerValidOpts, localConfig, handleSectionChange]);
 
   // Calibration
   const calibrationEnabled = localConfig.calibration != null;
@@ -246,7 +279,7 @@ export function FitSubTab({
         if (key === "training") {
           const training = (localConfig.training ?? {}) as Record<string, any>;
           const earlyStop = training.early_stopping ?? {};
-          const innerValidOpts: string[] = uiSchema.inner_valid_options ?? [];
+          const innerValidOpts = availableInnerValidOpts;
           return (
             <Accordion key="training" title="Training">
               <div class="lzw-form-row">
@@ -314,7 +347,9 @@ export function FitSubTab({
                     <label class="lzw-label">Inner Validation</label>
                     <select
                       class="lzw-select"
-                      value={earlyStop.inner_valid?.method ?? "holdout"}
+                      value={innerValidOpts.includes(earlyStop.inner_valid?.method ?? "holdout")
+                        ? (earlyStop.inner_valid?.method ?? "holdout")
+                        : "holdout"}
                       onChange={(e) => {
                         const v = (e.target as HTMLSelectElement).value;
                         handleSectionChange("training", {

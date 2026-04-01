@@ -394,7 +394,46 @@ class WidgetService:
     # ── Config ───────────────────────────────────────────────
 
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
-        return self._adapter.validate_config(config)
+        errors = self._validate_inner_valid(config)
+        errors.extend(self._adapter.validate_config(config))
+        return errors
+
+    def _validate_inner_valid(self, config: dict[str, Any]) -> list[dict[str, Any]]:
+        """Check inner_valid method is compatible with column settings."""
+        training = config.get("training") or {}
+        early_stopping = training.get("early_stopping") or {}
+        inner_valid = early_stopping.get("inner_valid") or {}
+        method = (
+            inner_valid.get("method", "holdout") if isinstance(inner_valid, dict) else inner_valid
+        )
+
+        cv = self._df_info.get("cv") or {}
+        errors: list[dict[str, Any]] = []
+
+        if method == "group_holdout" and not cv.get("group_column"):
+            errors.append(
+                {
+                    "field": "training.early_stopping.inner_valid.method",
+                    "message": (
+                        "group_holdout requires a group column. "
+                        "Set 'Group column' in the Data tab first."
+                    ),
+                    "type": "inner_valid_constraint",
+                }
+            )
+        elif method == "time_holdout" and not cv.get("time_column"):
+            errors.append(
+                {
+                    "field": "training.early_stopping.inner_valid.method",
+                    "message": (
+                        "time_holdout requires a time column. "
+                        "Set 'Time column' in the Data tab first."
+                    ),
+                    "type": "inner_valid_constraint",
+                }
+            )
+
+        return errors
 
     def build_config(self, user_config: dict[str, Any]) -> dict[str, Any]:
         """Merge df_info settings with user config for the adapter."""

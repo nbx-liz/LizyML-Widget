@@ -150,3 +150,46 @@ describe("DataTab — DataFrame shape display", () => {
     expect(shape.textContent).toContain("5 cols");
   });
 });
+
+describe("DataTab — Group/Time column always visible", () => {
+  it("shows group column selector for non-group CV strategy (kfold)", () => {
+    render(<DataTab {...defaultProps} />);
+    expect(screen.getByText("Group column")).toBeDefined();
+  });
+
+  it("shows time column selector for non-time CV strategy (kfold)", () => {
+    render(<DataTab {...defaultProps} />);
+    expect(screen.getByText("Time column")).toBeDefined();
+  });
+
+  it("shows group column selector for group CV strategy (group_kfold)", () => {
+    render(
+      <DataTab
+        {...defaultProps}
+        dfInfo={{ ...baseDfInfo, cv: { strategy: "group_kfold", n_splits: 5, group_column: "x1" } }}
+      />,
+    );
+    expect(screen.getByText("Group column")).toBeDefined();
+  });
+
+  it("fires update_cv with group_column when changed", () => {
+    const sendAction = vi.fn();
+    const { container } = render(
+      <DataTab {...defaultProps} sendAction={sendAction} />,
+    );
+    // Find the Group column select (second .lzw-select after target)
+    const selects = container.querySelectorAll(".lzw-select");
+    // Target select is first in the Target/Task accordion
+    // Group column and Time column are in the CV accordion
+    const groupSelect = Array.from(selects).find((sel) => {
+      const options = Array.from(sel.querySelectorAll("option"));
+      return options.some((o) => o.textContent === "-- None --");
+    });
+    expect(groupSelect).toBeDefined();
+    fireEvent.change(groupSelect!, { target: { value: "x1" } });
+    expect(sendAction).toHaveBeenCalledWith(
+      "update_cv",
+      expect.objectContaining({ group_column: "x1" }),
+    );
+  });
+});

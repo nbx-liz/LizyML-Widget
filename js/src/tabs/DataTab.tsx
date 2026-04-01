@@ -225,40 +225,36 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
             />
           </div>
         )}
-        {NEEDS_GROUP.has(cv.strategy) && (
-          <div class="lzw-form-row">
-            <label class="lzw-label">Group column</label>
-            <select
-              class="lzw-select"
-              value={cv.group_column ?? ""}
-              onChange={(e) =>
-                sendCv({ ...cv, group_column: (e.target as HTMLSelectElement).value || null })
-              }
-            >
-              <option value="">-- Select --</option>
-              {featureCols.map((c: string) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
-        )}
-        {NEEDS_TIME.has(cv.strategy) && (
-          <div class="lzw-form-row">
-            <label class="lzw-label">Time column</label>
-            <select
-              class="lzw-select"
-              value={cv.time_column ?? ""}
-              onChange={(e) =>
-                sendCv({ ...cv, time_column: (e.target as HTMLSelectElement).value || null })
-              }
-            >
-              <option value="">-- Select --</option>
-              {featureCols.map((c: string) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
-        )}
+        <div class="lzw-form-row">
+          <label class="lzw-label">Group column</label>
+          <select
+            class="lzw-select"
+            value={cv.group_column ?? ""}
+            onChange={(e) =>
+              sendCv({ ...cv, group_column: (e.target as HTMLSelectElement).value || null })
+            }
+          >
+            <option value="">-- None --</option>
+            {featureCols.map((c: string) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+        <div class="lzw-form-row">
+          <label class="lzw-label">Time column</label>
+          <select
+            class="lzw-select"
+            value={cv.time_column ?? ""}
+            onChange={(e) =>
+              sendCv({ ...cv, time_column: (e.target as HTMLSelectElement).value || null })
+            }
+          >
+            <option value="">-- None --</option>
+            {featureCols.map((c: string) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
         {NEEDS_GAP.has(cv.strategy) && (
           <div class="lzw-form-row">
             <label class="lzw-label">Gap</label>
