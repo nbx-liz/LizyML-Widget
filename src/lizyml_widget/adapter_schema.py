@@ -330,7 +330,8 @@ def prepare_tune_overrides(result: dict[str, Any]) -> dict[str, Any]:
             },
         }
     if isinstance(tune_training, dict) and tune_training:
-        result = {**result, "training": dict(tune_training)}
+        existing_training = dict(result.get("training", {}))
+        result = {**result, "training": {**existing_training, **tune_training}}
     if isinstance(tune_evaluation, dict) and tune_evaluation:
         result = {**result, "evaluation": dict(tune_evaluation)}
 
@@ -367,6 +368,16 @@ def _resolve_tune_direction(
         cur_params = {**cur_params, "direction": resolve_direction(eval_metric_name)}
     elif eval_metrics:
         cur_params = {**cur_params, "direction": resolve_direction(eval_metrics[0])}
+    else:
+        # Fallback: derive direction from model.params.metric when eval_metrics
+        # is empty (e.g. tune_evaluation exists but has metrics=[]).
+        model_metric = (result.get("model") or {}).get("params", {}).get("metric")
+        if isinstance(model_metric, list) and model_metric:
+            fallback = MODEL_METRIC_TO_EVAL.get(model_metric[0], model_metric[0])
+            cur_params = {**cur_params, "direction": resolve_direction(fallback)}
+        elif isinstance(model_metric, str) and model_metric:
+            fallback = MODEL_METRIC_TO_EVAL.get(model_metric, model_metric)
+            cur_params = {**cur_params, "direction": resolve_direction(fallback)}
 
     return {
         **result,

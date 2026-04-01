@@ -62,6 +62,7 @@ class LizyWidget(anywidget.AnyWidget):
         self._job_counter = 0
         self._inference_df: pd.DataFrame | None = None
         self._tune_config_snapshot: dict[str, Any] | None = None
+        self._tune_ui_snapshot: dict[str, Any] | None = None
 
         try:
             info = self._service.info
@@ -638,9 +639,13 @@ class LizyWidget(anywidget.AnyWidget):
             snapshot = (
                 copy.deepcopy(self._tune_config_snapshot) if self._tune_config_snapshot else None
             )
+            ui_snapshot = copy.deepcopy(self._tune_ui_snapshot) if self._tune_ui_snapshot else None
         try:
             self.config = self._service.apply_best_params(
-                params, dict(self.config), tune_snapshot=snapshot
+                params,
+                dict(self.config),
+                tune_snapshot=snapshot,
+                tune_ui_snapshot=ui_snapshot,
             )
         except Exception as e:
             self.error = {"code": "APPLY_ERROR", "message": str(e)}
@@ -757,6 +762,7 @@ class LizyWidget(anywidget.AnyWidget):
 
             if job_type == "tune":
                 self._tune_config_snapshot = copy.deepcopy(full_config)
+                self._tune_ui_snapshot = copy.deepcopy(dict(self.config))
 
             self._cancel_flag.clear()
             self._job_counter += 1
