@@ -450,6 +450,103 @@ class TestBug7TuneApplyFitConfigIdentity:
             assert fit_es.get("rounds") == 80  # from best_params
 
 
+# ── Bug 8: Tune fixed params (first_metric_only) not carried to Fit ──
+
+
+class TestBug8TuneFixedParamsCarried:
+    """LizyML's default_fixed_params (e.g. first_metric_only=True) are applied
+    to every trial during Tune but are NOT in best_params.  apply_best_params
+    must carry these values to the Fit config via the tune snapshot so the
+    Fit execution matches the Tune conditions.
+    """
+
+    def test_prepare_tune_overrides_sets_first_metric_only(self) -> None:
+        """prepare_tune_overrides must set first_metric_only=True in the tune
+        config so the tune snapshot carries it to Fit via apply_best_params.
+
+        LizyML's default_fixed_params applies first_metric_only=True to every
+        trial.  The Widget's tune config must mirror this so the snapshot used
+        by apply_best_params contains the same value.
+        """
+        config: dict[str, Any] = {
+            "model": {
+                "name": "lgbm",
+                "params": {"learning_rate": 0.01, "first_metric_only": False},
+            },
+            "training": {"seed": 42},
+            "tuning": {"optuna": {"params": {"n_trials": 20}, "space": {}}},
+        }
+        result = adapter_schema.prepare_tune_overrides(config)
+        params = result.get("model", {}).get("params", {})
+        assert params.get("first_metric_only") is True
+
+
+# ── Bug 9: inner_valid path divergence between Tune and Fit ──
+
+
+class TestBug9InnerValidPathPreserved:
+    """When validation_ratio is in best_params, apply_best_params should
+    update the existing inner_valid.ratio from tune_snapshot rather than
+    replacing inner_valid with None and setting validation_ratio separately.
+    This ensures Fit uses the same inner_valid construction path as Tune.
+    """
+
+    def test_validation_ratio_updates_inner_valid_ratio(self) -> None:
+        """inner_valid from snapshot should have its ratio updated, not be nullified."""
+        with patch.dict("sys.modules", _mock_schema_modules()):
+            adapter = LizyMLAdapter()
+            service = _make_service(adapter)
+
+            user_config: dict[str, Any] = {
+                "config_version": 1,
+                "model": {"name": "lgbm", "params": {"learning_rate": 0.001}},
+                "training": {
+                    "seed": 42,
+                    "early_stopping": {
+                        "enabled": True,
+                        "rounds": 150,
+                        "inner_valid": {
+                            "method": "holdout",
+                            "random_state": 42,
+                            "ratio": 0.1,
+                            "stratify": False,
+                        },
+                    },
+                },
+            }
+            # tune_snapshot with inner_valid
+            tune_snapshot: dict[str, Any] = {
+                "config_version": 1,
+                "model": {"name": "lgbm", "params": {"learning_rate": 0.001}},
+                "training": {
+                    "seed": 42,
+                    "early_stopping": {
+                        "enabled": True,
+                        "rounds": 150,
+                        "inner_valid": {
+                            "method": "holdout",
+                            "random_state": 42,
+                            "ratio": 0.1,
+                            "stratify": False,
+                        },
+                    },
+                },
+            }
+            result = service.apply_best_params(
+                {"validation_ratio": 0.25, "early_stopping_rounds": 80},
+                user_config,
+                tune_snapshot=tune_snapshot,
+                tune_ui_snapshot=user_config,
+            )
+            es = result.get("training", {}).get("early_stopping", {})
+            iv = es.get("inner_valid")
+            # inner_valid should be preserved with updated ratio, not None
+            assert iv is not None, "inner_valid should not be None"
+            assert iv["ratio"] == 0.25
+            assert iv["method"] == "holdout"
+            assert iv["random_state"] == 42
+
+
 # ── Helpers ──
 
 

@@ -77,15 +77,26 @@ class TestApplyBestParams:
         )
         es = result.get("training", {}).get("early_stopping", {})
         assert es.get("rounds") == 80
-        assert es.get("validation_ratio") == 0.2
+        # validation_ratio updates inner_valid.ratio when inner_valid exists
+        iv = es.get("inner_valid")
+        if iv is not None:
+            assert iv["ratio"] == 0.2
+        else:
+            assert es.get("validation_ratio") == 0.2
 
-    def test_validation_ratio_nullifies_inner_valid(self) -> None:
-        """When validation_ratio is applied, inner_valid should be None."""
+    def test_validation_ratio_updates_inner_valid_ratio(self) -> None:
+        """When validation_ratio is applied and inner_valid exists, ratio is updated."""
         svc = self._make_service()
         config = svc.initialize_config()
         result = svc.apply_best_params({"validation_ratio": 0.2}, config, tune_snapshot=None)
         es = result.get("training", {}).get("early_stopping", {})
-        assert es.get("inner_valid") is None or "inner_valid" not in es
+        iv = es.get("inner_valid")
+        if iv is not None:
+            # inner_valid preserved with updated ratio
+            assert iv["ratio"] == 0.2
+        else:
+            # No inner_valid in base — fallback to validation_ratio
+            assert es.get("validation_ratio") == 0.2
 
     def test_mixed_categories(self) -> None:
         """All 3 categories in one call."""

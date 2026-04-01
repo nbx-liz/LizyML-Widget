@@ -330,6 +330,14 @@ def prepare_tune_overrides(result: dict[str, Any]) -> dict[str, Any]:
     # category='smart' dimensions).
     result = {k: v for k, v in result.items() if k != "calibration"}
 
+    # Mirror LizyML's default_fixed_params: set first_metric_only=True so
+    # early stopping uses only the first metric (same as every Optuna trial).
+    # This value is captured in the tune snapshot and carried to Fit via
+    # apply_best_params, ensuring Fit reproduces the Tune conditions.
+    model = dict(result.get("model", {}))
+    params = {**dict(model.get("params", {})), "first_metric_only": True}
+    result = {**result, "model": {**model, "params": params}}
+
     return _resolve_tune_direction(result, tune_evaluation)
 
 

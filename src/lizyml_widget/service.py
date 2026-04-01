@@ -770,8 +770,18 @@ class WidgetService:
             if "early_stopping_rounds" in training_p:
                 es_updates["rounds"] = training_p["early_stopping_rounds"]
             if "validation_ratio" in training_p:
-                es_updates["validation_ratio"] = training_p["validation_ratio"]
-                es_updates["inner_valid"] = None
+                # Update inner_valid.ratio in-place (if present) so Fit uses
+                # the same inner_valid construction path as the Tune trial.
+                existing_iv = es.get("inner_valid")
+                if isinstance(existing_iv, dict):
+                    es_updates["inner_valid"] = {
+                        **existing_iv,
+                        "ratio": training_p["validation_ratio"],
+                    }
+                else:
+                    # No inner_valid in snapshot — fall back to validation_ratio
+                    es_updates["validation_ratio"] = training_p["validation_ratio"]
+                    es_updates["inner_valid"] = None
             new_es = {**es, **es_updates}
             base = {**base, "training": {**training, "early_stopping": new_es}}
 
