@@ -263,7 +263,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "group": "model_params",
                 "default": -1,
             },
-            # ── Smart Params group (Fit-only in resolve_smart_params) ──
+            # ── Smart Params group (used in both Fit and Tune via resolve_smart_params) ──
             {
                 "key": "auto_num_leaves",
                 "title": "Auto Num Leaves",

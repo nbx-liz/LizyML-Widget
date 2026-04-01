@@ -477,7 +477,7 @@
   - Fit タブに LizyML `LGBMConfig` の 4 つの nullable フィールド（`balanced`, `feature_weights`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`）が存在するが、DynForm の `anyOf` 解決が非 null バリアントを展開するだけで **null トグルを提供しない**ため、ユーザーが null（自動判定 / 無効）に設定できない。
   - `model.params` は `additionalProperties: true` だが、`TypedParamsEditor` に定義済みの項目（`parameter_hints` の 12 項目）以外を追加する UI がなく、LightGBM が受け付ける多数のパラメータを設定できない。
   - Tune タブは `tuning.optuna` 固有の設定（`n_trials`, `metric`, `space`）のみを表示し、`model.params`・`training`・`evaluation` は Fit タブの設定に**暗黙的に依存**している。ユーザーからは Tune がどの設定で実行されるか見えない。
-  - LizyML 仕様上、Tune は以下を**非参照**: `model.auto_num_leaves`, `model.num_leaves_ratio`, `model.min_data_in_leaf_ratio`, `model.min_data_in_bin_ratio`, `model.feature_weights`, `model.balanced`, `calibration.*`。これらは Fit 専用パス（`resolve_smart_params`）でのみ使用される。
+  - LizyML 仕様上、Tune は `calibration.*` を**非参照**（Fit 専用）。一方、Smart Params（`model.auto_num_leaves`, `model.num_leaves_ratio`, `model.min_data_in_leaf_ratio`, `model.min_data_in_bin_ratio`, `model.feature_weights`, `model.balanced`）は Tune でも使用される（`resolve_smart_params` は毎 trial で呼ばれ、Search Space に `category="smart"` 次元を含められる）。※初期実装では Smart Params も Tune 非参照と誤認し除去していたが、Bug 7 で修正済み。
   - Tune Settings の `metric`（`tuning.optuna.params.metric`）は実質的に `evaluation.metrics` の先頭要素を選ぶ操作であり、Adapter 内で `MODEL_METRIC_TO_EVAL` 変換 + `evaluation.metrics` 並べ替えを行っているだけで独立した概念ではない。
 - **提案内容**:
 
@@ -581,7 +581,7 @@
   3. Tune タブから以下を**除外**する:
      - 独立した Model Params セクション（Search Space に統合）
      - 独立した Training セクション（Search Space に統合）
-     - Smart Params / Calibration（Tune 非参照）
+     - Calibration（Tune 非参照。Smart Params は Search Space で探索可能なため Fit タブ UI に表示）
      - Tune Settings の standalone `metric`（Evaluation セクションに統合）
   4. `tuning.optuna.params.metric` フィールドを**廃止**する。最適化対象メトリックは `tuning.evaluation.metrics[0]` から決定する。Tune の Evaluation が LizyML registry metric 名を直接使用するため、Adapter の `MODEL_METRIC_TO_EVAL` 変換は Tune 経路では不要になる。
 
@@ -671,7 +671,7 @@
 
   | セクション | Fit タブ | Tune タブ | 備考 |
   |-----------|---------|----------|------|
-  | Smart Params | `model.auto_num_leaves` 等 | ─ | Fit 専用。Tune は Search Space の探索行で代替 |
+  | Smart Params | `model.auto_num_leaves` 等 | Search Space 内 Smart Params グループ | Fit は専用フォーム、Tune は Search Space 内で探索。config は保持される |
   | Model Params | `model.params`（TypedParamsEditor + Additional Params） | Search Space 内 Model Params グループ | Fit は専用フォーム、Tune は Search Space 内で Fixed/Range/Choice 管理 |
   | Training | `training`（専用セクション） | Search Space 内 Training グループ | Fit は専用フォーム、Tune は Search Space 内で Fixed/Range 管理 |
   | Evaluation | `evaluation`（chip multi） | `tuning.evaluation`（segment + chip） | Tune は Optimization Metric を明示的に分離 |
@@ -689,7 +689,7 @@
   1. `tuning.model_params`（Search Space の Fixed model param 値）を `model.params` に置換する（Fit の `model.params` は参照しない）
   2. `tuning.training`（Search Space の Fixed training 値）を `training` に置換する
   3. `tuning.evaluation` を `evaluation` に置換する
-  4. Smart params（`auto_num_leaves` 等）・calibration を除去する
+  4. calibration を除去する（Smart params は LizyML が Tune でも使用するため保持。Bug 7 で修正）
   5. `evaluation.metrics[0]` を最適化対象メトリックとし、`direction` を自動設定する
   6. `tuning.model_params` / `tuning.training` / `tuning.evaluation` が未設定の既存 config では、Fit 側の値にフォールバックする（後方互換）
 

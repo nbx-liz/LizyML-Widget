@@ -288,17 +288,6 @@ def get_default_search_space(task: str) -> dict[str, Any]:
 
 # ── Tune config preparation (extracted from adapter.py) ────
 
-SMART_PARAM_KEYS: frozenset[str] = frozenset(
-    {
-        "auto_num_leaves",
-        "num_leaves_ratio",
-        "min_data_in_leaf_ratio",
-        "min_data_in_bin_ratio",
-        "feature_weights",
-        "balanced",
-    }
-)
-
 
 def prepare_tune_overrides(result: dict[str, Any]) -> dict[str, Any]:
     """Apply Tune-specific overrides: defaults, P-014 fields, direction."""
@@ -335,10 +324,11 @@ def prepare_tune_overrides(result: dict[str, Any]) -> dict[str, Any]:
     if isinstance(tune_evaluation, dict) and tune_evaluation:
         result = {**result, "evaluation": dict(tune_evaluation)}
 
-    # Remove Smart Params and calibration (Tune non-referenced)
-    cleaned_model = {k: v for k, v in result.get("model", {}).items() if k not in SMART_PARAM_KEYS}
+    # Remove calibration (LizyML tune does not reference it).
+    # Smart params are kept — LizyML backend supports them during tuning
+    # (resolve_smart_params is called per trial, search space can include
+    # category='smart' dimensions).
     result = {k: v for k, v in result.items() if k != "calibration"}
-    result = {**result, "model": cleaned_model}
 
     return _resolve_tune_direction(result, tune_evaluation)
 
