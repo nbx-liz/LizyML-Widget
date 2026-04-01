@@ -179,7 +179,7 @@ export function ConfigTab({
               onClick={() => sendAction("fit")}
               type="button"
             >
-              {status === "running" ? "Running..." : "Fit"}
+              {status === "running" ? "Running..." : "\u25B6 Fit"}
             </button>
           )}
           {subTab === "tune" && (
@@ -189,7 +189,7 @@ export function ConfigTab({
               onClick={() => sendAction("tune")}
               type="button"
             >
-              {status === "running" ? "Running..." : "Tune"}
+              {status === "running" ? "Running..." : "\u25B6 Tune"}
             </button>
           )}
         </div>

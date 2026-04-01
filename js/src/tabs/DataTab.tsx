@@ -168,12 +168,12 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
       <Accordion title="Cross Validation">
         <div class="lzw-form-row" style="align-items:flex-start">
           <label class="lzw-label">Strategy</label>
-          <div class="lzw-segment lzw-segment--wrap">
+          <div class="lzw-chip-group">
             {CV_STRATEGIES.map((s) => (
               <button
                 key={s.value}
                 type="button"
-                class={`lzw-segment__btn ${cv.strategy === s.value ? "lzw-segment__btn--active" : ""}`}
+                class={`lzw-chip lzw-chip--square ${cv.strategy === s.value ? "lzw-chip--active" : ""}`}
                 aria-pressed={cv.strategy === s.value}
                 onClick={() => sendCv({ ...cv, strategy: s.value })}
               >

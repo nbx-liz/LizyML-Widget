@@ -152,6 +152,9 @@
   border-bottom: 1px solid var(--lzw-border);
   background: var(--lzw-bg-1);
   flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 4;
 }
 
 .lzw-header__title {
@@ -171,6 +174,9 @@
   border-bottom: 1px solid var(--lzw-border);
   background: var(--lzw-bg-1);
   flex-shrink: 0;
+  position: sticky;
+  top: 40px;
+  z-index: 3;
 }
 
 .lzw-tabs__btn {
@@ -482,7 +488,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-bottom: 8px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--lzw-border-light);
   margin-bottom: 8px;
   position: sticky;
@@ -531,6 +537,8 @@
   background: var(--lzw-accent);
   color: var(--lzw-accent-fg);
   border-color: var(--lzw-accent);
+  padding: 4px 16px;
+  font-weight: 600;
 }
 
 .lzw-btn--primary:hover:not(:disabled) {
@@ -751,15 +759,6 @@
   background: var(--lzw-bg-2);
 }
 
-.lzw-segment--wrap {
-  gap: 4px;
-}
-
-.lzw-segment--wrap .lzw-segment__btn {
-  border-radius: 4px;
-  border-right: 1px solid var(--lzw-border);
-}
-
 /* ── Search Space ────────────────────────────────────────── */
 .lzw-search-space__range {
   display: flex;
@@ -908,6 +907,10 @@
 
 .lzw-chip:hover:not(.lzw-chip--active) {
   background: var(--lzw-bg-2);
+}
+
+.lzw-chip--square {
+  border-radius: 4px;
 }
 
 /* ── Tag Input ───────────────────────────────────────────── */
