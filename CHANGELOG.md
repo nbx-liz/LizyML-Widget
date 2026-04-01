@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-04-02
+
+### Fixed
+- `prepare_tune_overrides` incorrectly stripped smart params (`auto_num_leaves`, `num_leaves_ratio`, etc.) from tune config — LizyML backend supports them during tuning
+- `prepare_tune_overrides` did not set `first_metric_only=True` to match LizyML's `default_fixed_params`, causing early stopping behavior to differ between Tune and Fit
+- `apply_best_params` replaced `inner_valid` with `None` when `validation_ratio` was present, forcing a different code path than Tune — now updates `inner_valid.ratio` in-place
+- BLUEPRINT.md referenced non-existent function `resolve_smart_params_from_dict` with incorrect explanation for `feature_weights` Fixed-only constraint
+- HISTORY.md P-014 incorrectly stated smart params are not used during tuning
+
 ## [0.7.0] - 2026-04-02
 
 ### Added
