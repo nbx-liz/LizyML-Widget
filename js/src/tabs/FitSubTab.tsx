@@ -232,17 +232,6 @@ export function FitSubTab({
                       ))}
                     </select>
                   </div>
-                  <div class="lzw-form-row" style="opacity: 0.5">
-                    <label class="lzw-label">N Splits <span style="font-size:0.75em">(deprecated)</span></label>
-                    <NumericStepper
-                      value={calValue.n_splits ?? 5}
-                      min={2}
-                      step={1}
-                      onChange={(v) =>
-                        handleSectionChange("calibration", { ...calValue, n_splits: v ?? 5 })
-                      }
-                    />
-                  </div>
                   <div class="lzw-dynform__section-title">Params</div>
                   {Object.entries(calParams).map(([pKey, pVal]) => (
                     <div key={pKey} class="lzw-form-row">
