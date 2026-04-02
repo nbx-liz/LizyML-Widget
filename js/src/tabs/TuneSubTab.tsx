@@ -14,6 +14,7 @@ interface TuneSubTabProps {
   configSchema: Record<string, any>;
   uiSchema: Record<string, any>;
   task: string;
+  dfInfo: Record<string, any>;
   handleChange: (newConfig: Record<string, any>) => void;
   sendAction: (type: string, payload?: Record<string, any>) => void;
   rawYaml: string | null;
@@ -26,6 +27,7 @@ export function TuneSubTab({
   configSchema,
   uiSchema,
   task,
+  dfInfo,
   handleChange,
   sendAction,
   rawYaml,
@@ -90,6 +92,7 @@ export function TuneSubTab({
           trainingConfig={localConfig.training}
           task={task}
           uiSchema={uiSchema}
+          columns={dfInfo?.columns ?? []}
           onChange={({ space, fixedModelParams: mp, fixedTraining: tr }) => {
             const optuna = tuning.optuna ?? {};
             handleChange({

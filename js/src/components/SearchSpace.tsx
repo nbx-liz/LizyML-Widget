@@ -31,6 +31,8 @@ interface SearchSpaceProps {
   trainingConfig?: Record<string, any>;
   task?: string;
   uiSchema?: Record<string, any>;
+  /** Column info for feature_weights editor. */
+  columns?: Array<{ name: string }>;
   /** Single atomic callback for all search space updates. */
   onChange: (update: SearchSpaceUpdate) => void;
 }
@@ -78,6 +80,7 @@ function renderFixed(
   onChange: (c: ParamConfig) => void,
   name?: string,
   stepMap?: Record<string, number>,
+  columns?: Array<{ name: string }>,
 ) {
   const sm = stepMap ?? {};
 
@@ -162,19 +165,69 @@ function renderFixed(
     );
   }
 
-  // Object type (e.g. feature_weights): ON/OFF toggle
+  // Object type (e.g. feature_weights): ON/OFF toggle + key-value editor
   if (fieldSchema.type === "object") {
+    const enabled = config.fixed != null;
+    const weights: Record<string, number> = enabled && typeof config.fixed === "object" ? config.fixed : {};
+    const usedCols = new Set(Object.keys(weights));
+    const availCols = (columns ?? []).map((c) => c.name).filter((n) => !usedCols.has(n));
     return (
-      <label class="lzw-toggle">
-        <input
-          type="checkbox"
-          checked={config.fixed != null}
-          onChange={(e) =>
-            onChange({ ...config, fixed: (e.target as HTMLInputElement).checked ? {} : null })
-          }
-        />
-        <span class="lzw-toggle__slider" />
-      </label>
+      <div>
+        <label class="lzw-toggle">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) =>
+              onChange({ ...config, fixed: (e.target as HTMLInputElement).checked ? {} : null })
+            }
+          />
+          <span class="lzw-toggle__slider" />
+        </label>
+        {enabled && columns && columns.length > 0 && (
+          <div style="margin-top: 6px;">
+            {Object.entries(weights).map(([col, w]) => (
+              <div key={col} class="lzw-form-row" style="margin-bottom: 4px;">
+                <span class="lzw-label" style="min-width: 120px; font-size: 11px;">{col}</span>
+                <NumericStepper
+                  value={w}
+                  step={0.1}
+                  onChange={(v) => {
+                    const next = { ...weights, [col]: v ?? 1.0 };
+                    onChange({ ...config, fixed: next });
+                  }}
+                />
+                <button
+                  type="button"
+                  class="lzw-tag__remove"
+                  aria-label={`Remove ${col}`}
+                  onClick={() => {
+                    const { [col]: _, ...rest } = weights;
+                    onChange({ ...config, fixed: Object.keys(rest).length > 0 ? rest : {} });
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            {availCols.length > 0 && (
+              <select
+                class="lzw-select"
+                value=""
+                style="font-size: 11px; max-width: 180px;"
+                onChange={(e) => {
+                  const col = (e.target as HTMLSelectElement).value;
+                  if (col) onChange({ ...config, fixed: { ...weights, [col]: 1.0 } });
+                }}
+              >
+                <option value="">+ Add Column</option>
+                {availCols.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -239,6 +292,7 @@ export function SearchSpace({
   trainingConfig,
   task,
   uiSchema,
+  columns,
   onChange,
 }: SearchSpaceProps) {
   const [addedParams, setAddedParams] = useState<string[]>([]);
@@ -401,6 +455,7 @@ export function SearchSpace({
                     modes={entry.modes}
                     onChange={(c) => handleUpdate(entry, c)}
                     stepMap={stepMap}
+                    columns={columns}
                   />
                   {fixedMetric && fixedMetric.includes("precision_at_k") && (
                     <div class="lzw-search-space-grid__row" role="row">
@@ -560,6 +615,7 @@ interface SearchSpaceRowProps {
   modes: Mode[];
   onChange: (config: ParamConfig) => void;
   stepMap?: Record<string, number>;
+  columns?: Array<{ name: string }>;
 }
 
 function SearchSpaceRow({
@@ -569,6 +625,7 @@ function SearchSpaceRow({
   modes,
   onChange,
   stepMap,
+  columns,
 }: SearchSpaceRowProps) {
   const title = fieldSchema.title ?? name;
   const sm = stepMap ?? {};
@@ -621,7 +678,7 @@ function SearchSpaceRow({
         )}
       </div>
       <div role="cell">
-        {config.mode === "fixed" && renderFixed(fieldSchema, config, onChange, name, stepMap)}
+        {config.mode === "fixed" && renderFixed(fieldSchema, config, onChange, name, stepMap, columns)}
         {config.mode === "range" && (() => {
           const stepVal = sm[name] ?? (fieldSchema.type === "integer" ? 1 : "any");
           return (

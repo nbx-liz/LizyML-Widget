@@ -217,6 +217,7 @@ export function ConfigTab({
             configSchema={configSchema}
             uiSchema={uiSchema}
             task={task}
+            dfInfo={dfInfo}
             handleChange={handleChange}
             sendAction={sendAction}
             rawYaml={rawYaml}

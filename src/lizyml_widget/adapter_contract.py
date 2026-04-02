@@ -144,6 +144,11 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
         "parameter_hints": [
             {"key": "objective", "label": "Objective", "kind": "objective"},
             {"key": "metric", "label": "Metric", "kind": "model_metric"},
+            {
+                "key": "first_metric_only",
+                "label": "First Metric Only",
+                "kind": "boolean",
+            },
             {"key": "n_estimators", "label": "N Estimators", "kind": "integer", "step": 100},
             {"key": "learning_rate", "label": "Learning Rate", "kind": "number", "step": 0.001},
             {"key": "max_depth", "label": "Max Depth", "kind": "integer", "step": 1},
@@ -163,11 +168,6 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
             {"key": "bagging_freq", "label": "Bagging Freq", "kind": "integer", "step": 1},
             {"key": "lambda_l1", "label": "Lambda L1", "kind": "number", "step": 0.0001},
             {"key": "lambda_l2", "label": "Lambda L2", "kind": "number", "step": 0.0001},
-            {
-                "key": "first_metric_only",
-                "label": "First Metric Only",
-                "kind": "boolean",
-            },
         ],
         "search_space_catalog": [
             # ── Model Params group ──
@@ -182,6 +182,13 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "key": "metric",
                 "title": "Metric",
                 "paramType": "string",
+                "modes": ["fixed", "choice"],
+                "group": "model_params",
+            },
+            {
+                "key": "first_metric_only",
+                "title": "First Metric Only",
+                "paramType": "boolean",
                 "modes": ["fixed", "choice"],
                 "group": "model_params",
             },
@@ -249,13 +256,6 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "group": "model_params",
             },
             {
-                "key": "first_metric_only",
-                "title": "First Metric Only",
-                "paramType": "boolean",
-                "modes": ["fixed", "choice"],
-                "group": "model_params",
-            },
-            {
                 "key": "verbose",
                 "title": "Log Output",
                 "paramType": "integer",
@@ -284,7 +284,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "key": "num_leaves",
                 "title": "Num Leaves",
                 "paramType": "integer",
-                "modes": ["fixed", "range", "choice"],
+                "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 256,
             },
