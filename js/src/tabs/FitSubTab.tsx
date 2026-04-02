@@ -98,7 +98,7 @@ export function FitSubTab({
 
   // Calibration
   const calibrationEnabled = localConfig.calibration != null;
-  const calibrationDefaults = defaults.calibration ?? { method: "platt", n_splits: 5, params: {} };
+  const calibrationDefaults = defaults.calibration ?? { method: "platt", params: {} };
   const handleCalibrationToggle = useCallback(
     (enabled: boolean) => {
       handleChange({

@@ -346,6 +346,48 @@ class TestContractNewFields:
         for expected in ("platt", "isotonic", "beta"):
             assert expected in methods, f"{expected} missing from calibration_methods"
 
+    def test_ui_schema_calibration_params_per_method(self) -> None:
+        """calibration_params must be a dict keyed by method name."""
+        from lizyml_widget.adapter_contract import build_ui_schema
+        from lizyml_widget.adapter_params import get_eval_metrics_by_task
+
+        schema = build_ui_schema(get_eval_metrics_by_task())
+        cal_params = schema["calibration_params"]
+        assert isinstance(cal_params, dict)
+        # platt and beta have no user-configurable params
+        assert cal_params["platt"] == []
+        assert cal_params["beta"] == []
+        # isotonic has LightGBM + training params
+        iso_params = cal_params["isotonic"]
+        assert len(iso_params) >= 5
+        for expected in ("num_boost_round", "validation_ratio", "seed", "num_leaves", "learning_rate"):
+            assert expected in iso_params, f"{expected} missing from isotonic params"
+
+    def test_search_space_catalog_group_order(self) -> None:
+        """search_space_catalog groups must be Smart Params → Model Params → Training."""
+        from lizyml_widget.adapter_contract import build_ui_schema
+        from lizyml_widget.adapter_params import get_eval_metrics_by_task
+
+        schema = build_ui_schema(get_eval_metrics_by_task())
+        catalog = schema["search_space_catalog"]
+        seen_groups: list[str] = []
+        for entry in catalog:
+            g = entry["group"]
+            if not seen_groups or seen_groups[-1] != g:
+                seen_groups.append(g)
+        assert seen_groups == ["smart_params", "model_params", "training"]
+
+    def test_parameter_hints_first_metric_only_after_metric(self) -> None:
+        """first_metric_only must appear directly after metric in parameter_hints."""
+        from lizyml_widget.adapter_contract import build_ui_schema
+        from lizyml_widget.adapter_params import get_eval_metrics_by_task
+
+        schema = build_ui_schema(get_eval_metrics_by_task())
+        hints = schema["parameter_hints"]
+        keys = [h["key"] for h in hints]
+        metric_idx = keys.index("metric")
+        assert keys[metric_idx + 1] == "first_metric_only"
+
     def test_widget_update_cv_reads_strategies_from_contract(self) -> None:
         """Widget._handle_update_cv should accept strategies from backend_contract."""
         from unittest.mock import patch

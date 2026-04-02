@@ -390,14 +390,12 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
             "inner_valid": {"early_stopping.enabled": True},
         },
         "defaults": {
-            "calibration": {"method": "platt", "n_splits": 5, "params": {}},
+            "calibration": {"method": "platt", "params": {}},
         },
         "calibration_methods": ["platt", "isotonic", "beta"],
         "calibration_params": {
             "platt": [],
             "isotonic": [
-                "objective",
-                "metric",
                 "num_boost_round",
                 "validation_ratio",
                 "seed",
