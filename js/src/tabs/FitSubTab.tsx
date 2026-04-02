@@ -259,7 +259,8 @@ export function FitSubTab({
                     </div>
                   ))}
                   {(() => {
-                    const calParamOpts: string[] = uiSchema.calibration_params ?? [];
+                    const calParamsByMethod: Record<string, string[]> = uiSchema.calibration_params ?? {};
+                    const calParamOpts: string[] = calParamsByMethod[calValue.method ?? "platt"] ?? [];
                     const available = calParamOpts.filter((p) => !(p in calParams));
                     if (available.length === 0) return null;
                     return (

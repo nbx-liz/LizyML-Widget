@@ -393,7 +393,11 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
             "calibration": {"method": "platt", "n_splits": 5, "params": {}},
         },
         "calibration_methods": ["platt", "isotonic", "beta"],
-        "calibration_params": ["num_boost_round", "validation_ratio", "seed"],
+        "calibration_params": {
+            "platt": [],
+            "isotonic": ["num_boost_round", "validation_ratio", "seed"],
+            "beta": [],
+        },
         "inner_valid_options": ["holdout", "group_holdout", "time_holdout"],
         "special_search_space_fields": {
             "objective": "objective",
