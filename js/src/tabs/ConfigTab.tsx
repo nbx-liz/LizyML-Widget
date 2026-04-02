@@ -214,7 +214,6 @@ export function ConfigTab({
         {subTab === "tune" && (
           <TuneSubTab
             localConfig={localConfig}
-            configSchema={configSchema}
             uiSchema={uiSchema}
             task={task}
             dfInfo={dfInfo}

@@ -17,8 +17,6 @@ interface SearchSpaceUpdate {
 }
 
 interface SearchSpaceProps {
-  schema: Record<string, any>;
-  rootSchema?: Record<string, any>;
   /** tuning.optuna.space — Range/Choice entries */
   spaceValue: Record<string, any>;
   /** tuning.model_params — Fixed model param values */

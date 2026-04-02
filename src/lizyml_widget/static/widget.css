@@ -416,18 +416,12 @@
   grid-column: 1 / -1;
   font-weight: 600;
   font-size: 12px;
-  padding: 6px 8px;
-  margin-top: 6px;
+  padding: 8px 8px 6px;
   background: var(--lzw-bg-1);
   border-bottom: 1px solid var(--lzw-border);
-  border-top: 1px solid var(--lzw-border-light);
   color: var(--lzw-fg-1);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-}
-
-.lzw-search-space-grid__header + .lzw-search-space-grid__group-wrap .lzw-search-space-grid__group > div {
-  margin-top: 0;
 }
 
 .lzw-search-space-grid__row {
