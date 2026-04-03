@@ -236,15 +236,29 @@ export function FitSubTab({
                   {Object.entries(calParams).map(([pKey, pVal]) => (
                     <div key={pKey} class="lzw-form-row">
                       <span class="lzw-label">{pKey}</span>
-                      <NumericStepper
-                        value={pVal as number}
-                        onChange={(v) =>
-                          handleSectionChange("calibration", {
-                            ...calValue,
-                            params: { ...calParams, [pKey]: v },
-                          })
-                        }
-                      />
+                      {typeof pVal === "number" ? (
+                        <NumericStepper
+                          value={pVal}
+                          onChange={(v) =>
+                            handleSectionChange("calibration", {
+                              ...calValue,
+                              params: { ...calParams, [pKey]: v },
+                            })
+                          }
+                        />
+                      ) : (
+                        <input
+                          class="lzw-input"
+                          type="text"
+                          value={String(pVal ?? "")}
+                          onChange={(e) =>
+                            handleSectionChange("calibration", {
+                              ...calValue,
+                              params: { ...calParams, [pKey]: (e.target as HTMLInputElement).value },
+                            })
+                          }
+                        />
+                      )}
                       <button
                         type="button"
                         class="lzw-tag__remove"
@@ -270,9 +284,10 @@ export function FitSubTab({
                         onChange={(e) => {
                           const v = (e.target as HTMLSelectElement).value;
                           if (v) {
+                            const isString = v === "objective" || v === "metric";
                             handleSectionChange("calibration", {
                               ...calValue,
-                              params: { ...calParams, [v]: 0 },
+                              params: { ...calParams, [v]: isString ? "" : 0 },
                             });
                           }
                         }}
