@@ -361,12 +361,13 @@ class TestContractNewFields:
         iso_params = cal_params["isotonic"]
         assert len(iso_params) >= 5
         for expected in (
-            "num_boost_round", "validation_ratio", "seed",
-            "num_leaves", "learning_rate",
+            "num_boost_round",
+            "validation_ratio",
+            "seed",
+            "num_leaves",
+            "learning_rate",
         ):
-            assert expected in iso_params, (
-                f"{expected} missing from isotonic params"
-            )
+            assert expected in iso_params, f"{expected} missing from isotonic params"
 
     def test_search_space_catalog_group_order(self) -> None:
         """search_space_catalog groups must be Smart Params → Model Params → Training."""
