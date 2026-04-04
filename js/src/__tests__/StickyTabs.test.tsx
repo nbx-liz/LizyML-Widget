@@ -1,52 +1,56 @@
 /**
- * Tests for sticky tab bar — header and tabs stay visible when widget scrolls.
+ * Tests for header/tabs positioning — fixed via flex-shrink:0 + position:relative,
+ * with internal scroll handled by .lzw-content.
  */
 import { describe, it, expect } from "vitest";
 
-describe("Sticky tab bar CSS classes", () => {
+describe("Header and tabs CSS positioning", () => {
   let styleSheet: string;
 
   beforeAll(async () => {
-    // Read the compiled CSS to verify sticky positioning rules
     const fs = await import("node:fs");
     const path = await import("node:path");
     const cssPath = path.resolve(__dirname, "../widget.css");
     styleSheet = fs.readFileSync(cssPath, "utf-8");
   });
 
-  it(".lzw-header has position: sticky", () => {
-    // Match the .lzw-header rule block and check for sticky
+  it(".lzw-header has position: relative and z-index >= 3", () => {
     const headerBlock = extractRuleBlock(styleSheet, ".lzw-header");
-    expect(headerBlock).toContain("position: sticky");
-  });
-
-  it(".lzw-header has top: 0", () => {
-    const headerBlock = extractRuleBlock(styleSheet, ".lzw-header");
-    expect(headerBlock).toContain("top: 0");
-  });
-
-  it(".lzw-header has z-index >= 3", () => {
-    const headerBlock = extractRuleBlock(styleSheet, ".lzw-header");
+    expect(headerBlock).toContain("position: relative");
     const zMatch = headerBlock.match(/z-index:\s*(\d+)/);
     expect(zMatch).not.toBeNull();
     expect(Number(zMatch![1])).toBeGreaterThanOrEqual(3);
   });
 
-  it(".lzw-tabs has position: sticky", () => {
-    const tabsBlock = extractRuleBlock(styleSheet, ".lzw-tabs");
-    expect(tabsBlock).toContain("position: sticky");
+  it(".lzw-header has flex-shrink: 0", () => {
+    const headerBlock = extractRuleBlock(styleSheet, ".lzw-header");
+    expect(headerBlock).toContain("flex-shrink: 0");
   });
 
-  it(".lzw-tabs has top offset matching header height (40px)", () => {
+  it(".lzw-tabs has position: relative and z-index >= 3", () => {
     const tabsBlock = extractRuleBlock(styleSheet, ".lzw-tabs");
-    expect(tabsBlock).toContain("top: 40px");
-  });
-
-  it(".lzw-tabs has z-index >= 3", () => {
-    const tabsBlock = extractRuleBlock(styleSheet, ".lzw-tabs");
+    expect(tabsBlock).toContain("position: relative");
     const zMatch = tabsBlock.match(/z-index:\s*(\d+)/);
     expect(zMatch).not.toBeNull();
     expect(Number(zMatch![1])).toBeGreaterThanOrEqual(3);
+  });
+
+  it(".lzw-tabs has flex-shrink: 0", () => {
+    const tabsBlock = extractRuleBlock(styleSheet, ".lzw-tabs");
+    expect(tabsBlock).toContain("flex-shrink: 0");
+  });
+
+  it(".lzw-root has max-height and overflow: hidden", () => {
+    // Match .lzw-root specifically (skip :root which also matches \.lzw-root)
+    const allMatches = [...styleSheet.matchAll(/\.lzw-root\s*\{([^}]*)\}/g)];
+    const rootBlock = allMatches.find((m) => m[1].includes("font-family"))?.[1] ?? "";
+    expect(rootBlock).toContain("max-height:");
+    expect(rootBlock).toContain("overflow: hidden");
+  });
+
+  it(".lzw-content has overflow-y: auto for internal scroll", () => {
+    const contentBlock = extractRuleBlock(styleSheet, ".lzw-content");
+    expect(contentBlock).toMatch(/overflow(-y)?:\s*auto/);
   });
 });
 
