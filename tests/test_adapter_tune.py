@@ -694,7 +694,7 @@ class TestAuditCatalogVerboseAndNumLeaves:
             assert entry is not None, "num_leaves missing from catalog"
             assert entry["group"] == "smart_params"
             assert entry["paramType"] == "integer"
-            assert entry["modes"] == ["fixed", "range", "choice"]
+            assert entry["modes"] == ["fixed", "range"]
 
 
 class TestAuditCatalogDefaults:

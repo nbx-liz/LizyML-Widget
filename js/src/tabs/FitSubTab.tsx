@@ -98,7 +98,7 @@ export function FitSubTab({
 
   // Calibration
   const calibrationEnabled = localConfig.calibration != null;
-  const calibrationDefaults = defaults.calibration ?? { method: "platt", n_splits: 5, params: {} };
+  const calibrationDefaults = defaults.calibration ?? { method: "platt", params: {} };
   const handleCalibrationToggle = useCallback(
     (enabled: boolean) => {
       handleChange({
@@ -232,30 +232,33 @@ export function FitSubTab({
                       ))}
                     </select>
                   </div>
-                  <div class="lzw-form-row" style="opacity: 0.5">
-                    <label class="lzw-label">N Splits <span style="font-size:0.75em">(deprecated)</span></label>
-                    <NumericStepper
-                      value={calValue.n_splits ?? 5}
-                      min={2}
-                      step={1}
-                      onChange={(v) =>
-                        handleSectionChange("calibration", { ...calValue, n_splits: v ?? 5 })
-                      }
-                    />
-                  </div>
                   <div class="lzw-dynform__section-title">Params</div>
                   {Object.entries(calParams).map(([pKey, pVal]) => (
                     <div key={pKey} class="lzw-form-row">
-                      <input class="lzw-input" type="text" value={pKey} style="width: 120px" readOnly />
-                      <NumericStepper
-                        value={pVal as number}
-                        onChange={(v) =>
-                          handleSectionChange("calibration", {
-                            ...calValue,
-                            params: { ...calParams, [pKey]: v },
-                          })
-                        }
-                      />
+                      <span class="lzw-label">{pKey}</span>
+                      {typeof pVal === "number" ? (
+                        <NumericStepper
+                          value={pVal}
+                          onChange={(v) =>
+                            handleSectionChange("calibration", {
+                              ...calValue,
+                              params: { ...calParams, [pKey]: v },
+                            })
+                          }
+                        />
+                      ) : (
+                        <input
+                          class="lzw-input"
+                          type="text"
+                          value={String(pVal ?? "")}
+                          onChange={(e) =>
+                            handleSectionChange("calibration", {
+                              ...calValue,
+                              params: { ...calParams, [pKey]: (e.target as HTMLInputElement).value },
+                            })
+                          }
+                        />
+                      )}
                       <button
                         type="button"
                         class="lzw-tag__remove"
@@ -269,23 +272,33 @@ export function FitSubTab({
                       </button>
                     </div>
                   ))}
-                  <button
-                    type="button"
-                    class="lzw-btn"
-                    onClick={() => {
-                      let name = "new_param";
-                      let i = 1;
-                      while (name in calParams) {
-                        name = `new_param_${i++}`;
-                      }
-                      handleSectionChange("calibration", {
-                        ...calValue,
-                        params: { ...calParams, [name]: 0 },
-                      });
-                    }}
-                  >
-                    + Add
-                  </button>
+                  {(() => {
+                    const calParamsByMethod: Record<string, string[]> = uiSchema.calibration_params ?? {};
+                    const calParamOpts: string[] = calParamsByMethod[calValue.method ?? "platt"] ?? [];
+                    const available = calParamOpts.filter((p) => !(p in calParams));
+                    if (available.length === 0) return null;
+                    return (
+                      <select
+                        class="lzw-select"
+                        value=""
+                        onChange={(e) => {
+                          const v = (e.target as HTMLSelectElement).value;
+                          if (v) {
+                            const isString = v === "objective" || v === "metric";
+                            handleSectionChange("calibration", {
+                              ...calValue,
+                              params: { ...calParams, [v]: isString ? "" : 0 },
+                            });
+                          }
+                        }}
+                      >
+                        <option value="">+ Add</option>
+                        {available.map((p) => (
+                          <option key={p} value={p}>{p}</option>
+                        ))}
+                      </select>
+                    );
+                  })()}
                 </>
               )}
             </Accordion>

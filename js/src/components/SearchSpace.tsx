@@ -17,8 +17,6 @@ interface SearchSpaceUpdate {
 }
 
 interface SearchSpaceProps {
-  schema: Record<string, any>;
-  rootSchema?: Record<string, any>;
   /** tuning.optuna.space — Range/Choice entries */
   spaceValue: Record<string, any>;
   /** tuning.model_params — Fixed model param values */
@@ -31,6 +29,8 @@ interface SearchSpaceProps {
   trainingConfig?: Record<string, any>;
   task?: string;
   uiSchema?: Record<string, any>;
+  /** Column info for feature_weights editor. */
+  columns?: Array<{ name: string }>;
   /** Single atomic callback for all search space updates. */
   onChange: (update: SearchSpaceUpdate) => void;
 }
@@ -78,6 +78,7 @@ function renderFixed(
   onChange: (c: ParamConfig) => void,
   name?: string,
   stepMap?: Record<string, number>,
+  columns?: Array<{ name: string }>,
 ) {
   const sm = stepMap ?? {};
 
@@ -162,19 +163,69 @@ function renderFixed(
     );
   }
 
-  // Object type (e.g. feature_weights): ON/OFF toggle
+  // Object type (e.g. feature_weights): ON/OFF toggle + key-value editor
   if (fieldSchema.type === "object") {
+    const enabled = config.fixed != null;
+    const weights: Record<string, number> = enabled && typeof config.fixed === "object" ? config.fixed : {};
+    const usedCols = new Set(Object.keys(weights));
+    const availCols = (columns ?? []).map((c) => c.name).filter((n) => !usedCols.has(n));
     return (
-      <label class="lzw-toggle">
-        <input
-          type="checkbox"
-          checked={config.fixed != null}
-          onChange={(e) =>
-            onChange({ ...config, fixed: (e.target as HTMLInputElement).checked ? {} : null })
-          }
-        />
-        <span class="lzw-toggle__slider" />
-      </label>
+      <div>
+        <label class="lzw-toggle">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) =>
+              onChange({ ...config, fixed: (e.target as HTMLInputElement).checked ? {} : null })
+            }
+          />
+          <span class="lzw-toggle__slider" />
+        </label>
+        {enabled && columns && columns.length > 0 && (
+          <div style="margin-top: 6px;">
+            {Object.entries(weights).map(([col, w]) => (
+              <div key={col} class="lzw-form-row" style="margin-bottom: 4px;">
+                <span class="lzw-label" style="min-width: 120px; font-size: 11px;">{col}</span>
+                <NumericStepper
+                  value={w}
+                  step={0.1}
+                  onChange={(v) => {
+                    const next = { ...weights, [col]: v ?? 1.0 };
+                    onChange({ ...config, fixed: next });
+                  }}
+                />
+                <button
+                  type="button"
+                  class="lzw-tag__remove"
+                  aria-label={`Remove ${col}`}
+                  onClick={() => {
+                    const { [col]: _, ...rest } = weights;
+                    onChange({ ...config, fixed: Object.keys(rest).length > 0 ? rest : {} });
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            {availCols.length > 0 && (
+              <select
+                class="lzw-select"
+                value=""
+                style="font-size: 11px; max-width: 180px;"
+                onChange={(e) => {
+                  const col = (e.target as HTMLSelectElement).value;
+                  if (col) onChange({ ...config, fixed: { ...weights, [col]: 1.0 } });
+                }}
+              >
+                <option value="">+ Add Column</option>
+                {availCols.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -239,6 +290,7 @@ export function SearchSpace({
   trainingConfig,
   task,
   uiSchema,
+  columns,
   onChange,
 }: SearchSpaceProps) {
   const [addedParams, setAddedParams] = useState<string[]>([]);
@@ -401,6 +453,7 @@ export function SearchSpace({
                     modes={entry.modes}
                     onChange={(c) => handleUpdate(entry, c)}
                     stepMap={stepMap}
+                    columns={columns}
                   />
                   {fixedMetric && fixedMetric.includes("precision_at_k") && (
                     <div class="lzw-search-space-grid__row" role="row">
@@ -426,127 +479,127 @@ export function SearchSpace({
                 </>
               );
             })}
+
+            {/* Added params + [+ Add] button inside model_params group */}
+            {groupKey === "model_params" && (
+              <>
+                {addedParams.map((paramKey) => {
+                  const addedEntry: CatalogEntry = {
+                    key: paramKey,
+                    title: paramKey,
+                    paramType: "number",
+                    modes: ["fixed", "range"],
+                    group: "model_params",
+                  };
+                  const paramConfig = getParamConfig(addedEntry);
+                  const fieldSchema = { title: paramKey, type: "number" };
+                  return (
+                    <div key={`added-${paramKey}`} class="lzw-search-space-grid__row" role="row">
+                      <div class="lzw-table__name" role="cell">
+                        {paramKey}
+                        <button
+                          type="button"
+                          class="lzw-btn lzw-btn--icon"
+                          style="margin-left: 4px; font-size: 10px; padding: 0 4px;"
+                          onClick={() => {
+                            setAddedParams(addedParams.filter((k) => k !== paramKey));
+                            const { [paramKey]: _s, ...newSpace } = spaceValue;
+                            const { [paramKey]: _, ...restFixed } = fixedModelParams;
+                            onChange({ space: newSpace, fixedModelParams: restFixed, fixedTraining });
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <div role="cell">
+                        <div class="lzw-segment">
+                          {(["fixed", "range"] as Mode[]).map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              class={`lzw-segment__btn ${paramConfig.mode === m ? "lzw-segment__btn--active" : ""}`}
+                              aria-pressed={paramConfig.mode === m}
+                              onClick={() => {
+                                if (m === paramConfig.mode) return;
+                                if (m === "fixed") {
+                                  handleUpdate(addedEntry, { mode: m, fixed: 0 });
+                                } else {
+                                  handleUpdate(addedEntry, { mode: m, low: 0, high: 1, log: false });
+                                }
+                              }}
+                            >
+                              {m.charAt(0).toUpperCase() + m.slice(1)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div role="cell">
+                        {paramConfig.mode === "fixed" && renderFixed(fieldSchema, paramConfig, (c) => handleUpdate(addedEntry, c), paramKey, stepMap)}
+                        {paramConfig.mode === "range" && (
+                          <div class="lzw-search-space__range">
+                            <NumericStepper
+                              value={paramConfig.low ?? undefined}
+                              placeholder="low"
+                              onChange={(v) => handleUpdate(addedEntry, { ...paramConfig, low: v })}
+                            />
+                            <span>~</span>
+                            <NumericStepper
+                              value={paramConfig.high ?? undefined}
+                              placeholder="high"
+                              onChange={(v) => handleUpdate(addedEntry, { ...paramConfig, high: v })}
+                            />
+                            <label class="lzw-search-space__log">
+                              <input
+                                type="checkbox"
+                                checked={paramConfig.log ?? false}
+                                onChange={(e) =>
+                                  handleUpdate(addedEntry, { ...paramConfig, log: (e.target as HTMLInputElement).checked })
+                                }
+                              />
+                              Log
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {(() => {
+                  const catalogKeys = new Set(searchSpaceCatalog.map((e) => e.key));
+                  const usedKeys = new Set(addedParams);
+                  const available = additionalParamsList.filter(
+                    (p) => !catalogKeys.has(p) && !usedKeys.has(p),
+                  );
+                  if (available.length === 0) return null;
+                  return (
+                    <div class="lzw-search-space-grid__row" role="row">
+                      <div role="cell" style="padding: 6px 8px;">
+                        <select
+                          class="lzw-select"
+                          value=""
+                          onChange={(e) => {
+                            const v = (e.target as HTMLSelectElement).value;
+                            if (v) {
+                              setAddedParams([...addedParams, v]);
+                              onChange({ space: spaceValue, fixedModelParams: { ...fixedModelParams, [v]: 0 }, fixedTraining });
+                            }
+                          }}
+                        >
+                          <option value="">+ Add</option>
+                          {available.map((p) => (
+                            <option key={p} value={p}>{p}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div role="cell" />
+                      <div role="cell" />
+                    </div>
+                  );
+                })()}
+              </>
+            )}
           </div>
         ))}
-
-        {/* Added params (from [+ Add]) */}
-        {addedParams.map((paramKey) => {
-          const addedEntry: CatalogEntry = {
-            key: paramKey,
-            title: paramKey,
-            paramType: "number",
-            modes: ["fixed", "range"],
-            group: "model_params",
-          };
-          const paramConfig = getParamConfig(addedEntry);
-          const fieldSchema = { title: paramKey, type: "number" };
-          return (
-            <div key={`added-${paramKey}`} class="lzw-search-space-grid__row" role="row">
-              <div class="lzw-table__name" role="cell">
-                {paramKey}
-                <button
-                  type="button"
-                  class="lzw-btn lzw-btn--icon"
-                  style="margin-left: 4px; font-size: 10px; padding: 0 4px;"
-                  onClick={() => {
-                    setAddedParams(addedParams.filter((k) => k !== paramKey));
-                    // Remove from space and fixedModelParams atomically
-                    const { [paramKey]: _s, ...newSpace } = spaceValue;
-                    const { [paramKey]: _, ...restFixed } = fixedModelParams;
-                    onChange({ space: newSpace, fixedModelParams: restFixed, fixedTraining });
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-              <div role="cell">
-                <div class="lzw-segment">
-                  {(["fixed", "range"] as Mode[]).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      class={`lzw-segment__btn ${paramConfig.mode === m ? "lzw-segment__btn--active" : ""}`}
-                      aria-pressed={paramConfig.mode === m}
-                      onClick={() => {
-                        if (m === paramConfig.mode) return;
-                        if (m === "fixed") {
-                          handleUpdate(addedEntry, { mode: m, fixed: 0 });
-                        } else {
-                          handleUpdate(addedEntry, { mode: m, low: 0, high: 1, log: false });
-                        }
-                      }}
-                    >
-                      {m.charAt(0).toUpperCase() + m.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div role="cell">
-                {paramConfig.mode === "fixed" && renderFixed(fieldSchema, paramConfig, (c) => handleUpdate(addedEntry, c), paramKey, stepMap)}
-                {paramConfig.mode === "range" && (
-                  <div class="lzw-search-space__range">
-                    <NumericStepper
-                      value={paramConfig.low ?? undefined}
-                      placeholder="low"
-                      onChange={(v) => handleUpdate(addedEntry, { ...paramConfig, low: v })}
-                    />
-                    <span>~</span>
-                    <NumericStepper
-                      value={paramConfig.high ?? undefined}
-                      placeholder="high"
-                      onChange={(v) => handleUpdate(addedEntry, { ...paramConfig, high: v })}
-                    />
-                    <label class="lzw-search-space__log">
-                      <input
-                        type="checkbox"
-                        checked={paramConfig.log ?? false}
-                        onChange={(e) =>
-                          handleUpdate(addedEntry, { ...paramConfig, log: (e.target as HTMLInputElement).checked })
-                        }
-                      />
-                      Log
-                    </label>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {/* [+ Add] button */}
-        {(() => {
-          const catalogKeys = new Set(searchSpaceCatalog.map((e) => e.key));
-          const usedKeys = new Set(addedParams);
-          const available = additionalParamsList.filter(
-            (p) => !catalogKeys.has(p) && !usedKeys.has(p),
-          );
-          if (available.length === 0) return null;
-          return (
-            <div class="lzw-search-space-grid__row" role="row">
-              <div role="cell" style="padding: 6px 8px;">
-                <select
-                  class="lzw-select"
-                  value=""
-                  onChange={(e) => {
-                    const v = (e.target as HTMLSelectElement).value;
-                    if (v) {
-                      setAddedParams([...addedParams, v]);
-                      // Initialize with Fixed mode, value 0 — atomic update
-                      onChange({ space: spaceValue, fixedModelParams: { ...fixedModelParams, [v]: 0 }, fixedTraining });
-                    }
-                  }}
-                >
-                  <option value="">+ Add</option>
-                  {available.map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
-              </div>
-              <div role="cell" />
-              <div role="cell" />
-            </div>
-          );
-        })()}
 
       </div>
     </div>
@@ -560,6 +613,7 @@ interface SearchSpaceRowProps {
   modes: Mode[];
   onChange: (config: ParamConfig) => void;
   stepMap?: Record<string, number>;
+  columns?: Array<{ name: string }>;
 }
 
 function SearchSpaceRow({
@@ -569,6 +623,7 @@ function SearchSpaceRow({
   modes,
   onChange,
   stepMap,
+  columns,
 }: SearchSpaceRowProps) {
   const title = fieldSchema.title ?? name;
   const sm = stepMap ?? {};
@@ -621,7 +676,7 @@ function SearchSpaceRow({
         )}
       </div>
       <div role="cell">
-        {config.mode === "fixed" && renderFixed(fieldSchema, config, onChange, name, stepMap)}
+        {config.mode === "fixed" && renderFixed(fieldSchema, config, onChange, name, stepMap, columns)}
         {config.mode === "range" && (() => {
           const stepVal = sm[name] ?? (fieldSchema.type === "integer" ? 1 : "any");
           return (

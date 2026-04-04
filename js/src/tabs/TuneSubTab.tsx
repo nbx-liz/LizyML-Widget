@@ -7,13 +7,12 @@ import { Accordion } from "../components/Accordion";
 import { SearchSpace } from "../components/SearchSpace";
 import { NumericStepper } from "../components/NumericStepper";
 import { ConfigFooter } from "../components/ConfigFooter";
-import { getSectionSchema } from "./configHelpers";
 
 interface TuneSubTabProps {
   localConfig: Record<string, any>;
-  configSchema: Record<string, any>;
   uiSchema: Record<string, any>;
   task: string;
+  dfInfo: Record<string, any>;
   handleChange: (newConfig: Record<string, any>) => void;
   sendAction: (type: string, payload?: Record<string, any>) => void;
   rawYaml: string | null;
@@ -23,9 +22,9 @@ interface TuneSubTabProps {
 
 export function TuneSubTab({
   localConfig,
-  configSchema,
   uiSchema,
   task,
+  dfInfo,
   handleChange,
   sendAction,
   rawYaml,
@@ -81,8 +80,6 @@ export function TuneSubTab({
 
       <Accordion title="Search Space">
         <SearchSpace
-          schema={getSectionSchema(configSchema, "model") ?? {}}
-          rootSchema={configSchema}
           spaceValue={tuneSpace}
           fixedModelParams={tuneModelParams}
           fixedTraining={tuneTraining}
@@ -90,6 +87,7 @@ export function TuneSubTab({
           trainingConfig={localConfig.training}
           task={task}
           uiSchema={uiSchema}
+          columns={dfInfo?.columns ?? []}
           onChange={({ space, fixedModelParams: mp, fixedTraining: tr }) => {
             const optuna = tuning.optuna ?? {};
             handleChange({
