@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-04-04
+
+### Fixed
+- Widget header, tabs, and Fit/Tune subtabs not staying visible when scrolling — added `max-height: max(80vh, 620px)` to `.lzw-root` to force internal scroll
+- Tune Search Space: removed invalid "Choice" mode from `num_leaves` (integer param only needs Fixed/Range)
+- Tune Search Space: Feature Weights toggle now shows column/weight editor when enabled (previously only toggle with no configuration)
+- Calibration: removed deprecated N Splits field
+- Calibration: `+ Add` now uses a select dropdown with predefined params instead of free-text input
+- Calibration: params list is now method-dependent (isotonic has LightGBM params; platt/beta have none)
+- Calibration: string params (objective, metric) render as text input instead of numeric stepper
+
+### Changed
+- Tune Search Space group order changed to Smart Params → Model Params → Training (matching Fit tab)
+- `+ Add` button moved inside Model Params group (was at grid bottom)
+- `first_metric_only` moved to appear directly after Metric in both Fit and Tune views
+- Search Space group headers now visually distinguished with background color, border, and uppercase styling
+- Upgraded lizyml dependency to v0.7.3
+
 ## [0.7.1] - 2026-04-02
 
 ### Fixed
