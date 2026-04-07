@@ -292,14 +292,14 @@ def get_default_search_space(task: str) -> dict[str, Any]:
 def prepare_tune_overrides(result: dict[str, Any]) -> dict[str, Any]:
     """Apply Tune-specific overrides: defaults, P-014 fields, direction."""
     if not result.get("tuning"):
-        result = {**result, "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}}}
+        result = {**result, "tuning": {"optuna": {"params": {"n_trials": 10}, "space": {}}}}
     else:
         existing_tuning = result["tuning"]
         existing_optuna = existing_tuning.get("optuna") or {}
         existing_params = existing_optuna.get("params") or {}
         merged_optuna = {
             **existing_optuna,
-            "params": {"n_trials": 50, **existing_params},
+            "params": {"n_trials": 10, **existing_params},
             "space": existing_optuna.get("space") or {},
         }
         result = {**result, "tuning": {**existing_tuning, "optuna": merged_optuna}}

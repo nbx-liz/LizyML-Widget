@@ -490,7 +490,7 @@ class TestServiceOwnedConfigLifecycle:
 
         config = svc.prepare_run_config({"model": {"name": "lgbm"}}, job_type="tune")
 
-        assert config["tuning"]["optuna"]["params"]["n_trials"] == 50
+        assert config["tuning"]["optuna"]["params"]["n_trials"] == 10
         assert config["tuning"]["optuna"]["space"] == {}
 
     def test_apply_loaded_config_updates_service_state(self) -> None:

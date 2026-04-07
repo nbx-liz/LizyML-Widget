@@ -837,7 +837,7 @@ class LizyWidget(anywidget.AnyWidget):
                 }
             elif job_type == "tune":
                 n_trials = (
-                    config.get("tuning", {}).get("optuna", {}).get("params", {}).get("n_trials", 50)
+                    config.get("tuning", {}).get("optuna", {}).get("params", {}).get("n_trials", 10)
                 )
                 on_progress(0, n_trials, f"Tuning {n_trials} trials...")
                 summary_t = self._service.tune(config, on_progress=on_progress)
