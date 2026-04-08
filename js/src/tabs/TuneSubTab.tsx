@@ -70,10 +70,10 @@ export function TuneSubTab({
         <div class="lzw-form-row">
           <label class="lzw-label">n_trials</label>
           <NumericStepper
-            value={localConfig.tuning?.optuna?.params?.n_trials ?? 50}
+            value={localConfig.tuning?.optuna?.params?.n_trials ?? 10}
             min={1}
             step={1}
-            onChange={(v) => handleTuneParam("n_trials", v ?? 50)}
+            onChange={(v) => handleTuneParam("n_trials", v ?? 10)}
           />
         </div>
       </Accordion>

@@ -708,7 +708,7 @@ class TestAuditCatalogDefaults:
                 "num_leaves_ratio": 1.0,
                 "min_data_in_leaf_ratio": 0.01,
                 "min_data_in_bin_ratio": 0.01,
-                "balanced": False,
+                "balanced": True,
             }
             for key, expected in expected_defaults.items():
                 entry = next((e for e in catalog if e["key"] == key), None)
@@ -724,7 +724,7 @@ class TestAuditCatalogDefaults:
             contract = adapter.get_backend_contract()
             catalog = contract.ui_schema["search_space_catalog"]
             expected_defaults = {
-                "seed": 42,
+                "seed": 1120,
                 "early_stopping.enabled": True,
                 "early_stopping.rounds": 150,
                 "validation_ratio": 0.1,

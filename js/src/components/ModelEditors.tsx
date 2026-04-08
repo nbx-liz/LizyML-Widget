@@ -423,10 +423,10 @@ export function ModelSection({
         <label class="lzw-toggle">
           <input
             type="checkbox"
-            checked={value.balanced ?? false}
+            checked={value.balanced ?? true}
             onChange={(e) => {
               const checked = (e.target as HTMLInputElement).checked;
-              setField("balanced", checked ? true : null);
+              setField("balanced", checked);
             }}
           />
           <span class="lzw-toggle__slider" />

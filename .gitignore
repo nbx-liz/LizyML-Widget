@@ -65,6 +65,7 @@ scripts/jupyter-reset.sh
 
 # Temporary / working files
 .tmp/
+tmp/
 outputs/
 
 # AI & Automation

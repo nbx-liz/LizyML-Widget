@@ -314,10 +314,10 @@ export function FitSubTab({
               <div class="lzw-form-row">
                 <label class="lzw-label">Seed</label>
                 <NumericStepper
-                  value={training.seed ?? 42}
+                  value={training.seed ?? 1120}
                   step={1}
                   onChange={(v) =>
-                    handleSectionChange("training", { ...training, seed: v ?? 42 })
+                    handleSectionChange("training", { ...training, seed: v ?? 1120 })
                   }
                 />
               </div>

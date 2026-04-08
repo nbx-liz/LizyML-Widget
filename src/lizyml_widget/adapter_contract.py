@@ -210,6 +210,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 0.01,
+                "default_range": {"low": 0.01, "high": 0.2},
             },
             {
                 "key": "feature_weights",
@@ -225,7 +226,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "paramType": "boolean",
                 "modes": ["fixed", "choice"],
                 "group": "smart_params",
-                "default": False,
+                "default": True,
             },
             # ── Model Params group ──
             {
@@ -274,8 +275,9 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "key": "max_bin",
                 "title": "Max Bin",
                 "paramType": "integer",
-                "modes": ["fixed", "range"],
+                "modes": ["fixed", "choice"],
                 "group": "model_params",
+                "default_choices": [15, 63, 127, 255, 511, 1023],
             },
             {
                 "key": "feature_fraction",
@@ -297,6 +299,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default_range": {"low": 0, "high": 20},
             },
             {
                 "key": "lambda_l1",
@@ -304,6 +307,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default_range": {"low": 1e-8, "high": 1.0, "log": True},
             },
             {
                 "key": "lambda_l2",
@@ -311,6 +315,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default_range": {"low": 1e-8, "high": 1.0, "log": True},
             },
             {
                 "key": "verbose",
@@ -327,7 +332,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                 "paramType": "integer",
                 "modes": ["fixed"],
                 "group": "training",
-                "default": 42,
+                "default": 1120,
             },
             {
                 "key": "early_stopping.enabled",
@@ -390,7 +395,7 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
             "inner_valid": {"early_stopping.enabled": True},
         },
         "defaults": {
-            "calibration": {"method": "platt", "params": {}},
+            "calibration": {"method": "isotonic", "params": {}},
         },
         "calibration_methods": ["platt", "isotonic", "beta"],
         "calibration_params": {
