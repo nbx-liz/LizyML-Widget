@@ -65,6 +65,8 @@ interface CatalogEntry {
   modes: Mode[];
   group: string;
   default?: any;
+  default_range?: { low: number; high: number; log?: boolean };
+  default_choices?: (string | number | boolean)[];
 }
 
 function isNumeric(type: string): boolean {
@@ -454,6 +456,8 @@ export function SearchSpace({
                     onChange={(c) => handleUpdate(entry, c)}
                     stepMap={stepMap}
                     columns={columns}
+                    defaultRange={entry.default_range}
+                    defaultChoices={entry.default_choices}
                   />
                   {fixedMetric && fixedMetric.includes("precision_at_k") && (
                     <div class="lzw-search-space-grid__row" role="row">
@@ -614,6 +618,8 @@ interface SearchSpaceRowProps {
   onChange: (config: ParamConfig) => void;
   stepMap?: Record<string, number>;
   columns?: Array<{ name: string }>;
+  defaultRange?: { low: number; high: number; log?: boolean };
+  defaultChoices?: (string | number | boolean)[];
 }
 
 function SearchSpaceRow({
@@ -624,6 +630,8 @@ function SearchSpaceRow({
   onChange,
   stepMap,
   columns,
+  defaultRange,
+  defaultChoices,
 }: SearchSpaceRowProps) {
   const title = fieldSchema.title ?? name;
   const sm = stepMap ?? {};
@@ -647,12 +655,18 @@ function SearchSpaceRow({
                     const recovered = config.low ?? config.choices?.[0] ?? fieldSchema.default ?? 0;
                     onChange({ mode: m, fixed: recovered });
                   } else if (m === "range") {
-                    const base = config.fixed ?? fieldSchema.default ?? 0;
-                    onChange({ mode: m, low: base, high: typeof base === "number" ? base * 2 || 1 : 1, log: false });
+                    if (defaultRange) {
+                      onChange({ mode: m, low: defaultRange.low, high: defaultRange.high, log: defaultRange.log ?? false });
+                    } else {
+                      const base = config.fixed ?? fieldSchema.default ?? 0;
+                      onChange({ mode: m, low: base, high: typeof base === "number" ? base * 2 || 1 : 1, log: false });
+                    }
                   } else {
                     // Fixed → Choice: build initial choices from available options
                     let initChoices: (string | number | boolean)[];
-                    if (fieldSchema.enum) {
+                    if (defaultChoices && defaultChoices.length > 0) {
+                      initChoices = defaultChoices;
+                    } else if (fieldSchema.enum) {
                       initChoices = fieldSchema.enum;
                     } else if (fieldSchema.items?.enum) {
                       // array-type fields (e.g. metric): use item enum, flatten fixed value
@@ -708,7 +722,7 @@ function SearchSpaceRow({
           );
         })()}
         {config.mode === "choice" && (() => {
-          const opts: string[] = fieldSchema.enum ?? fieldSchema.items?.enum ?? [];
+          const opts: (string | number | boolean)[] = fieldSchema.enum ?? fieldSchema.items?.enum ?? defaultChoices ?? [];
           if (opts.length === 0) {
             return <span class="lzw-muted">{(config.choices ?? []).join(", ")}</span>;
           }

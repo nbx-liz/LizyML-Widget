@@ -276,7 +276,7 @@ class TestGetBackendContract:
             adapter = LizyMLAdapter()
             contract = adapter.get_backend_contract()
             defaults = contract.ui_schema["defaults"]
-            assert defaults["calibration"]["method"] == "platt"
+            assert defaults["calibration"]["method"] == "isotonic"
 
     def test_capabilities(self) -> None:
         with patch.dict("sys.modules", _mock_schema_modules()):
@@ -559,7 +559,7 @@ class TestPrepareRunConfig:
         adapter = LizyMLAdapter()
         config = {"model": {"name": "lgbm", "params": {}}}
         result = adapter.prepare_run_config(config, job_type="tune")
-        assert result["tuning"]["optuna"]["params"]["n_trials"] == 50
+        assert result["tuning"]["optuna"]["params"]["n_trials"] == 10
         assert result["tuning"]["optuna"]["space"] == {}
 
     def test_tune_preserves_existing(self) -> None:

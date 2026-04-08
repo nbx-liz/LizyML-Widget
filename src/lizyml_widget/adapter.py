@@ -190,6 +190,12 @@ class LizyMLAdapter:
 
         model_section["params"] = {**params, **dict(model_section.get("params", {}))}
         config["model"] = model_section
+
+        # Override training seed to widget default (differs from LizyML schema default)
+        training = dict(config.get("training", {}))
+        training["seed"] = 1120
+        config["training"] = training
+
         return config
 
     def apply_config_patch(
@@ -286,7 +292,7 @@ class LizyMLAdapter:
                     ConfigPatchOp(
                         op="set",
                         path="tuning",
-                        value={"optuna": {"params": {"n_trials": 50}, "space": default_space}},
+                        value={"optuna": {"params": {"n_trials": 10}, "space": default_space}},
                     )
                 )
             else:
