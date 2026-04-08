@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-04-08
+
+### Changed
+- Default `balanced` from False to True
+- Default `training.seed` from 42 to 1120
+- Default `calibration.method` from "platt" to "isotonic"
+- Default `n_trials` from 50 to 10
+- `max_bin` search space mode from Range to Choice with values [15, 63, 127, 255, 511, 1023]
+
+### Added
+- `default_range` support in search space catalog for `bagging_freq`, `lambda_l1`, `lambda_l2`, `min_data_in_bin_ratio`
+- `default_choices` support in search space catalog for `max_bin`
+- SearchSpace UI uses `default_range`/`default_choices` when toggling from Fixed to Range/Choice mode
+
 ## [0.7.2] - 2026-04-04
 
 ### Fixed
