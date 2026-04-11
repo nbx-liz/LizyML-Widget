@@ -12,6 +12,11 @@
   "dependencies": {
     "preact": "^10.29.1"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@testing-library/preact": "^3.2.4",
