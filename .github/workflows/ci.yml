@@ -39,7 +39,8 @@ jobs:
       - name: Install JS dependencies and build
         run: |
           cd js
-          pnpm install
+          pnpm install --ignore-scripts
+          pnpm rebuild esbuild
           pnpm build
 
       - name: JS lint (eslint)
@@ -87,7 +88,8 @@ jobs:
       - name: Build JS
         run: |
           cd js
-          pnpm install
+          pnpm install --ignore-scripts
+          pnpm rebuild esbuild
           pnpm build
 
       - name: Install build tools
