@@ -13,10 +13,10 @@ LizyML-Widget は `lizyml` の ML 仕様（`Config schema`, `TuningResult`,
 
 | lizyml-widget | lizyml               | Python  | 主な新機能 / 破壊的変更                                               |
 | ------------- | -------------------- | ------- | --------------------------------------------------------------------- |
-| **0.5.x**     | `>=0.9.0, <0.10`     | `>=3.10`| Re-tune monitoring（Round progress, Boundary Expansion, Score History）|
-| 0.4.x         | `>=0.7.0, <0.9`      | `>=3.10`| Learning Curve metrics フィルタ, CV strategy metadata                  |
-| 0.3.x         | `>=0.5.0, <0.7`      | `>=3.10`| Canonical config, Backend Contract 駆動 UI                             |
-| 0.2.x         | `>=0.3.0, <0.5`      | `>=3.10`| Fit/Tune タブ再設計, Apply to Fit                                     |
+| **0.8.x**     | `>=0.9.0, <0.10`     | `>=3.10`| Re-tune（Round progress, Boundary Expansion, Tuning History, `w.retune()` API, UI ボタン）|
+| 0.7.x         | `>=0.7.0, <0.9`      | `>=3.10`| Calibration method 既定変更, training seed 既定変更, Search Space 既定値整理 |
+| 0.6.x / 0.5.x | `>=0.5.0, <0.7`      | `>=3.10`| Learning Curve metrics フィルタ, CV strategy metadata                  |
+| 0.4.x         | `>=0.3.0, <0.5`      | `>=3.10`| Canonical config, Backend Contract 駆動 UI                             |
 
 表の最上段が **最新** 。それ以外のバージョンは過去参照用。
 
