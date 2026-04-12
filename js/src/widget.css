@@ -798,16 +798,6 @@
   margin: 0 0 8px 0;
 }
 
-.lzw-retune-controls__input {
-  width: 90px;
-  padding: 4px 6px;
-  border: 1px solid var(--lzw-border);
-  border-radius: 3px;
-  background: var(--lzw-bg-1);
-  color: var(--lzw-fg-0);
-  font-size: 12px;
-}
-
 .lzw-retune-controls__actions {
   margin-top: 8px;
   display: flex;

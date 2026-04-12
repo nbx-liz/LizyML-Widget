@@ -195,7 +195,7 @@ class _FakeAdapter:
         )
         return self.next_summary
 
-    def predict(self, *a: Any, **kw: Any) -> Any:  # pragma: no cover - not used
+    def predict(self, *_a: Any, **_kw: Any) -> Any:  # pragma: no cover - not used
         raise NotImplementedError
 
     def evaluate_table(self, model: Any) -> list[Any]:
@@ -204,25 +204,25 @@ class _FakeAdapter:
     def split_summary(self, model: Any) -> list[Any]:
         return []
 
-    def importance(self, *a: Any, **kw: Any) -> Any:  # pragma: no cover
+    def importance(self, *_a: Any, **_kw: Any) -> Any:  # pragma: no cover
         return {}
 
-    def plot(self, *a: Any, **kw: Any) -> Any:  # pragma: no cover
+    def plot(self, *_a: Any, **_kw: Any) -> Any:  # pragma: no cover
         raise NotImplementedError
 
     def available_plots(self, model: Any) -> list[str]:
         return []
 
-    def export_model(self, *a: Any, **kw: Any) -> str:  # pragma: no cover
+    def export_model(self, *_a: Any, **_kw: Any) -> str:  # pragma: no cover
         return ""
 
-    def export_code(self, *a: Any, **kw: Any) -> Any:  # pragma: no cover
+    def export_code(self, *_a: Any, **_kw: Any) -> Any:  # pragma: no cover
         return b""
 
-    def load_model(self, *a: Any, **kw: Any) -> Any:  # pragma: no cover
+    def load_model(self, *_a: Any, **_kw: Any) -> Any:  # pragma: no cover
         return MagicMock()
 
-    def model_info(self, *a: Any, **kw: Any) -> dict[str, Any]:  # pragma: no cover
+    def model_info(self, *_a: Any, **_kw: Any) -> dict[str, Any]:  # pragma: no cover
         return {}
 
     def classify_best_params(
@@ -230,7 +230,7 @@ class _FakeAdapter:
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         return params, {}, {}
 
-    def plot_inference(self, *a: Any, **kw: Any) -> Any:  # pragma: no cover
+    def plot_inference(self, *_a: Any, **_kw: Any) -> Any:  # pragma: no cover
         raise NotImplementedError
 
 

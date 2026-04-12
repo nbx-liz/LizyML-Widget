@@ -17,7 +17,10 @@
 import { useCallback, useState } from "preact/hooks";
 import { NumericStepper } from "./NumericStepper";
 
-export interface RetunePayload {
+/** Shape of the payload sent to the `retune` action.  Kept internal —
+ *  no external consumer references the type directly.  Re-add the
+ *  ``export`` keyword if a downstream caller needs it. */
+interface RetunePayload {
   n_trials: number;
   expand_boundary: boolean;
   boundary_threshold: number;

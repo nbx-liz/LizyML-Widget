@@ -25,6 +25,45 @@ from .types import ConfigPatchOp, FitSummary, PredictionSummary, TuningSummary
 
 _log = logging.getLogger(__name__)
 
+#: Progress traitlet keys that the job workers forward from the adapter's
+#: ``on_progress`` callback ``**extra`` payload (P-027 round-aware fields
+#: plus ``fold_results`` from the fit path).  Shared between
+#: ``_job_worker`` and ``_subprocess_job_worker`` so new keys only need
+#: to be added in one place.
+_PROGRESS_EXTRA_KEYS: tuple[str, ...] = (
+    "round",
+    "total_rounds",
+    "cumulative_trials",
+    "expanded_dims",
+    "latest_score",
+    "latest_state",
+    "best_score",
+    "fold_results",
+)
+
+
+def _build_progress_payload(
+    current: int,
+    total: int,
+    message: str,
+    extra: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a JSON-serializable progress dict from an adapter callback.
+
+    Only the keys in :data:`_PROGRESS_EXTRA_KEYS` are forwarded, and only
+    when their value is non-``None``, so the widget ``progress`` traitlet
+    stays minimal and round-trippable through anywidget's JSON bridge.
+    """
+    payload: dict[str, Any] = {
+        "current": current,
+        "total": total,
+        "message": message,
+    }
+    for key in _PROGRESS_EXTRA_KEYS:
+        if key in extra and extra[key] is not None:
+            payload[key] = extra[key]
+    return payload
+
 
 class LizyWidget(anywidget.AnyWidget):
     """LizyML notebook UI widget."""
@@ -981,37 +1020,16 @@ class LizyWidget(anywidget.AnyWidget):
             message: str,
             **extra: Any,
         ) -> None:
-            """Update the progress traitlet with optional round-aware fields.
+            """Update the progress traitlet and honour the cancel flag.
 
-            ``extra`` is kept open-ended so adapters can forward new
-            TuneProgressInfo fields (P-027) without rewiring the callback
-            signature on every lizyml release.  Keys consumed by the UI:
-            ``round``, ``total_rounds``, ``cumulative_trials``,
-            ``expanded_dims``, ``latest_score``, ``latest_state``,
-            ``best_score``.
+            Delegates payload construction to
+            :func:`_build_progress_payload` so the round-aware key
+            whitelist stays in one place (shared with the subprocess
+            worker below).
             """
             if self._cancel_flag.is_set():
                 raise InterruptedError("Job cancelled by user")
-            payload: dict[str, Any] = {
-                "current": current,
-                "total": total,
-                "message": message,
-            }
-            # Only forward known scalar / list fields so the traitlet
-            # stays JSON-serializable.
-            for key in (
-                "round",
-                "total_rounds",
-                "cumulative_trials",
-                "expanded_dims",
-                "latest_score",
-                "latest_state",
-                "best_score",
-                "fold_results",
-            ):
-                if key in extra and extra[key] is not None:
-                    payload[key] = extra[key]
-            self.progress = payload
+            self.progress = _build_progress_payload(current, total, message, extra)
             self.elapsed_sec = round(time.monotonic() - start, 1)
 
         try:
@@ -1135,24 +1153,14 @@ class LizyWidget(anywidget.AnyWidget):
             message: str,
             **extra: Any,
         ) -> None:
-            payload: dict[str, Any] = {
-                "current": current,
-                "total": total,
-                "message": message,
-            }
-            for key in (
-                "round",
-                "total_rounds",
-                "cumulative_trials",
-                "expanded_dims",
-                "latest_score",
-                "latest_state",
-                "best_score",
-                "fold_results",
-            ):
-                if key in extra and extra[key] is not None:
-                    payload[key] = extra[key]
-            self.progress = payload
+            """Update the progress traitlet from subprocess messages.
+
+            The subprocess path does not need a direct cancel check here
+            because the child process is signalled via SIGTERM from
+            ``subprocess_runner.run_job_subprocess``; the parent just
+            mirrors whatever the child emits.
+            """
+            self.progress = _build_progress_payload(current, total, message, extra)
             self.elapsed_sec = round(time.monotonic() - start, 1)
 
         import tempfile
