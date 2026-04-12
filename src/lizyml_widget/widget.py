@@ -150,18 +150,41 @@ class LizyWidget(anywidget.AnyWidget):
         Raises
         ------
         ValueError
-            If no prior tune result exists on this widget.
+            If no prior tune result exists, or if any argument is out of
+            its documented range (e.g. non-positive ``n_trials``,
+            ``boundary_threshold`` outside ``[0.0, 1.0]``).
         RuntimeError
             If the resumed tune fails.
         """
         if not self.tune_summary:
             msg = "Cannot retune: no prior tune result on this widget. Call w.tune() first."
             raise ValueError(msg)
+        # Reject bool subclasses up-front so ``w.retune(n_trials=True)``
+        # cannot silently pass as ``int``.
+        if n_trials is not None and (isinstance(n_trials, bool) or n_trials <= 0):
+            msg = f"retune(): n_trials must be a positive int or None, got {n_trials!r}"
+            raise ValueError(msg)
+        if expand_boundary is not None and not isinstance(expand_boundary, bool):
+            msg = (
+                f"retune(): expand_boundary must be bool or None, "
+                f"got {type(expand_boundary).__name__}"
+            )
+            raise ValueError(msg)
+        if (
+            isinstance(boundary_threshold, bool)
+            or not isinstance(boundary_threshold, (int, float))
+            or not (0.0 <= boundary_threshold <= 1.0)
+        ):
+            msg = (
+                f"retune(): boundary_threshold must be a float in "
+                f"[0.0, 1.0], got {boundary_threshold!r}"
+            )
+            raise ValueError(msg)
         retune_kwargs: dict[str, Any] = {
             "resume": True,
             "n_trials": n_trials,
             "expand_boundary": expand_boundary,
-            "boundary_threshold": boundary_threshold,
+            "boundary_threshold": float(boundary_threshold),
         }
         return self._run_blocking_job("tune", timeout=timeout, retune_kwargs=retune_kwargs)
 

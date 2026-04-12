@@ -375,6 +375,156 @@ class TestWidgetRetuneApi:
         assert call.get("expand_boundary") is True
         assert call.get("boundary_threshold") == 0.03
 
+    def _seed_prior_tune(self, w: LizyWidget) -> None:
+        """Populate tune_summary so retune()'s precondition check passes."""
+        w.tune_summary = {
+            "best_params": {"lr": 0.01},
+            "best_score": 0.9,
+            "trials": [],
+            "metric_name": "auc",
+            "direction": "maximize",
+            "rounds": [],
+            "boundary_report": None,
+        }
+
+    def test_retune_rejects_zero_n_trials(self) -> None:
+        """``n_trials=0`` is nonsensical and must raise before touching
+        the service layer."""
+        w = _make_widget()
+        self._seed_prior_tune(w)
+        with pytest.raises(ValueError, match=r"n_trials must be a positive int"):
+            w.retune(n_trials=0)
+
+    def test_retune_rejects_negative_n_trials(self) -> None:
+        w = _make_widget()
+        self._seed_prior_tune(w)
+        with pytest.raises(ValueError, match=r"n_trials must be a positive int"):
+            w.retune(n_trials=-5)
+
+    def test_retune_rejects_bool_n_trials(self) -> None:
+        """``bool`` is a subclass of ``int`` in Python; ``n_trials=True``
+        would silently coerce to ``1`` without an explicit guard."""
+        w = _make_widget()
+        self._seed_prior_tune(w)
+        with pytest.raises(ValueError, match=r"n_trials must be a positive int"):
+            w.retune(n_trials=True)  # type: ignore[arg-type]
+
+    def test_retune_rejects_non_bool_expand_boundary(self) -> None:
+        w = _make_widget()
+        self._seed_prior_tune(w)
+        with pytest.raises(ValueError, match=r"expand_boundary must be bool"):
+            w.retune(expand_boundary="yes")  # type: ignore[arg-type]
+
+    def test_retune_rejects_out_of_range_boundary_threshold(self) -> None:
+        w = _make_widget()
+        self._seed_prior_tune(w)
+        with pytest.raises(ValueError, match=r"boundary_threshold must be"):
+            w.retune(boundary_threshold=1.5)
+        with pytest.raises(ValueError, match=r"boundary_threshold must be"):
+            w.retune(boundary_threshold=-0.1)
+
+    def test_retune_rejects_bool_boundary_threshold(self) -> None:
+        w = _make_widget()
+        self._seed_prior_tune(w)
+        with pytest.raises(ValueError, match=r"boundary_threshold must be"):
+            w.retune(boundary_threshold=True)  # type: ignore[arg-type]
+
+    def test_retune_accepts_explicit_false_expand_boundary(self) -> None:
+        """``expand_boundary=False`` must be forwarded as ``False``, not
+        dropped or coerced to ``None``."""
+        w = _make_widget()
+        self._seed_prior_tune(w)
+
+        captured: list[dict[str, Any]] = []
+
+        def mock_tune(config: Any, *, on_progress: Any = None, **kwargs: Any) -> Any:
+            captured.append(kwargs)
+            return _dummy_summary()
+
+        w._service.tune = mock_tune  # type: ignore[assignment]
+        w.config = {
+            **dict(w.config),
+            "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}},
+        }
+
+        w.retune(expand_boundary=False)
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if w.status in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+
+        assert w.status == "completed"
+        assert captured[0]["expand_boundary"] is False
+
+    def test_retune_accepts_boundary_threshold_only(self) -> None:
+        """Boundary threshold must be forwarded even when the other
+        re-tune knobs are left at their defaults."""
+        w = _make_widget()
+        self._seed_prior_tune(w)
+
+        captured: list[dict[str, Any]] = []
+
+        def mock_tune(config: Any, *, on_progress: Any = None, **kwargs: Any) -> Any:
+            captured.append(kwargs)
+            return _dummy_summary()
+
+        w._service.tune = mock_tune  # type: ignore[assignment]
+        w.config = {
+            **dict(w.config),
+            "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}},
+        }
+
+        w.retune(boundary_threshold=0.25)
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if w.status in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+
+        assert w.status == "completed"
+        assert captured[0]["boundary_threshold"] == 0.25
+        # n_trials / expand_boundary default to None (defer to backend).
+        assert captured[0]["n_trials"] is None
+        assert captured[0]["expand_boundary"] is None
+
+    def test_retune_boundary_edges_accepted(self) -> None:
+        """The valid range for boundary_threshold is inclusive [0.0, 1.0]."""
+        w = _make_widget()
+        self._seed_prior_tune(w)
+
+        captured: list[dict[str, Any]] = []
+
+        def mock_tune(config: Any, *, on_progress: Any = None, **kwargs: Any) -> Any:
+            captured.append(kwargs)
+            return _dummy_summary()
+
+        w._service.tune = mock_tune  # type: ignore[assignment]
+        w.config = {
+            **dict(w.config),
+            "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}},
+        }
+
+        # boundary_threshold=0.0 — lower edge is accepted
+        w.retune(boundary_threshold=0.0)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if w.status in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+        assert captured[-1]["boundary_threshold"] == 0.0
+
+        # boundary_threshold=1.0 — upper edge is accepted
+        w.retune(boundary_threshold=1.0)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if w.status in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+        assert captured[-1]["boundary_threshold"] == 1.0
+
 
 # ──────────────────────────────────────────────────────────────
 #  4) Retune action (UI path)
@@ -509,3 +659,185 @@ class TestRetuneAction:
         assert "n_trials" not in sanitized
         assert "expand_boundary" not in sanitized
         assert sanitized["boundary_threshold"] == 0.05
+
+
+# ──────────────────────────────────────────────────────────────
+#  5) Subprocess execution mode (P-028 safety net)
+# ──────────────────────────────────────────────────────────────
+
+
+class TestRetuneSubprocessRejection:
+    """Re-tune is not supported in subprocess execution mode because the
+    Optuna study cannot be pickled across process boundaries.  The worker
+    must fail synchronously with a clear error rather than silently
+    running a fresh study.
+
+    These tests drive ``_subprocess_job_worker`` directly instead of the
+    full ``_run_job`` path to avoid spawning an actual subprocess."""
+
+    def test_subprocess_worker_rejects_retune_kwargs(self) -> None:
+        w = _make_widget()
+        # Force-seed job_thread / locks so _subprocess_job_worker is
+        # callable directly on the main thread without _run_job setup.
+        w._subprocess_job_worker(
+            "tune",
+            {"config_version": 1},
+            retune_kwargs={"resume": True, "n_trials": 10},
+        )
+        assert w.status == "failed"
+        assert w.error["code"] == "RETUNE_SUBPROCESS_UNSUPPORTED"
+        assert "subprocess" in w.error["message"].lower()
+
+    def test_subprocess_worker_accepts_normal_tune_when_retune_kwargs_is_none(
+        self,
+    ) -> None:
+        """Normal tune (retune_kwargs=None) must NOT trip the rejection
+        branch.  We patch run_job_subprocess so the rest of the worker
+        runs as a stub and returns quickly."""
+        w = _make_widget()
+
+        from lizyml_widget import subprocess_runner
+        from lizyml_widget.subprocess_runner import SubprocessJobResult
+
+        def fake_run(
+            *,
+            job_type: str,
+            config: Any,
+            df: Any,
+            target: str,
+            libomp_path: Any,
+            on_progress: Any,
+            cancel_flag: Any,
+            model_out_path: Any = None,
+        ) -> SubprocessJobResult:
+            return SubprocessJobResult(
+                job_type=job_type,
+                fit_summary={},
+                tune_summary={
+                    "best_params": {},
+                    "best_score": 0.0,
+                    "trials": [],
+                    "metric_name": "auc",
+                    "direction": "maximize",
+                    "rounds": [],
+                    "boundary_report": None,
+                },
+                eval_table=[],
+                split_summary=[],
+                available_plots=[],
+                model_path=None,
+            )
+
+        original = subprocess_runner.run_job_subprocess
+        try:
+            # widget.py imports run_job_subprocess at module level
+            from lizyml_widget import widget as widget_module
+
+            widget_module.run_job_subprocess = fake_run  # type: ignore[assignment]
+            w._subprocess_job_worker("tune", {"config_version": 1}, retune_kwargs=None)
+        finally:
+            widget_module.run_job_subprocess = original  # type: ignore[assignment]
+
+        # Success path: status completed, no RETUNE_SUBPROCESS_UNSUPPORTED error.
+        assert w.error.get("code") != "RETUNE_SUBPROCESS_UNSUPPORTED"
+        assert w.status in ("completed", "failed")  # depends on other side effects
+
+    def test_subprocess_on_progress_forwards_round_fields(self) -> None:
+        """The subprocess worker's local on_progress must forward the
+        P-027 round-aware keys to ``self.progress`` just like the
+        in-process worker does.  Covers widget.py L1115, L1120, L1130-1132."""
+        w = _make_widget()
+
+        from lizyml_widget import subprocess_runner
+        from lizyml_widget import widget as widget_module
+        from lizyml_widget.subprocess_runner import SubprocessJobResult
+
+        captured_progress: dict[str, Any] = {}
+
+        def fake_run(
+            *,
+            job_type: str,
+            on_progress: Any,
+            **_: Any,
+        ) -> SubprocessJobResult:
+            # Simulate a round-aware progress callback from the subprocess.
+            on_progress(
+                17,
+                30,
+                "Trial 17/30",
+                round=2,
+                cumulative_trials=67,
+                expanded_dims=["learning_rate"],
+                best_score=0.93,
+                latest_score=0.91,
+                latest_state="complete",
+            )
+            captured_progress.update(dict(w.progress))
+            return SubprocessJobResult(
+                job_type=job_type,
+                fit_summary={},
+                tune_summary={
+                    "best_params": {},
+                    "best_score": 0.93,
+                    "trials": [],
+                    "metric_name": "auc",
+                    "direction": "maximize",
+                    "rounds": [],
+                    "boundary_report": None,
+                },
+                eval_table=[],
+                split_summary=[],
+                available_plots=[],
+                model_path=None,
+            )
+
+        original = subprocess_runner.run_job_subprocess
+        try:
+            widget_module.run_job_subprocess = fake_run  # type: ignore[assignment]
+            w._subprocess_job_worker("tune", {"config_version": 1}, retune_kwargs=None)
+        finally:
+            widget_module.run_job_subprocess = original  # type: ignore[assignment]
+
+        # The progress traitlet snapshot taken inside fake_run must carry
+        # every new field (exercises the forwarding loop in _subprocess_job_worker).
+        assert captured_progress["round"] == 2
+        assert captured_progress["cumulative_trials"] == 67
+        assert captured_progress["expanded_dims"] == ["learning_rate"]
+        assert captured_progress["best_score"] == 0.93
+        assert captured_progress["latest_score"] == 0.91
+        assert captured_progress["latest_state"] == "complete"
+
+
+# ──────────────────────────────────────────────────────────────
+#  6) Job concurrency guard (retune while tune already running)
+# ──────────────────────────────────────────────────────────────
+
+
+class TestRetuneConcurrency:
+    def test_retune_action_ignored_while_tune_running(self) -> None:
+        """If a tune/retune is already in progress, a second retune
+        action must be rejected by _run_job's status guard and not
+        spawn a second worker thread."""
+        w = _make_widget()
+        # Seed tune_summary to pass the action precondition.
+        w.tune_summary = {
+            "best_params": {"lr": 0.01},
+            "best_score": 0.9,
+            "trials": [],
+            "metric_name": "auc",
+            "direction": "maximize",
+            "rounds": [],
+            "boundary_report": None,
+        }
+        # Flip status manually to running so _run_job's guard trips.
+        w.status = "running"
+        before_counter = w._job_counter
+
+        w.action = {"type": "retune", "payload": {"n_trials": 5}}
+
+        # _run_job returned early because status == "running".  No new
+        # job was allocated, no worker thread was spawned.
+        assert w._job_counter == before_counter
+        # The ``retune`` action handler must not leave a stale error on
+        # the widget — the precondition passed and the guard is silent.
+        assert w.error.get("code") != "NO_PRIOR_TUNE"

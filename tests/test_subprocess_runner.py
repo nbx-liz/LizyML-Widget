@@ -278,6 +278,73 @@ class TestRunJob:
         assert progress_msgs[0]["current"] == 1
         assert progress_msgs[1]["current"] == 2
 
+    def test_progress_forwards_retune_round_kwargs(self) -> None:
+        """P-027/P-028: The subprocess entry's ``on_progress`` must forward
+        round/cumulative_trials/expanded_dims/latest_score/latest_state/
+        best_score kwargs through to the output stream.  Covers
+        _subprocess_entry.py line 100 (the ``payload[key] = extra[key]``
+        branch inside the forwarding loop)."""
+        import io
+
+        df = pd.DataFrame({"x": [1, 2, 3, 4], "y": [0, 1, 0, 1]})
+        output = io.BytesIO()
+
+        def fake_tune(model: Any, *, on_progress: Any = None, **_: Any) -> MagicMock:
+            if on_progress:
+                on_progress(
+                    17,
+                    30,
+                    "Trial 17/30",
+                    round=2,
+                    cumulative_trials=67,
+                    expanded_dims=["learning_rate"],
+                    best_score=0.93,
+                    latest_score=0.91,
+                    latest_state="complete",
+                )
+            s = MagicMock()
+            s.best_params = {"lr": 0.01}
+            s.best_score = 0.93
+            s.trials = []
+            s.metric_name = "auc"
+            s.direction = "maximize"
+            s.rounds = []
+            s.boundary_report = None
+            return s
+
+        mock_adapter = MagicMock()
+        mock_adapter.tune.side_effect = fake_tune
+        mock_adapter.evaluate_table.return_value = []
+        mock_adapter.split_summary.return_value = []
+        mock_adapter.available_plots.return_value = []
+        mock_adapter.export_model.return_value = "/tmp/m.txt"
+
+        with patch(
+            "lizyml_widget._subprocess_entry._create_adapter",
+            return_value=mock_adapter,
+        ):
+            run_job(
+                job_type="tune",
+                config={"model": {"name": "lgbm"}},
+                df=df,
+                target="y",
+                model_out_path="/tmp/m.txt",
+                output=output,
+            )
+
+        messages = decode_messages(output.getvalue())
+        progress_msgs = [m for m in messages if m["type"] == "progress"]
+        assert len(progress_msgs) >= 1
+        p = progress_msgs[0]
+        assert p["current"] == 17
+        assert p["total"] == 30
+        assert p["round"] == 2
+        assert p["cumulative_trials"] == 67
+        assert p["expanded_dims"] == ["learning_rate"]
+        assert p["best_score"] == 0.93
+        assert p["latest_score"] == 0.91
+        assert p["latest_state"] == "complete"
+
 
 # ===========================================================================
 # subprocess_runner: SubprocessJobResult
@@ -496,6 +563,88 @@ class TestRunJobSubprocess:
 
         assert len(received) == 1
         assert received[0] == (3, 5, "Fold 3")
+
+    def test_progress_callback_forwards_retune_kwargs(self) -> None:
+        """P-027/P-028: subprocess_runner must copy extra round-aware
+        fields from the wire protocol dict into the on_progress kwargs.
+        Covers subprocess_runner.py line 157 (extra[key] = msg[key])."""
+        df = pd.DataFrame({"x": [1, 2], "y": [0, 1]})
+
+        progress_msg = encode_message(
+            {
+                "type": "progress",
+                "current": 17,
+                "total": 30,
+                "message": "Trial 17/30",
+                # Re-tune fields the parent must forward:
+                "round": 2,
+                "cumulative_trials": 67,
+                "expanded_dims": ["learning_rate", "num_leaves"],
+                "best_score": 0.93,
+                "latest_score": 0.91,
+                "latest_state": "complete",
+            }
+        )
+        result_msg = encode_message(
+            {
+                "type": "result",
+                "tune_summary": {
+                    "best_params": {},
+                    "best_score": 0.93,
+                    "trials": [],
+                    "metric_name": "auc",
+                    "direction": "maximize",
+                    "rounds": [],
+                    "boundary_report": None,
+                },
+                "eval_table": [],
+                "split_summary": [],
+                "available_plots": [],
+                "model_path": None,
+            }
+        )
+        all_output = progress_msg + result_msg
+
+        received: list[tuple[int, int, str, dict[str, Any]]] = []
+
+        def on_progress(current: int, total: int, message: str, **extra: Any) -> None:
+            received.append((current, total, message, extra))
+
+        with patch("lizyml_widget.subprocess_runner.subprocess.Popen") as mock_popen:
+            proc = MagicMock()
+            proc.stdout = MagicMock()
+            proc.stdout.read.side_effect = [
+                all_output[:4],
+                all_output[4 : len(progress_msg)],
+                all_output[len(progress_msg) : len(progress_msg) + 4],
+                all_output[len(progress_msg) + 4 :],
+                b"",
+            ]
+            proc.stderr = MagicMock()
+            proc.stderr.read.return_value = b""
+            proc.wait.return_value = 0
+            proc.returncode = 0
+            proc.pid = 12345
+            mock_popen.return_value = proc
+
+            run_job_subprocess(
+                job_type="tune",
+                config={"model": {"name": "lgbm"}},
+                df=df,
+                target="y",
+                libomp_path=None,
+                on_progress=on_progress,
+                cancel_flag=threading.Event(),
+            )
+
+        assert len(received) == 1
+        _cur, _total, _msg, extra = received[0]
+        assert extra["round"] == 2
+        assert extra["cumulative_trials"] == 67
+        assert extra["expanded_dims"] == ["learning_rate", "num_leaves"]
+        assert extra["best_score"] == 0.93
+        assert extra["latest_score"] == 0.91
+        assert extra["latest_state"] == "complete"
 
     def test_subprocess_error_raises(self) -> None:
         """Error message from subprocess raises RuntimeError."""

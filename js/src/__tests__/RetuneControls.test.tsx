@@ -63,4 +63,27 @@ describe("RetuneControls", () => {
     fireEvent.click(screen.getByRole("button", { name: /Re-tune \(resume\)/i }));
     expect(onRetune.mock.calls[0][0].boundary_threshold).toBeCloseTo(0.2);
   });
+
+  // Regression / edge: clearing the numeric input produces `undefined`
+  // from NumericStepper's onChange.  The component must fall back to
+  // the default (defaultNTrials) instead of leaving state as undefined.
+  it("falls back to default n_trials when the input is cleared", () => {
+    const onRetune = vi.fn();
+    render(
+      <RetuneControls onRetune={onRetune} disabled={false} defaultNTrials={42} />,
+    );
+    const n_trials = screen.getByLabelText("n_trials") as HTMLInputElement;
+    fireEvent.change(n_trials, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /Re-tune \(resume\)/i }));
+    expect(onRetune.mock.calls[0][0].n_trials).toBe(42);
+  });
+
+  it("falls back to default boundary_threshold when the input is cleared", () => {
+    const onRetune = vi.fn();
+    render(<RetuneControls onRetune={onRetune} disabled={false} />);
+    const thr = screen.getByLabelText("boundary_threshold") as HTMLInputElement;
+    fireEvent.change(thr, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /Re-tune \(resume\)/i }));
+    expect(onRetune.mock.calls[0][0].boundary_threshold).toBeCloseTo(0.05);
+  });
 });
