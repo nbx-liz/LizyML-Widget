@@ -177,6 +177,10 @@ class TestRunJob:
         mock_summary.trials = []
         mock_summary.metric_name = "auc"
         mock_summary.direction = "maximize"
+        # P-027: re-tune monitoring fields must be concrete so pickle
+        # (used by the subprocess message protocol) can serialize them.
+        mock_summary.rounds = []
+        mock_summary.boundary_report = None
 
         mock_adapter = MagicMock()
         mock_adapter.tune.return_value = mock_summary
@@ -459,7 +463,7 @@ class TestRunJobSubprocess:
 
         received: list[tuple[int, int, str]] = []
 
-        def on_progress(current: int, total: int, message: str) -> None:
+        def on_progress(current: int, total: int, message: str, **_: Any) -> None:
             received.append((current, total, message))
 
         with patch("lizyml_widget.subprocess_runner.subprocess.Popen") as mock_popen:

@@ -6,6 +6,17 @@ import { ScoreTable } from "../components/ScoreTable";
 import { ParamsTable } from "../components/ParamsTable";
 import { PlotViewer } from "../components/PlotViewer";
 import { PredTable } from "../components/PredTable";
+import {
+  BoundaryExpansionPanel,
+  type BoundaryReport,
+} from "../components/BoundaryExpansionPanel";
+import {
+  ScoreHistoryChart,
+  type TrialRecord,
+  type RoundRecord,
+} from "../components/ScoreHistoryChart";
+import { ConvergenceSignal } from "../components/ConvergenceSignal";
+import { RetuneControls } from "../components/RetuneControls";
 import type { ResolvedTheme } from "../hooks/useTheme";
 import type { PlotRequestOptions } from "../hooks/usePlot";
 
@@ -210,51 +221,117 @@ export function ResultsTab({
 
       {/* Tune specific results */}
       {hasTune && (
-        <Accordion title="Best Params" defaultOpen={true}>
-          {tuneSummary.best_params && Object.keys(tuneSummary.best_params).length > 0 ? (
-            <>
-              <ParamsTable params={[tuneSummary.best_params]} />
-              <div style="margin-top: 8px;">
-                <button
-                  class="lzw-btn lzw-btn--primary"
-                  onClick={() => {
-                    sendAction("apply_best_params", { params: tuneSummary.best_params });
+        <>
+          <Accordion title="Best Params" defaultOpen={true}>
+            {tuneSummary.best_params && Object.keys(tuneSummary.best_params).length > 0 ? (
+              <>
+                <ParamsTable params={[tuneSummary.best_params]} />
+                <div style="margin-top: 8px;">
+                  <button
+                    class="lzw-btn lzw-btn--primary"
+                    onClick={() => {
+                      sendAction("apply_best_params", { params: tuneSummary.best_params });
+                      onSwitchToFit?.();
+                    }}
+                    type="button"
+                  >
+                    Apply to Fit &#x25B8;
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p class="lzw-muted">No best params available.</p>
+            )}
+
+            {/* P-028: Re-tune launcher — shown on tune completion only.
+                When a new job is running the ResultsTab switches to the
+                Running view earlier in this component, so in practice the
+                Best Params accordion is not mounted during that window.
+                The ``disabled`` prop keeps the button inert as a belt-and-
+                suspenders measure in case a future layout change keeps
+                both views visible at once. */}
+            <RetuneControls
+              disabled={status === "running"}
+              onRetune={(payload) => sendAction("retune", payload)}
+            />
+            <div class="lzw-form-row" style="margin-top: 8px;">
+              <span class="lzw-label">Best Score</span>
+              <span>
+                {tuneSummary.metric_name}: {tuneSummary.best_score?.toFixed(4)}
+              </span>
+            </div>
+            {(() => {
+              const trials: any[] = tuneSummary.trials ?? [];
+              const stateOf = (t: any) => String(t.state ?? "").toUpperCase();
+              const complete = trials.filter((t: any) => stateOf(t) === "COMPLETE").length;
+              const pruned = trials.filter((t: any) => stateOf(t) === "PRUNED").length;
+              const failed = trials.filter((t: any) => stateOf(t) === "FAIL").length;
+              const rounds: any[] = tuneSummary.rounds ?? [];
+              return (
+                <>
+                  <div class="lzw-form-row">
+                    <span class="lzw-label">Trials</span>
+                    <span>
+                      {trials.length} total
+                      {complete > 0 && ` / ${complete} complete`}
+                      {pruned > 0 && ` / ${pruned} pruned`}
+                      {failed > 0 && ` / ${failed} failed`}
+                    </span>
+                  </div>
+                  {rounds.length > 1 && (
+                    <div class="lzw-form-row">
+                      <span class="lzw-label">Rounds</span>
+                      <span>{rounds.length} resume rounds</span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </Accordion>
+
+          {/* P-027: Convergence signal when the last resume round did not expand anything. */}
+          {(() => {
+            const rounds = (tuneSummary.rounds ?? []) as RoundRecord[];
+            const lastRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
+            const report = (tuneSummary.boundary_report ?? null) as BoundaryReport | null;
+            const expandedInLast = lastRound ? lastRound.expanded_dims.length : 0;
+            if (lastRound && lastRound.round >= 1 && expandedInLast === 0 && rounds.length > 1) {
+              return (
+                <ConvergenceSignal
+                  round={lastRound.round + 1 /* 0-indexed → 1-indexed */}
+                  checkedDims={report?.dims.length ?? 0}
+                  onProceedToFit={() => {
+                    if (tuneSummary.best_params) {
+                      sendAction("apply_best_params", { params: tuneSummary.best_params });
+                    }
                     onSwitchToFit?.();
                   }}
-                  type="button"
-                >
-                  Apply to Fit &#x25B8;
-                </button>
-              </div>
-            </>
-          ) : (
-            <p class="lzw-muted">No best params available.</p>
-          )}
-          <div class="lzw-form-row" style="margin-top: 8px;">
-            <span class="lzw-label">Best Score</span>
-            <span>
-              {tuneSummary.metric_name}: {tuneSummary.best_score?.toFixed(4)}
-            </span>
-          </div>
-          {(() => {
-            const trials: any[] = tuneSummary.trials ?? [];
-            const stateOf = (t: any) => String(t.state ?? "").toUpperCase();
-            const complete = trials.filter((t: any) => stateOf(t) === "COMPLETE").length;
-            const pruned = trials.filter((t: any) => stateOf(t) === "PRUNED").length;
-            const failed = trials.filter((t: any) => stateOf(t) === "FAIL").length;
-            return (
-              <div class="lzw-form-row">
-                <span class="lzw-label">Trials</span>
-                <span>
-                  {trials.length} total
-                  {complete > 0 && ` / ${complete} complete`}
-                  {pruned > 0 && ` / ${pruned} pruned`}
-                  {failed > 0 && ` / ${failed} failed`}
-                </span>
-              </div>
-            );
+                />
+              );
+            }
+            return null;
           })()}
-        </Accordion>
+
+          {/* P-027: Boundary Expansion panel — only when re-tune ran resume rounds. */}
+          {tuneSummary.boundary_report && (
+            <Accordion title="Boundary Expansion" defaultOpen={true}>
+              <BoundaryExpansionPanel
+                report={tuneSummary.boundary_report as BoundaryReport}
+              />
+            </Accordion>
+          )}
+
+          {/* P-027: Score History chart — always shown for tune results. */}
+          <Accordion title="Score History" defaultOpen={true}>
+            <ScoreHistoryChart
+              trials={(tuneSummary.trials ?? []) as TrialRecord[]}
+              rounds={(tuneSummary.rounds ?? []) as RoundRecord[]}
+              direction={String(tuneSummary.direction ?? "minimize")}
+              metricName={String(tuneSummary.metric_name ?? "score")}
+              theme={theme}
+            />
+          </Accordion>
+        </>
       )}
 
       {/* Score (Fit) */}

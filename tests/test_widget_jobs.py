@@ -319,7 +319,7 @@ class TestRunBlockingJob:
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        def _instant_complete(job_type: str) -> None:
+        def _instant_complete(job_type: str, **_: Any) -> None:
             w.status = "completed"
 
         w._run_job = _instant_complete  # type: ignore[assignment]
@@ -332,7 +332,7 @@ class TestRunBlockingJob:
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        def _instant_fail(job_type: str) -> None:
+        def _instant_fail(job_type: str, **_: Any) -> None:
             w.error = {"code": "BACKEND_ERROR", "message": "boom"}
             w.status = "failed"
 
@@ -346,7 +346,7 @@ class TestRunBlockingJob:
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        def _instant_fail(job_type: str) -> None:
+        def _instant_fail(job_type: str, **_: Any) -> None:
             w.error = {"code": "INTERNAL_ERROR"}
             w.status = "failed"
 
@@ -425,7 +425,7 @@ class TestBlockingHelperTimeout:
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        def _stuck_job(job_type: str) -> None:
+        def _stuck_job(job_type: str, **_: Any) -> None:
             w.status = "running"
 
         w._run_job = _stuck_job  # type: ignore[assignment]
@@ -439,7 +439,7 @@ class TestBlockingHelperTimeout:
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        def _stuck_job(job_type: str) -> None:
+        def _stuck_job(job_type: str, **_: Any) -> None:
             w.status = "running"
 
         w._run_job = _stuck_job  # type: ignore[assignment]

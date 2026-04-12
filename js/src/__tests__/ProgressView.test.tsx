@@ -92,16 +92,95 @@ describe("ProgressView — job type and index", () => {
     expect(screen.getByText("Fit #3")).toBeDefined();
   });
 
-  it("renders tune type with indeterminate bar", () => {
+  it("renders tune type with indeterminate bar when current is 0", () => {
     const { container } = render(
       <ProgressView
         {...defaultProps}
         jobType="tune"
-        progress={{ current: 0, total: 50, message: "Trial 10/50" }}
+        progress={{ current: 0, total: 50 }}
       />,
     );
-    expect(screen.getByText(/Tuning 50 trials/)).toBeDefined();
+    // P-027: with current=0 the bar is indeterminate but the label already
+    // shows "Trial 0/50" so the user sees the total trial count.
+    expect(screen.getByText(/Trial 0\/50/)).toBeDefined();
     const bar = container.querySelector(".lzw-progress__bar--indeterminate");
     expect(bar).not.toBeNull();
+  });
+
+  it("shows 'Tuning...' fallback when total is 0", () => {
+    render(
+      <ProgressView
+        {...defaultProps}
+        jobType="tune"
+        progress={{ current: 0, total: 0, message: "Starting tune..." }}
+      />,
+    );
+    expect(screen.getByText(/Tuning\.\.\./)).toBeDefined();
+  });
+
+  it("renders tune trial progress with determinate bar", () => {
+    const { container } = render(
+      <ProgressView
+        {...defaultProps}
+        jobType="tune"
+        progress={{ current: 10, total: 50 }}
+      />,
+    );
+    // P-027: in-progress tune shows "Trial N/M" with a real bar.
+    expect(screen.getByText(/Trial 10\/50/)).toBeDefined();
+    const bar = container.querySelector(".lzw-progress__bar");
+    expect(bar).not.toBeNull();
+  });
+});
+
+describe("ProgressView — P-027 round-aware tune", () => {
+  it("shows Round badge and cumulative trials on resume rounds", () => {
+    render(
+      <ProgressView
+        {...defaultProps}
+        jobType="tune"
+        progress={{
+          current: 17,
+          total: 30,
+          round: 2,
+          total_rounds: 2,
+          cumulative_trials: 67,
+          best_score: 0.279,
+        }}
+      />,
+    );
+    expect(screen.getByText(/Round 2\/2/)).toBeDefined();
+    expect(screen.getByText(/Trial 17\/30/)).toBeDefined();
+    expect(screen.getByText(/cumulative: 67/)).toBeDefined();
+    expect(screen.getByText(/0\.2790/)).toBeDefined();
+  });
+
+  it("renders expanded_dims chips when boundary expansion happened", () => {
+    render(
+      <ProgressView
+        {...defaultProps}
+        jobType="tune"
+        progress={{
+          current: 5,
+          total: 30,
+          round: 2,
+          expanded_dims: ["learning_rate", "num_leaves"],
+        }}
+      />,
+    );
+    expect(screen.getByText("learning_rate")).toBeDefined();
+    expect(screen.getByText("num_leaves")).toBeDefined();
+    expect(screen.getByText(/Boundary expansion this round/)).toBeDefined();
+  });
+
+  it("hides round badge for a single-round tune", () => {
+    render(
+      <ProgressView
+        {...defaultProps}
+        jobType="tune"
+        progress={{ current: 5, total: 30, round: 1 }}
+      />,
+    );
+    expect(screen.queryByText(/^Round /)).toBeNull();
   });
 });
