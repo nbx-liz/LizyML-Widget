@@ -7,6 +7,10 @@ interface NumericStepperProps {
   max?: number;
   placeholder?: string;
   class?: string;
+  /** Optional id forwarded to the inner <input> so <label htmlFor> can reach it. */
+  inputId?: string;
+  /** Optional aria-label forwarded to the inner <input> for screen readers. */
+  ariaLabel?: string;
   onChange: (value: number | undefined) => void;
 }
 
@@ -17,6 +21,8 @@ export function NumericStepper({
   max,
   placeholder,
   class: cls,
+  inputId,
+  ariaLabel,
   onChange,
 }: NumericStepperProps) {
   const numStep = typeof step === "string" ? 1 : step;
@@ -39,6 +45,8 @@ export function NumericStepper({
         −
       </button>
       <input
+        id={inputId}
+        aria-label={ariaLabel}
         class="lzw-stepper__input"
         type="number"
         step={step}

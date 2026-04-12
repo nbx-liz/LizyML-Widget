@@ -43,6 +43,11 @@ class WidgetService:
         self._df: pd.DataFrame | None = None
         self._df_info: dict[str, Any] = {}
         self._model: Any = None
+        # P-028: a separate slot for the most recently tuned model so that
+        # a subsequent fit() (which creates a fresh backend model via
+        # apply_best_params → Fit) does not clobber the Optuna study the
+        # resume path needs.
+        self._tune_model: Any = None
         self._model_lock = threading.Lock()
 
     @property
@@ -64,6 +69,7 @@ class WidgetService:
         self._df = df
         with self._model_lock:
             self._model = None
+            self._tune_model = None
 
         columns: list[dict[str, Any]] = []
         for col in df.columns:
@@ -627,15 +633,59 @@ class WidgetService:
         config: dict[str, Any],
         *,
         on_progress: Callable[..., Any] | None = None,
+        resume: bool = False,
+        n_trials: int | None = None,
+        expand_boundary: bool | None = None,
+        boundary_threshold: float = 0.05,
     ) -> TuningSummary:
-        """Create model and run tune."""
+        """Create or resume a tuning run (P-028).
+
+        When ``resume`` is False the service creates a fresh backend model
+        from ``config`` (the legacy behavior).  When ``resume`` is True the
+        service reuses ``self._tune_model`` — the backend model from the
+        most recent tune() call — so the Optuna study is resumed in place
+        and the new trials add to ``TuningResult.rounds``.
+
+        ``self._tune_model`` is a distinct slot from ``self._model``: a
+        subsequent ``fit()`` call creates a fresh backend model (see
+        ``apply_best_params → fit`` flow) that replaces ``self._model`` but
+        leaves ``self._tune_model`` intact so ``retune()`` can still find
+        the original Optuna study.
+
+        Raises
+        ------
+        ValueError
+            If ``resume=True`` is requested but no prior tune model exists.
+        """
         if self._df is None:
             msg = "No data loaded"
             raise ValueError(msg)
-        model = self._adapter.create_model(config, self._df)
-        result = self._adapter.tune(model, on_progress=on_progress)
+
+        if resume:
+            # Take and validate the tune model inside a single lock section
+            # so an intervening ``load()`` cannot reset ``_tune_model`` to
+            # ``None`` between read and check (TOCTOU).
+            with self._model_lock:
+                model = self._tune_model
+                if model is None:
+                    msg = "Cannot resume: no prior tune exists. Run w.tune() first."
+                    raise ValueError(msg)
+        else:
+            model = self._adapter.create_model(config, self._df)
+
+        result = self._adapter.tune(
+            model,
+            on_progress=on_progress,
+            resume=resume,
+            n_trials=n_trials,
+            expand_boundary=expand_boundary,
+            boundary_threshold=boundary_threshold,
+        )
         with self._model_lock:
             self._model = model
+            # Record this as the reference tune model so subsequent retune()
+            # calls (even after an intervening fit()) resume *this* study.
+            self._tune_model = model
         return result
 
     def predict(self, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary:

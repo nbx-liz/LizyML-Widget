@@ -90,6 +90,10 @@ class BackendAdapter(Protocol):
         model: Any,
         *,
         on_progress: Callable[..., Any] | None = None,
+        resume: bool = False,
+        n_trials: int | None = None,
+        expand_boundary: bool | None = None,
+        boundary_threshold: float = 0.05,
     ) -> TuningSummary: ...
 
     def predict(
@@ -125,10 +129,148 @@ class BackendAdapter(Protocol):
     def plot_inference(self, predictions: pd.DataFrame, plot_type: str) -> PlotData: ...
 
 
+#: Minimum supported lizyml version (inclusive). P-027: re-tune monitoring.
+LIZYML_MIN_VERSION = (0, 9, 0)
+#: Maximum supported lizyml version (exclusive).
+LIZYML_MAX_VERSION = (0, 10, 0)
+
+
+def _parse_lizyml_version(raw: str) -> tuple[int, ...]:
+    """Parse a lizyml version string into a comparable tuple of ints.
+
+    Pre-release / dev suffixes ("0.9.0rc1", "0.9.0.dev3") are stripped so
+    they compare equal to their base release.  This keeps the version guard
+    permissive for local dev installs.
+    """
+    import re
+
+    core = re.split(r"[^0-9.]", raw, maxsplit=1)[0]
+    parts = core.split(".")
+    out: list[int] = []
+    for p in parts:
+        try:
+            out.append(int(p))
+        except ValueError:
+            break
+    # Pad to 3 components so comparisons work against (major, minor, patch).
+    while len(out) < 3:
+        out.append(0)
+    return tuple(out[:3])
+
+
+def _check_lizyml_version() -> None:
+    """Validate the installed lizyml version against the widget's contract.
+
+    Raises
+    ------
+    ImportError
+        When ``lizyml`` is missing or outside ``[LIZYML_MIN_VERSION,
+        LIZYML_MAX_VERSION)``.  The error message points the user at the
+        ``[lizyml]`` extras install command.
+    """
+    try:
+        import lizyml
+    except ImportError as exc:  # pragma: no cover - exercised via dedicated test
+        msg = (
+            "lizyml-widget requires the 'lizyml' backend. "
+            "Install it with:\n"
+            "    pip install 'lizyml-widget[lizyml]'\n"
+            "See docs/VERSION_COMPAT.md for details."
+        )
+        raise ImportError(msg) from exc
+
+    version_str = getattr(lizyml, "__version__", None)
+    # Unit tests often install ``lizyml`` as a ``MagicMock`` via
+    # ``sys.modules`` patching; in that case ``__version__`` is not a
+    # real string and the guard cannot reliably parse it.  Skip silently
+    # so mocked tests still exercise the adapter without being blocked
+    # by a version check that is irrelevant in that environment.
+    if not isinstance(version_str, str):
+        return
+
+    version = _parse_lizyml_version(version_str)
+    if version < LIZYML_MIN_VERSION or version >= LIZYML_MAX_VERSION:
+        min_s = ".".join(str(x) for x in LIZYML_MIN_VERSION)
+        max_s = ".".join(str(x) for x in LIZYML_MAX_VERSION)
+        msg = (
+            f"lizyml-widget requires lizyml>={min_s},<{max_s} "
+            f"(found: lizyml=={version_str}). Run:\n"
+            f"    pip install --upgrade "
+            f"'lizyml[plots,tuning,calibration,explain]>={min_s},<{max_s}'\n"
+            "See docs/VERSION_COMPAT.md for the full compatibility matrix."
+        )
+        raise ImportError(msg)
+
+
+def _serialize_trials(trials: Any) -> list[dict[str, Any]]:
+    """Convert a sequence of lizyml TrialResult into JSON-friendly dicts.
+
+    Each dict keeps ``round`` (defaulting to 1 for pre-re-tune backends)
+    so the UI can group trials by round when rendering the score history.
+    """
+    from dataclasses import asdict
+
+    out: list[dict[str, Any]] = []
+    for t in trials or ():
+        d = asdict(t)
+        d.setdefault("round", 1)
+        out.append(d)
+    return out
+
+
+def _serialize_rounds(rounds: Any) -> list[dict[str, Any]]:
+    """Convert a tuple of ``RoundSummary`` into plain dicts.
+
+    ``space_snapshot`` is stripped because each entry is a dataclass
+    (``FloatDim`` / ``IntDim`` / ``CategoricalDim``) that anywidget cannot
+    serialize directly.  The UI only needs the round-level metadata
+    (scores, expanded dim names); full space snapshots can be retrieved
+    from ``boundary_report`` if needed in a future iteration.
+    """
+    out: list[dict[str, Any]] = []
+    for r in rounds or ():
+        out.append(
+            {
+                "round": int(getattr(r, "round", 0)),
+                "n_trials": int(getattr(r, "n_trials", 0)),
+                "best_score_before": getattr(r, "best_score_before", None),
+                "best_score_after": float(getattr(r, "best_score_after", 0.0)),
+                "expanded_dims": list(getattr(r, "expanded_dims", ()) or ()),
+            }
+        )
+    return out
+
+
+def _serialize_boundary_report(report: Any) -> dict[str, Any] | None:
+    """Convert ``BoundaryReport`` into a JSON-friendly dict (or None)."""
+    if report is None:
+        return None
+    dims_out: list[dict[str, Any]] = []
+    for d in getattr(report, "dims", ()) or ():
+        dims_out.append(
+            {
+                "name": getattr(d, "name", ""),
+                "best_value": getattr(d, "best_value", None),
+                "low": getattr(d, "low", None),
+                "high": getattr(d, "high", None),
+                "position_pct": getattr(d, "position_pct", None),
+                "edge": getattr(d, "edge", ""),
+                "expanded": bool(getattr(d, "expanded", False)),
+                "new_low": getattr(d, "new_low", None),
+                "new_high": getattr(d, "new_high", None),
+            }
+        )
+    return {
+        "dims": dims_out,
+        "expanded_names": list(getattr(report, "expanded_names", ()) or ()),
+    }
+
+
 class LizyMLAdapter:
     """Adapter for the LizyML backend library."""
 
     def __init__(self) -> None:
+        _check_lizyml_version()
         self._last_worker_thread: threading.Thread | None = None
 
     @property
@@ -631,52 +773,96 @@ class LizyMLAdapter:
         model: Any,
         *,
         on_progress: Callable[..., Any] | None = None,
+        resume: bool = False,
+        n_trials: int | None = None,
+        expand_boundary: bool | None = None,
+        boundary_threshold: float = 0.05,
     ) -> TuningSummary:
-        from dataclasses import asdict
+        """Run ``Model.tune`` with optional re-tune (Study Resume) support.
 
-        # Both v0.2.0+ and legacy paths use _run_with_cancel_polling to ensure
-        # the cancel flag is polled every 0.5s.  For v0.2.0+, LizyML fires a
-        # progress_callback per trial, so we pass a cancel-only sentinel to the
-        # polling loop to avoid duplicate "Processing..." messages.
-        progress_cb = None
-        use_direct_call = False
+        Parameters
+        ----------
+        resume
+            When ``True`` the backend resumes the existing Optuna study on
+            ``model`` instead of starting a fresh one.  Requires that the
+            caller (``WidgetService``) passes a model that was already tuned.
+        n_trials
+            Extra trials to run on the resumed study.  ``None`` defers to
+            the backend default.
+        expand_boundary
+            If ``True``, allow the backend to widen search-space boundaries
+            when the best trial lands against an edge.  ``None`` defers to
+            the backend default.
+        boundary_threshold
+            Fraction of the dim range that qualifies as "against the edge"
+            when ``expand_boundary`` is enabled.
+        """
+        from lizyml.core.types.tuning_result import TuneProgressInfo
+
+        # lizyml>=0.9.0 (P-027) always supports progress_callback & re-tune.
+        # The cancel flag is polled every 0.5s via _run_with_cancel_polling,
+        # while progress_cb fires per trial with round-aware payload.
+        progress_cb: Callable[[TuneProgressInfo], None] | None = None
         if on_progress is not None:
-            try:
-                from lizyml.core.types.tuning_result import TuneProgressInfo  # noqa: F811
 
-                use_direct_call = True
+            def progress_cb(info: TuneProgressInfo) -> None:
+                msg = f"Trial {info.current_trial}/{info.total_trials}"
+                if info.best_score is not None:
+                    msg += f" (best: {info.best_score:.4f})"
+                # Re-tune fields (lizyml>=0.9.0 only).  Default to sane
+                # single-round values so the widget traitlet can assume the
+                # keys are always present.
+                round_no = int(getattr(info, "round", 1) or 1)
+                cumulative = int(
+                    getattr(info, "cumulative_trials", info.current_trial) or info.current_trial
+                )
+                expanded = tuple(getattr(info, "expanded_dims", ()) or ())
+                on_progress(
+                    info.current_trial,
+                    info.total_trials,
+                    msg,
+                    round=round_no,
+                    cumulative_trials=cumulative,
+                    expanded_dims=list(expanded),
+                    latest_score=info.latest_score,
+                    latest_state=info.latest_state,
+                    best_score=info.best_score,
+                )
 
-                def progress_cb(info: TuneProgressInfo) -> None:
-                    msg = f"Trial {info.current_trial}/{info.total_trials}"
-                    if info.best_score is not None:
-                        msg += f" (best: {info.best_score:.4f})"
-                    on_progress(info.current_trial, info.total_trials, msg)
+        def _cancel_only(_c: int, _t: int, _m: str) -> None:
+            # progress_cb handles real updates; this sentinel only lets
+            # _run_with_cancel_polling poll the cancel flag without emitting
+            # a generic "Processing..." message.
+            pass
 
-            except ImportError:
-                pass  # LizyML < 0.2.0: no callback support
+        # Build tune kwargs once so we can trace them in tests.  All
+        # re-tune knobs are forwarded only when the caller opts in so the
+        # default legacy call shape stays the same.
+        tune_kwargs: dict[str, Any] = {"progress_callback": progress_cb}
+        if resume:
+            tune_kwargs["resume"] = True
+        if n_trials is not None:
+            tune_kwargs["n_trials"] = n_trials
+        if expand_boundary is not None:
+            tune_kwargs["expand_boundary"] = expand_boundary
+        if resume or expand_boundary is not None:
+            # boundary_threshold only matters when re-tune/expand machinery
+            # is active; otherwise leave the backend default untouched.
+            tune_kwargs["boundary_threshold"] = boundary_threshold
 
-        if use_direct_call:
-            # v0.2.0+: progress_cb handles real updates; polling loop only
-            # checks cancellation (cancel-only sentinel suppresses generic msg)
-            def _cancel_only(_c: int, _t: int, _m: str) -> None:
-                pass  # cancel flag checked by widget layer via on_progress
+        result = self._run_with_cancel_polling(
+            lambda: model.tune(**tune_kwargs),
+            _cancel_only,
+        )
 
-            result = self._run_with_cancel_polling(
-                lambda: model.tune(progress_callback=progress_cb),
-                _cancel_only,
-            )
-        else:
-            # Legacy (LizyML < 0.2.0): polling loop provides progress messages
-            result = self._run_with_cancel_polling(
-                model.tune,
-                on_progress,
-            )
         return TuningSummary(
             best_params=result.best_params,
             best_score=result.best_score,
-            trials=[asdict(t) for t in result.trials],
+            trials=_serialize_trials(result.trials),
             metric_name=result.metric_name,
             direction=result.direction,
+            rounds=_serialize_rounds(getattr(result, "rounds", ())),
+            boundary_report=_serialize_boundary_report(getattr(result, "boundary_report", None)),
         )
 
     def predict(

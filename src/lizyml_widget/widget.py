@@ -25,6 +25,45 @@ from .types import ConfigPatchOp, FitSummary, PredictionSummary, TuningSummary
 
 _log = logging.getLogger(__name__)
 
+#: Progress traitlet keys that the job workers forward from the adapter's
+#: ``on_progress`` callback ``**extra`` payload (P-027 round-aware fields
+#: plus ``fold_results`` from the fit path).  Shared between
+#: ``_job_worker`` and ``_subprocess_job_worker`` so new keys only need
+#: to be added in one place.
+_PROGRESS_EXTRA_KEYS: tuple[str, ...] = (
+    "round",
+    "total_rounds",
+    "cumulative_trials",
+    "expanded_dims",
+    "latest_score",
+    "latest_state",
+    "best_score",
+    "fold_results",
+)
+
+
+def _build_progress_payload(
+    current: int,
+    total: int,
+    message: str,
+    extra: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a JSON-serializable progress dict from an adapter callback.
+
+    Only the keys in :data:`_PROGRESS_EXTRA_KEYS` are forwarded, and only
+    when their value is non-``None``, so the widget ``progress`` traitlet
+    stays minimal and round-trippable through anywidget's JSON bridge.
+    """
+    payload: dict[str, Any] = {
+        "current": current,
+        "total": total,
+        "message": message,
+    }
+    for key in _PROGRESS_EXTRA_KEYS:
+        if key in extra and extra[key] is not None:
+            payload[key] = extra[key]
+    return payload
+
 
 class LizyWidget(anywidget.AnyWidget):
     """LizyML notebook UI widget."""
@@ -117,7 +156,84 @@ class LizyWidget(anywidget.AnyWidget):
         """
         return self._run_blocking_job("tune", timeout=timeout)
 
-    def _run_blocking_job(self, job_type: str, *, timeout: float | None) -> LizyWidget:
+    def retune(
+        self,
+        *,
+        n_trials: int | None = None,
+        expand_boundary: bool | None = None,
+        boundary_threshold: float = 0.05,
+        timeout: float | None = None,
+    ) -> LizyWidget:
+        """Resume the last tuning run with additional trials (P-028).
+
+        Requires a prior ``tune()`` call on this widget: the underlying
+        lizyml ``Model`` is reused so its Optuna study continues in place.
+        When ``expand_boundary`` is True the backend may widen search-space
+        boundaries that the best trial pushed against.
+
+        Parameters
+        ----------
+        n_trials
+            Extra trials to run during the resume round.  ``None`` defers
+            to the backend default.
+        expand_boundary
+            Allow boundary expansion on the resumed round.  ``None`` defers
+            to the backend default.
+        boundary_threshold
+            Fraction of the dim range that counts as "at the edge" when
+            ``expand_boundary`` is active.
+        timeout
+            Maximum seconds to block; forwarded to
+            :meth:`_run_blocking_job`.  ``None`` blocks indefinitely.
+
+        Raises
+        ------
+        ValueError
+            If no prior tune result exists, or if any argument is out of
+            its documented range (e.g. non-positive ``n_trials``,
+            ``boundary_threshold`` outside ``[0.0, 1.0]``).
+        RuntimeError
+            If the resumed tune fails.
+        """
+        if not self.tune_summary:
+            msg = "Cannot retune: no prior tune result on this widget. Call w.tune() first."
+            raise ValueError(msg)
+        # Reject bool subclasses up-front so ``w.retune(n_trials=True)``
+        # cannot silently pass as ``int``.
+        if n_trials is not None and (isinstance(n_trials, bool) or n_trials <= 0):
+            msg = f"retune(): n_trials must be a positive int or None, got {n_trials!r}"
+            raise ValueError(msg)
+        if expand_boundary is not None and not isinstance(expand_boundary, bool):
+            msg = (
+                f"retune(): expand_boundary must be bool or None, "
+                f"got {type(expand_boundary).__name__}"
+            )
+            raise ValueError(msg)
+        if (
+            isinstance(boundary_threshold, bool)
+            or not isinstance(boundary_threshold, (int, float))
+            or not (0.0 <= boundary_threshold <= 1.0)
+        ):
+            msg = (
+                f"retune(): boundary_threshold must be a float in "
+                f"[0.0, 1.0], got {boundary_threshold!r}"
+            )
+            raise ValueError(msg)
+        retune_kwargs: dict[str, Any] = {
+            "resume": True,
+            "n_trials": n_trials,
+            "expand_boundary": expand_boundary,
+            "boundary_threshold": float(boundary_threshold),
+        }
+        return self._run_blocking_job("tune", timeout=timeout, retune_kwargs=retune_kwargs)
+
+    def _run_blocking_job(
+        self,
+        job_type: str,
+        *,
+        timeout: float | None,
+        retune_kwargs: dict[str, Any] | None = None,
+    ) -> LizyWidget:
         """Run a job in a background thread and block until complete."""
         done = threading.Event()
 
@@ -126,7 +242,7 @@ class LizyWidget(anywidget.AnyWidget):
                 done.set()
 
         self.observe(_watch, names=["status"])
-        self._run_job(job_type)
+        self._run_job(job_type, retune_kwargs=retune_kwargs)
         if self.status in ("completed", "failed"):
             done.set()
         finished = done.wait(timeout=timeout)
@@ -219,6 +335,8 @@ class LizyWidget(anywidget.AnyWidget):
             trials=self.tune_summary["trials"],
             metric_name=self.tune_summary["metric_name"],
             direction=self.tune_summary["direction"],
+            rounds=self.tune_summary.get("rounds", []),
+            boundary_report=self.tune_summary.get("boundary_report"),
         )
 
     def get_model(self) -> Any:
@@ -501,11 +619,74 @@ class LizyWidget(anywidget.AnyWidget):
         except Exception as e:
             self.error = {"code": "PATCH_ERROR", "message": str(e)}
 
+    #: Upper bound on retune n_trials so a tampered UI payload cannot
+    #: overwhelm the backend.  Matches the NumericStepper ``max`` in
+    #: RetuneControls.tsx; values outside the range are silently dropped.
+    _RETUNE_MAX_N_TRIALS = 10_000
+
     def _handle_fit(self, _payload: dict[str, Any]) -> None:
         self._run_job("fit")
 
     def _handle_tune(self, _payload: dict[str, Any]) -> None:
         self._run_job("tune")
+
+    def _handle_retune(self, payload: dict[str, Any]) -> None:
+        """Dispatch a resume-style tune run (P-028).
+
+        Refuses to run when no prior tune exists (synchronous error:
+        no job thread is spawned).  Payload fields are validated here so
+        the worker thread only ever sees a trusted dict.
+        """
+        if not self.tune_summary:
+            self.error = {
+                "code": "NO_PRIOR_TUNE",
+                "message": ("Cannot retune: no prior tune result on this widget. Run Tune first."),
+            }
+            self.status = "failed"
+            return
+        # Whitelist + type-check incoming payload.  Unknown keys are dropped.
+        kwargs: dict[str, Any] = {"resume": True}
+        n_trials = payload.get("n_trials")
+        # ``bool`` is a subclass of ``int``; exclude it explicitly so that
+        # ``{"n_trials": True}`` doesn't sneak past the bounds check.
+        if (
+            isinstance(n_trials, int)
+            and not isinstance(n_trials, bool)
+            and 0 < n_trials <= self._RETUNE_MAX_N_TRIALS
+        ):
+            kwargs["n_trials"] = n_trials
+        elif n_trials is not None:
+            _log.warning(
+                "retune action: rejecting invalid n_trials=%r (expected int in 1..%d); "
+                "falling back to backend default",
+                n_trials,
+                self._RETUNE_MAX_N_TRIALS,
+            )
+        expand_boundary = payload.get("expand_boundary")
+        if isinstance(expand_boundary, bool):
+            kwargs["expand_boundary"] = expand_boundary
+        elif expand_boundary is not None:
+            _log.warning(
+                "retune action: rejecting invalid expand_boundary=%r (expected bool); "
+                "falling back to backend default",
+                expand_boundary,
+            )
+        boundary_threshold = payload.get("boundary_threshold")
+        if (
+            isinstance(boundary_threshold, (int, float))
+            and not isinstance(boundary_threshold, bool)
+            and 0.0 <= boundary_threshold <= 1.0
+        ):
+            kwargs["boundary_threshold"] = float(boundary_threshold)
+        else:
+            if boundary_threshold is not None:
+                _log.warning(
+                    "retune action: rejecting invalid boundary_threshold=%r "
+                    "(expected float in [0.0, 1.0]); using default 0.05",
+                    boundary_threshold,
+                )
+            kwargs["boundary_threshold"] = 0.05
+        self._run_job("tune", retune_kwargs=kwargs)
 
     def _handle_cancel(self, _payload: dict[str, Any]) -> None:
         self._cancel_flag.set()
@@ -708,6 +889,7 @@ class LizyWidget(anywidget.AnyWidget):
         "patch_config": _handle_patch_config,
         "fit": _handle_fit,
         "tune": _handle_tune,
+        "retune": _handle_retune,
         "cancel": _handle_cancel,
         "request_plot": _handle_request_plot,
         "run_inference": _handle_run_inference,
@@ -721,7 +903,12 @@ class LizyWidget(anywidget.AnyWidget):
 
     # ── Job execution ─────────────────────────────────────────
 
-    def _run_job(self, job_type: str) -> None:
+    def _run_job(
+        self,
+        job_type: str,
+        *,
+        retune_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         with self._job_lock:
             if self.status == "running":
                 return
@@ -798,15 +985,24 @@ class LizyWidget(anywidget.AnyWidget):
             if self._execution_strategy == "subprocess"
             else self._job_worker
         )
+        # Pass retune_kwargs through the thread's ``args`` tuple so each
+        # worker receives its own snapshot.  Avoids storing transient job
+        # state on ``self`` where a subsequent main-thread call could race
+        # with a background consumer (P-028 HIGH-2 review fix).
         thread = threading.Thread(
             target=worker,
-            args=(job_type, full_config),
+            args=(job_type, full_config, retune_kwargs),
             daemon=False,
         )
         self._job_thread = thread
         thread.start()
 
-    def _job_worker(self, job_type: str, config: dict[str, Any]) -> None:
+    def _job_worker(
+        self,
+        job_type: str,
+        config: dict[str, Any],
+        retune_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         start = time.monotonic()
         timer_stop = threading.Event()
 
@@ -818,10 +1014,22 @@ class LizyWidget(anywidget.AnyWidget):
         timer = threading.Thread(target=tick_elapsed, daemon=True)
         timer.start()
 
-        def on_progress(current: int, total: int, message: str) -> None:
+        def on_progress(
+            current: int,
+            total: int,
+            message: str,
+            **extra: Any,
+        ) -> None:
+            """Update the progress traitlet and honour the cancel flag.
+
+            Delegates payload construction to
+            :func:`_build_progress_payload` so the round-aware key
+            whitelist stays in one place (shared with the subprocess
+            worker below).
+            """
             if self._cancel_flag.is_set():
                 raise InterruptedError("Job cancelled by user")
-            self.progress = {"current": current, "total": total, "message": message}
+            self.progress = _build_progress_payload(current, total, message, extra)
             self.elapsed_sec = round(time.monotonic() - start, 1)
 
         try:
@@ -836,17 +1044,32 @@ class LizyWidget(anywidget.AnyWidget):
                     "params": summary.params,
                 }
             elif job_type == "tune":
-                n_trials = (
-                    config.get("tuning", {}).get("optuna", {}).get("params", {}).get("n_trials", 10)
+                # P-028: retune_kwargs arrives as a thread-local parameter
+                # so there is no cross-thread state handoff to worry about.
+                tune_kwargs = retune_kwargs or {}
+                is_resume = bool(tune_kwargs.get("resume"))
+
+                n_trials = tune_kwargs.get("n_trials") or config.get("tuning", {}).get(
+                    "optuna", {}
+                ).get("params", {}).get("n_trials", 10)
+                # Show round 2+ badge eagerly when resuming so the user
+                # sees immediate feedback before the first trial fires.
+                initial_round = 2 if is_resume else 1
+                msg = (
+                    f"Resuming tune with {n_trials} more trials..."
+                    if is_resume
+                    else f"Tuning {n_trials} trials..."
                 )
-                on_progress(0, n_trials, f"Tuning {n_trials} trials...")
-                summary_t = self._service.tune(config, on_progress=on_progress)
+                on_progress(0, n_trials, msg, round=initial_round)
+                summary_t = self._service.tune(config, on_progress=on_progress, **tune_kwargs)
                 self.tune_summary = {
                     "best_params": summary_t.best_params,
                     "best_score": summary_t.best_score,
                     "trials": summary_t.trials,
                     "metric_name": summary_t.metric_name,
                     "direction": summary_t.direction,
+                    "rounds": summary_t.rounds,
+                    "boundary_report": summary_t.boundary_report,
                 }
                 # After tune, model MAY be fitted — guard evaluate/split calls (P-004 R3)
                 try:
@@ -890,8 +1113,29 @@ class LizyWidget(anywidget.AnyWidget):
             timer_stop.set()
             timer.join(timeout=2.0)
 
-    def _subprocess_job_worker(self, job_type: str, config: dict[str, Any]) -> None:
-        """Run a job via subprocess for OpenMP-safe execution."""
+    def _subprocess_job_worker(
+        self,
+        job_type: str,
+        config: dict[str, Any],
+        retune_kwargs: dict[str, Any] | None = None,
+    ) -> None:
+        """Run a job via subprocess for OpenMP-safe execution.
+
+        P-028 re-tune is not supported in this path yet: the backend model's
+        Optuna study cannot be picked back up in a fresh subprocess.  Emit
+        a clear error instead of silently running a fresh study.
+        """
+        if retune_kwargs:
+            self.error = {
+                "code": "RETUNE_SUBPROCESS_UNSUPPORTED",
+                "message": (
+                    "Re-tune is not supported in subprocess execution mode. "
+                    "Unset LZW_FORCE_SUBPROCESS=1 or use w.tune() for a "
+                    "fresh study."
+                ),
+            }
+            self.status = "failed"
+            return
         start = time.monotonic()
         timer_stop = threading.Event()
 
@@ -903,8 +1147,20 @@ class LizyWidget(anywidget.AnyWidget):
         timer = threading.Thread(target=tick_elapsed, daemon=True)
         timer.start()
 
-        def on_progress(current: int, total: int, message: str) -> None:
-            self.progress = {"current": current, "total": total, "message": message}
+        def on_progress(
+            current: int,
+            total: int,
+            message: str,
+            **extra: Any,
+        ) -> None:
+            """Update the progress traitlet from subprocess messages.
+
+            The subprocess path does not need a direct cancel check here
+            because the child process is signalled via SIGTERM from
+            ``subprocess_runner.run_job_subprocess``; the parent just
+            mirrors whatever the child emits.
+            """
+            self.progress = _build_progress_payload(current, total, message, extra)
             self.elapsed_sec = round(time.monotonic() - start, 1)
 
         import tempfile

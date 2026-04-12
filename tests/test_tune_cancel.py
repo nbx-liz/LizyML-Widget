@@ -58,7 +58,7 @@ class TestTuneCancelSetsFlag:
 
         calls: list[Any] = []
 
-        def on_progress(current: int, total: int, message: str) -> None:
+        def on_progress(current: int, total: int, message: str, **_: Any) -> None:
             calls.append((current, total, message))
             if cancel_flag.is_set():
                 raise InterruptedError("Job cancelled by user")
@@ -85,7 +85,7 @@ class TestTuneUsesCancelPolling:
 
         on_progress_calls: list[tuple[int, int, str]] = []
 
-        def on_progress(current: int, total: int, message: str) -> None:
+        def on_progress(current: int, total: int, message: str, **_: Any) -> None:
             on_progress_calls.append((current, total, message))
 
         polling_calls: list[Any] = []
@@ -127,7 +127,7 @@ class TestTuneUsesCancelPolling:
 
         on_progress_calls: list[tuple[int, int, str]] = []
 
-        def on_progress(current: int, total: int, message: str) -> None:
+        def on_progress(current: int, total: int, message: str, **_: Any) -> None:
             on_progress_calls.append((current, total, message))
 
         polling_calls: list[Any] = []
@@ -189,33 +189,11 @@ class TestTuneUsesCancelPolling:
 class TestTuneCancelRaisesInterrupted:
     """Verify InterruptedError propagates out of tune() when cancel is signalled."""
 
-    def test_tune_cancel_raises_interrupted_error_legacy(self) -> None:
-        """Legacy path: on_progress raising InterruptedError propagates."""
-        adapter = LizyMLAdapter()
-        model = MagicMock()
-
-        ready = threading.Event()
-        released = threading.Event()
-
-        def slow_tune(**kwargs: Any) -> Any:
-            ready.set()
-            released.wait(timeout=2.0)
-            return _make_tune_result()
-
-        model.tune.side_effect = slow_tune
-
-        def on_progress(current: int, total: int, message: str) -> None:
-            raise InterruptedError("Job cancelled by user")
-
-        # Force legacy path by making TuneProgressInfo import fail
-
-        with (
-            patch.dict("sys.modules", {"lizyml.core.types.tuning_result": None}),
-            pytest.raises(InterruptedError),
-        ):
-            adapter.tune(model=model, on_progress=on_progress)
-
-        released.set()
+    # P-027: The "legacy < 0.2.0" path was removed when lizyml>=0.9.0 became
+    # mandatory.  Cancellation is now exclusively driven by the
+    # progress_callback path (see test_tune_no_cancel_completes_normally and
+    # the earlier TestTuneCancelPolling tests that cover InterruptedError
+    # propagation via _run_with_cancel_polling).
 
     def test_tune_no_cancel_completes_normally(self) -> None:
         """tune() without cancellation completes and returns TuningSummary."""
@@ -225,7 +203,7 @@ class TestTuneCancelRaisesInterrupted:
 
         progress_calls: list[str] = []
 
-        def on_progress(current: int, total: int, message: str) -> None:
+        def on_progress(current: int, total: int, message: str, **_: Any) -> None:
             progress_calls.append(message)
 
         fake_info_cls = MagicMock()
