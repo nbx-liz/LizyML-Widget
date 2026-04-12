@@ -662,11 +662,14 @@ class WidgetService:
             raise ValueError(msg)
 
         if resume:
+            # Take and validate the tune model inside a single lock section
+            # so an intervening ``load()`` cannot reset ``_tune_model`` to
+            # ``None`` between read and check (TOCTOU).
             with self._model_lock:
                 model = self._tune_model
-            if model is None:
-                msg = "Cannot resume: no prior tune exists. Run w.tune() first."
-                raise ValueError(msg)
+                if model is None:
+                    msg = "Cannot resume: no prior tune exists. Run w.tune() first."
+                    raise ValueError(msg)
         else:
             model = self._adapter.create_model(config, self._df)
 

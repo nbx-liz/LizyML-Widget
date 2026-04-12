@@ -271,7 +271,10 @@ export function ResultsTab({
             <div class="lzw-form-row" style="margin-top: 8px;">
               <span class="lzw-label">Best Score</span>
               <span>
-                {tuneSummary.metric_name}: {tuneSummary.best_score?.toFixed(4)}
+                {tuneSummary.metric_name}:{" "}
+                {typeof tuneSummary.best_score === "number"
+                  ? tuneSummary.best_score.toFixed(4)
+                  : "\u2014"}
               </span>
             </div>
             {(() => {

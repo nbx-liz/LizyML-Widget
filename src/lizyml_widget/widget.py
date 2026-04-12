@@ -593,9 +593,22 @@ class LizyWidget(anywidget.AnyWidget):
             and 0 < n_trials <= self._RETUNE_MAX_N_TRIALS
         ):
             kwargs["n_trials"] = n_trials
+        elif n_trials is not None:
+            _log.warning(
+                "retune action: rejecting invalid n_trials=%r (expected int in 1..%d); "
+                "falling back to backend default",
+                n_trials,
+                self._RETUNE_MAX_N_TRIALS,
+            )
         expand_boundary = payload.get("expand_boundary")
         if isinstance(expand_boundary, bool):
             kwargs["expand_boundary"] = expand_boundary
+        elif expand_boundary is not None:
+            _log.warning(
+                "retune action: rejecting invalid expand_boundary=%r (expected bool); "
+                "falling back to backend default",
+                expand_boundary,
+            )
         boundary_threshold = payload.get("boundary_threshold")
         if (
             isinstance(boundary_threshold, (int, float))
@@ -604,6 +617,12 @@ class LizyWidget(anywidget.AnyWidget):
         ):
             kwargs["boundary_threshold"] = float(boundary_threshold)
         else:
+            if boundary_threshold is not None:
+                _log.warning(
+                    "retune action: rejecting invalid boundary_threshold=%r "
+                    "(expected float in [0.0, 1.0]); using default 0.05",
+                    boundary_threshold,
+                )
             kwargs["boundary_threshold"] = 0.05
         self._run_job("tune", retune_kwargs=kwargs)
 

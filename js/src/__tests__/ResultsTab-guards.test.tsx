@@ -222,3 +222,53 @@ describe("ResultsTab — Convergence Signal round number (P-029 bug-fix)", () =>
     expect(screen.queryByText(/Search space converged/)).toBeNull();
   });
 });
+
+describe("ResultsTab — Best Score null guard", () => {
+  // Regression: when tune_summary is partial and best_score is missing
+  // or null, the Best Score row must not render the string "undefined".
+  it("renders em-dash placeholder when best_score is null", () => {
+    const partialTuneSummary = {
+      best_params: { lr: 0.01 },
+      best_score: null,
+      trials: [],
+      metric_name: "auc",
+      direction: "maximize",
+      rounds: [],
+      boundary_report: null,
+    };
+    const { container } = render(
+      <ResultsTab
+        {...defaultProps}
+        status="completed"
+        jobType="tune"
+        fitSummary={{}}
+        tuneSummary={partialTuneSummary}
+      />,
+    );
+    expect(container.textContent).not.toContain("undefined");
+    // The em-dash (U+2014) placeholder must be in the DOM.
+    expect(container.textContent).toContain("\u2014");
+  });
+
+  it("renders the numeric value when best_score is a float", () => {
+    const tuneSummary = {
+      best_params: { lr: 0.01 },
+      best_score: 0.9123,
+      trials: [],
+      metric_name: "auc",
+      direction: "maximize",
+      rounds: [],
+      boundary_report: null,
+    };
+    render(
+      <ResultsTab
+        {...defaultProps}
+        status="completed"
+        jobType="tune"
+        fitSummary={{}}
+        tuneSummary={tuneSummary}
+      />,
+    );
+    expect(screen.getByText(/auc: 0\.9123/)).toBeDefined();
+  });
+});

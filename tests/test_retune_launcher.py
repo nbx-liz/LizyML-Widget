@@ -439,3 +439,73 @@ class TestRetuneAction:
         # Synchronous precondition check: no job thread is spawned.
         assert w.error.get("code") == "NO_PRIOR_TUNE"
         assert w.status == "failed"
+
+    def test_retune_action_logs_warning_on_invalid_payload(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Observability: rejected payload fields emit a warning log line
+        so operators can detect tampered UI payloads or misuse of the
+        Python action surface.  Valid fields after the bad ones are still
+        applied — the handler falls back to defaults for the bad ones."""
+        import logging
+
+        w = _make_widget()
+
+        captured: list[dict[str, Any]] = []
+
+        def mock_tune(config: Any, *, on_progress: Any = None, **kwargs: Any) -> Any:
+            captured.append(kwargs)
+            return _dummy_summary()
+
+        w._service.tune = mock_tune  # type: ignore[assignment]
+        w.tune_summary = {
+            "best_params": {"lr": 0.01},
+            "best_score": 0.9,
+            "trials": [],
+            "metric_name": "auc",
+            "direction": "maximize",
+            "rounds": [],
+            "boundary_report": None,
+        }
+        w.config = {
+            **dict(w.config),
+            "tuning": {
+                "optuna": {"params": {"n_trials": 50}, "space": {}},
+            },
+        }
+
+        with caplog.at_level(logging.WARNING, logger="lizyml_widget.widget"):
+            w.action = {
+                "type": "retune",
+                "payload": {
+                    # All three are tampered values that must be rejected.
+                    "n_trials": "many",  # wrong type
+                    "expand_boundary": 1,  # int, not bool
+                    "boundary_threshold": 2.0,  # out of range
+                },
+            }
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if w.status in ("completed", "failed"):
+                    break
+                time.sleep(0.05)
+
+        # The run should still succeed — invalid fields are dropped and
+        # defaults take over.
+        assert w.status == "completed", f"expected completed, got {w.status} err={w.error}"
+
+        # All three warnings were emitted.
+        messages = [rec.getMessage() for rec in caplog.records]
+        assert any("n_trials" in m and "rejecting" in m for m in messages), messages
+        assert any("expand_boundary" in m and "rejecting" in m for m in messages), messages
+        assert any("boundary_threshold" in m and "rejecting" in m for m in messages), messages
+
+        # And the service saw only the sanitized kwargs.
+        assert len(captured) == 1
+        sanitized = captured[0]
+        assert sanitized["resume"] is True
+        # n_trials was dropped (so not in kwargs at all); boundary_threshold
+        # defaulted to 0.05; expand_boundary was dropped.
+        assert "n_trials" not in sanitized
+        assert "expand_boundary" not in sanitized
+        assert sanitized["boundary_threshold"] == 0.05
