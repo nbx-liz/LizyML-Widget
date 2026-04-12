@@ -33,6 +33,18 @@ w   # セルに置くだけで UI 表示
 `pip install lizyml-widget` だけで使えるインライン Widget を提供する。
 LizyML の公開 API をそのまま呼び出し、Widget 独自の ML ロジックは持たない。
 
+### LizyML バージョン互換性
+
+Widget は LizyML の型・契約（`BackendAdapter` Protocol, `TuningResult`, `FitSummary` 等）に直接依存するため、両者のバージョンは厳密に対応付けてリリースする。詳細は [docs/VERSION_COMPAT.md](docs/VERSION_COMPAT.md) を参照。
+
+| lizyml-widget | lizyml           | 主な新機能 / 破壊的変更                                               |
+| ------------- | ---------------- | --------------------------------------------------------------------- |
+| **0.8.x**     | `>=0.9.0,<0.10`  | P-027/P-028/P-029: Re-tune（Round progress, Boundary Expansion, Tuning History, `w.retune()` API, UI ボタン）|
+| 0.7.x         | `>=0.7.0,<0.9`   | Calibration / Search Space default refresh                             |
+| 0.6.x / 0.5.x | `>=0.5.0,<0.7`   | Learning curve metrics フィルタ, CV strategy metadata                  |
+
+推奨インストール: `pip install "lizyml-widget[lizyml]"` — extras 経由で互換な lizyml を自動解決する。`LizyMLAdapter.__init__` はランタイムで lizyml のバージョンを検証し、範囲外なら明確な ImportError を投げる。
+
 ---
 
 ## 2. 設計原則
@@ -132,9 +144,12 @@ class FitSummary:
 class TuningSummary:
     best_params: dict[str, Any]
     best_score: float
-    trials: list[dict[str, Any]]
+    trials: list[dict[str, Any]]  # 各 trial には P-027 で round: int が含まれる
     metric_name: str
     direction: str   # "minimize" | "maximize"
+    # ── P-027: re-tune monitoring（lizyml>=0.9.0 必須） ──
+    rounds: list[dict[str, Any]]  # per-round summary (round, n_trials, best_score_before/after, expanded_dims)
+    boundary_report: dict[str, Any] | None  # BoundaryReport のシリアライズ、無ければ None
 
 @dataclass
 class PredictionSummary:
@@ -196,7 +211,17 @@ class BackendAdapter(Protocol):
 
     def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any: ...
     def fit(self, model: Any, *, params: dict | None = None, on_progress: Callable | None = None) -> FitSummary: ...
-    def tune(self, model: Any, *, on_progress: Callable | None = None) -> TuningSummary: ...
+    def tune(
+        self,
+        model: Any,
+        *,
+        on_progress: Callable | None = None,
+        # P-028: resume existing Optuna study + optional boundary expansion
+        resume: bool = False,
+        n_trials: int | None = None,
+        expand_boundary: bool | None = None,
+        boundary_threshold: float = 0.05,
+    ) -> TuningSummary: ...
     def predict(self, model: Any, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary: ...
 
     def evaluate_table(self, model: Any) -> list[dict]: ...
@@ -245,7 +270,7 @@ Python と JS の状態は anywidget の traitlets で同期する。
 | `status` | `Unicode` | P→JS | `"idle"` \| `"data_loaded"` \| `"running"` \| `"completed"` \| `"failed"` |
 | `job_type` | `Unicode` | P→JS | `"fit"` \| `"tune"` \| `""` |
 | `job_index` | `Int` | P→JS | セッション内のジョブ連番（1, 2, 3…） |
-| `progress` | `Dict` | P→JS | `{"current": 2, "total": 5, "message": "Fold 2/5..."}` |
+| `progress` | `Dict` | P→JS | `{"current", "total", "message"}` に加え Tune 時は任意で `round`, `total_rounds`, `cumulative_trials`, `expanded_dims`, `latest_score`, `latest_state`, `best_score` を含む（P-027, lizyml>=0.9.0 必須） |
 | `elapsed_sec` | `Float` | P→JS | 実行開始からの経過秒数（1秒ごと更新） |
 | `fit_summary` | `Dict` | P→JS | FitSummary のシリアライズ結果 |
 | `tune_summary` | `Dict` | P→JS | TuningSummary のシリアライズ結果 |
@@ -319,6 +344,7 @@ JS は `action` traitlet に Dict を書き込む。Python の `@observe("action
 | `"export_yaml"` | `{}` | 現在の Config を YAML でダウンロード（msg:custom で返す） |
 | `"raw_config"` | `{}` | フル Config の YAML テキストを取得（msg:custom で返す） |
 | `"apply_best_params"` | `{"params": {...}}` | Tune 実行時 config を復元した上で Best Params を適用し、Fit 画面へ反映 |
+| `"retune"` | `{"n_trials"?: int, "expand_boundary"?: bool, "boundary_threshold"?: float}` | P-028: 直近 tune の Optuna study を resume して追加 trial を実行する。`tune_summary` が空のときは `NO_PRIOR_TUNE` エラーで即座に失敗する |
 | `"export_code"` | `{}` | 学習済みモデルのコードを出力し `msg:custom` でブラウザダウンロードを開始する |
 | `"get_column_stats"` | `{"column": "col_name"}` | 指定カラムの統計情報（unique_count, dtype, values）を `msg:custom` で返す |
 | `"preview_splits"` | `{}` | 現在の CV 設定に基づく Split プレビュー（Fold 数・期間・分布）を `msg:custom` で返す |
@@ -437,6 +463,22 @@ class LizyWidget(anywidget.AnyWidget):
     def tune(self, *, timeout: float | None = None) -> "LizyWidget":
         """バックグラウンドスレッドで Tune を実行し完了まで待機する。
         失敗時は RuntimeError を raise する。"""
+
+    # P-028: Re-tune (Study Resume + Boundary Expansion)
+    def retune(
+        self,
+        *,
+        n_trials: int | None = None,
+        expand_boundary: bool | None = None,
+        boundary_threshold: float = 0.05,
+        timeout: float | None = None,
+    ) -> "LizyWidget":
+        """直近の Tune 結果を resume して追加 trial を実行する。
+
+        prior tune が存在しない場合は ``ValueError`` を raise する。
+        lizyml 側の ``Model.tune(resume=True, ...)`` を呼び出し、Optuna study を
+        継続する。``expand_boundary=True`` で境界拡張を許可する。
+        """
 
     # ── 結果取得 ───────────────────────────────────────────
     def get_fit_summary(self) -> FitSummary | None:
@@ -994,7 +1036,14 @@ Range モードの `low` / `high` 入力も同じ `lzw-stepper` を使い、`ste
 └──────────────────────────────────────────────────┘
 ```
 
-Tune 実行中は Fold の代わりに Trial 進捗を表示（`Trial 12 / 100  Best AUC = 0.891`）。
+Tune 実行中は Fold の代わりに Trial 進捗を表示する。P-027（lizyml>=0.9.0）以降は re-tune（Study Resume + Boundary Expansion）に対応するため、`progress` traitlet に以下のフィールドが乗る場合は UI に反映する:
+
+- `round` / `total_rounds`: 現在ラウンド番号（1-indexed）。2ラウンド目以降は `Round 2/2` バッジを表示。
+- `cumulative_trials`: 全ラウンドを通した累積 trial 数。`Trial 17/30 (cumulative: 67)` のように併記する。
+- `expanded_dims`: 今ラウンドで境界拡張された dim 名の配列。非空のときチップで列挙する。
+- `best_score`: 現ベストスコア（表示は小数第4位まで）。
+
+単一ラウンドの tune（`round=1` かつ `expanded_dims=[]`）では従来通りの表示にフォールバックする。
 
 #### Fit 完了
 
@@ -1059,16 +1108,38 @@ Tune 実行中は Fold の代わりに Trial 進捗を表示（`Trial 12 / 100  
 
 #### Tune 完了
 
-Fit 完了と同じ構成に加え、先頭に探索結果を追加する。
+Fit 完了と同じ構成に加え、先頭に探索結果を追加する。P-027 で re-tune 結果の可視化セクションを追加し、
+P-028 で Re-tune 起動 UI（RetuneControls）を Best Params Accordion 内に追加した。
+P-029 で自前の Score History Chart を廃止し、lizyml backend の `tuning_plot` (`optimization-history`) に一本化した。
 
 ```
-Optimization History → Best Params → [Apply to Fit ▸]
-→ Score → Learning Curve → Plots → Accordion(Trial Results / Feature Importance / Fold Details / Parameters)
+Best Params → [Apply to Fit ▸]
+→ RetuneControls (n_trials / expand_boundary / boundary_threshold + [Re-tune (resume) ↻])
+→ Convergence Signal (ラウンド 2+ かつ expanded_dims が空のときのみ)
+→ Boundary Expansion (boundary_report が非 None のときのみ)
+→ Tuning History (P-029: lizyml tuning_plot を PlotViewer で描画、常時表示)
+→ Score → Learning Curve → Plots → Accordion(Feature Importance / Fold Details / Parameters)
 ```
-
-**Optimization History:** Trial 番号 vs スコアの収束プロット（Plotly）。
 
 **Best Params + Apply to Fit:** Best Params テーブルと、Fit サブタブへ設定を同期して切り替えるボタン。
+Best Score 行の下に total trial 数（COMPLETE / PRUNED / FAIL 別）と、`rounds.length > 1` なら resume round 数を併記する。
+
+**RetuneControls (P-028):** Best Params Accordion 内、Apply to Fit ボタンの直下に配置する。
+`n_trials` / `expand_boundary` / `boundary_threshold` を入力して「Re-tune (resume)」ボタンを押すと `retune` action を発火し、
+Optuna study を継続したまま追加 trial を実行する。完了すると P-027 の監視系コンポーネントに新ラウンドが反映される。
+初回 tune 完了後（`hasTune`）のみ表示し、ジョブ実行中はボタンを `disabled` にする。
+
+**Convergence Signal (P-027):** ラウンド 2 以降で `expanded_dims` が空（境界拡張不要）の場合に表示する。
+「Search space converged」のバナーと `Proceed to Fit` ボタンで Fit 画面への直接遷移を提供する。
+
+**Boundary Expansion (P-027):** `boundary_report.dims` を基に、境界拡張された dim を `[low, high] → [new_low, new_high]` の形式で列挙する。
+未拡張 dim 数はフッターに折り畳む。全 dim が未拡張のときは「No expansion needed」コピーに縮退する。
+
+**Tuning History (P-029):** lizyml の `tuning_plot()` が返す Plotly Figure を `PlotViewer` で描画する専用 Accordion。
+Trial 別 scatter + 累積ベスト折れ線 + ラウンド境界 dashed line + `expanded_dims` annotation を含む。
+`available_plots` に `optimization-history` が含まれていれば常時表示する。Widget は自前の再実装を持たず、
+backend 側の Figure をそのまま使うため、lizyml の可視化拡張が自動的に反映される。
+Plots セレクタからは `optimization-history` を除外しており、重複表示されない。
 
 Search Space で `metric` を探索対象に含めた場合、`best_params.metric` は LightGBM `model.params.metric` として解釈する。
 

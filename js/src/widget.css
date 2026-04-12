@@ -649,6 +649,161 @@
   min-width: 80px;
 }
 
+/* ── Re-tune monitoring (P-027) ──────────────────────────── */
+.lzw-progress__cumulative {
+  color: var(--lzw-fg-2);
+  font-size: 11px;
+}
+
+.lzw-progress__best {
+  font-size: 12px;
+  color: var(--lzw-fg-1);
+  margin-bottom: 8px;
+}
+
+.lzw-progress__expanded {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.lzw-badge--round {
+  background: var(--lzw-accent-soft, #e3f2fd);
+  color: var(--lzw-accent, #1976d2);
+  border: 1px solid var(--lzw-accent, #1976d2);
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.lzw-chip--info {
+  background: var(--lzw-accent-soft, #e3f2fd);
+  color: var(--lzw-accent, #1976d2);
+  border: 1px solid var(--lzw-border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+}
+
+.lzw-boundary-panel {
+  padding: 8px 0 4px 0;
+}
+
+.lzw-boundary-panel__header {
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.lzw-boundary-panel--converged {
+  padding: 8px 12px;
+  background: var(--lzw-bg-2);
+  border-radius: 4px;
+}
+
+.lzw-boundary-panel__footer {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.lzw-boundary-table {
+  font-size: 12px;
+  width: 100%;
+}
+
+.lzw-boundary-table__name {
+  font-family: monospace;
+  font-weight: 500;
+}
+
+.lzw-boundary-table__edge {
+  white-space: nowrap;
+  color: var(--lzw-fg-1);
+}
+
+.lzw-boundary-table__icon {
+  display: inline-block;
+  margin-right: 4px;
+  color: var(--lzw-fg-2);
+}
+
+.lzw-boundary-table__icon--expanded {
+  color: var(--lzw-accent, #1976d2);
+  font-weight: 700;
+}
+
+.lzw-boundary-table__range {
+  font-family: monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.lzw-convergence-signal {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  margin: 8px 0;
+  background: var(--lzw-success-soft, #e8f5e9);
+  border: 1px solid var(--lzw-success, #4caf50);
+  border-radius: 4px;
+}
+
+.lzw-convergence-signal__icon {
+  font-size: 20px;
+  color: var(--lzw-success, #4caf50);
+  font-weight: 700;
+  line-height: 1;
+  padding-top: 2px;
+}
+
+.lzw-convergence-signal__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.lzw-convergence-signal__title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.lzw-convergence-signal__text {
+  margin: 0;
+  font-size: 12px;
+  color: var(--lzw-fg-1);
+}
+
+/* ── Re-tune launcher (P-028) ────────────────────────────── */
+.lzw-retune-controls {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px dashed var(--lzw-border);
+  border-radius: 4px;
+  background: var(--lzw-bg-2);
+}
+
+.lzw-retune-controls__title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.lzw-retune-controls__hint {
+  font-size: 11px;
+  margin: 0 0 8px 0;
+}
+
+.lzw-retune-controls__actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* ── Results ─────────────────────────────────────────────── */
 .lzw-results__header {
   display: flex;

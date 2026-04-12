@@ -77,7 +77,7 @@ def run_job_subprocess(
     df: pd.DataFrame,
     target: str,
     libomp_path: str | None,
-    on_progress: Callable[[int, int, str], None] | None,
+    on_progress: Callable[..., None] | None,
     cancel_flag: threading.Event,
     model_out_path: str | None = None,
 ) -> SubprocessJobResult:
@@ -140,7 +140,22 @@ def run_job_subprocess(
 
             msg_type = msg.get("type")
             if msg_type == "progress" and on_progress:
-                on_progress(msg["current"], msg["total"], msg["message"])
+                # Forward re-tune fields (P-027) as kwargs so the parent's
+                # on_progress receives the same round-aware payload it
+                # would have gotten from the in-process adapter call.
+                extra: dict[str, Any] = {}
+                for key in (
+                    "round",
+                    "total_rounds",
+                    "cumulative_trials",
+                    "expanded_dims",
+                    "latest_score",
+                    "latest_state",
+                    "best_score",
+                ):
+                    if key in msg:
+                        extra[key] = msg[key]
+                on_progress(msg["current"], msg["total"], msg["message"], **extra)
             elif msg_type == "result":
                 result_data = msg
             elif msg_type == "error":

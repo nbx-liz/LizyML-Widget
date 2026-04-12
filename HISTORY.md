@@ -1,5 +1,261 @@
 ## LizyML-Widget 仕様変更履歴
 
+### Bug Fix: Convergence Signal の Round 表示 +1 ずれ + チェックマーク escape 不正
+
+- **日付**: 2026-04-12
+- **ステータス**: 承認・実装
+- **種別**: バグ修正（change gate 対象外）
+- **症状**: 3 回目の tune（= `w.tune()` + `w.retune()` × 2）完了後に Convergence Signal が
+  以下のように表示されていた:
+  - `\u2713` が 6 文字の文字列としてそのままレンダリングされる（チェックマーク glyph にならない）
+  - 「Round 4 finished without expanding any boundary」と表示（本来は「Round 3」）
+- **原因**:
+  1. [js/src/components/ConvergenceSignal.tsx](js/src/components/ConvergenceSignal.tsx):
+     JSX のテキストノードに `\u2713` を生書きしていた。JSX テキストは JavaScript 文字列リテラルではないため、
+     バックスラッシュエスケープは解釈されずそのまま文字列として DOM に流れる。
+     `{"\u2713"}` のように JSX 式で囲むか、`&#x2713;` の HTML entity を使う必要がある。
+  2. [js/src/tabs/ResultsTab.tsx](js/src/tabs/ResultsTab.tsx):
+     `lizyml.core.types.tuning_result.RoundSummary.round` は lizyml の docstring で
+     **「1-indexed」と明記** されているにもかかわらず、UI 側で `lastRound.round + 1` と
+     誤って +1 していた（P-027 実装時の誤解）。
+     さらに `lastRound.round >= 1` の冗長な guard も残っていた（1-indexed なので常に真）。
+- **修正内容**:
+  - `ConvergenceSignal.tsx` L33: `\u2713` → `{"\u2713"}`
+  - `ResultsTab.tsx` Convergence Signal 呼び出し:
+    - `round={lastRound.round + 1}` → `round={lastRound.round}`
+    - `lastRound.round >= 1` の冗長 guard を削除
+    - `RoundSummary.round` の 1-indexed 性をコメントで明記
+  - `ConvergenceSignal.test.tsx`: チェックマーク glyph が DOM に表示されることを assert する回帰テスト追加
+  - `ResultsTab-guards.test.tsx`: `rounds = [round:1, round:2, round:3 with empty expanded_dims]`
+    のケースで "Round 3 finished" が表示されることを検証する integration テスト追加
+- **影響範囲**:
+  - `js/src/components/ConvergenceSignal.tsx`
+  - `js/src/tabs/ResultsTab.tsx`
+  - `js/src/__tests__/ConvergenceSignal.test.tsx`（1 test 追加）
+  - `js/src/__tests__/ResultsTab-guards.test.tsx`（2 tests 追加）
+- **互換性**: 純粋な UI 文言修正。traitlet / action / API 変更なし。
+- **受け入れ基準**:
+  - ユーザー報告の 3 回目 tune で Convergence Signal が「Round 3 finished」と表示される。
+  - チェックマーク ✓ が DOM に正しく表示され、`\u2713` の escape 文字列は残らない。
+  - 既存 JS 159 + 新規 3 テスト = **162 テスト全パス**。
+
+---
+
+### P-029: Score History Chart を lizyml の Tuning History Plot に一本化
+
+- **日付**: 2026-04-12
+- **ステータス**: 承認・実装
+- **背景**:
+  - P-027 で Widget 独自の `ScoreHistoryChart` コンポーネント（`js/src/components/ScoreHistoryChart.tsx`）を実装したが、
+    lizyml 0.9.0 の `Model.tuning_plot()` (`plot_tuning_history`) が同じ機能を backend 側で完結して提供している:
+    - Trial 別 scatter（state 色分け）
+    - 累積ベストスコアの折れ線
+    - ラウンド境界の dashed line（H-0068）
+    - 各ラウンドの expanded dims annotation（H-0068）
+  - Widget 側の `ScoreHistoryChart` は `tuning_plot` の下位互換であり、**同じ描画を 2 実装持つ重複** となっていた。
+    lizyml 側で境界拡張の可視化が拡充されても、Widget 側の自前実装には反映されない。
+  - `optimization-history` は既に `available_plots()` に登録されており、PlotViewer で表示可能。
+- **提案内容**:
+  - **削除**:
+    - `js/src/components/ScoreHistoryChart.tsx`
+    - `js/src/__tests__/ScoreHistoryChart.test.tsx`
+    - `js/src/widget.css` の `.lzw-score-history` 関連スタイル
+  - **変更**:
+    - `js/src/tabs/ResultsTab.tsx` — Tune 完了時に **Tuning History Accordion を常時表示**し、
+      `PlotViewer` に `plotType="optimization-history"` を渡して lizyml backend の Figure を描画する（案B）。
+      BoundaryExpansionPanel と ConvergenceSignal の間に配置する。
+    - `js/src/tabs/ResultsTab.tsx` — Plots セレクタから `optimization-history` を除外する。
+      常時表示 Accordion と重複するため。
+  - **保持**:
+    - `BoundaryExpansionPanel` — `tuning_plot` に含まれない別情報（per-dim before/after ranges）なので残す。
+    - `ConvergenceSignal` — 同上（Fit 画面への遷移導線）。
+    - `tune_summary.rounds` / `boundary_report` traitlet — 上記 2 コンポーネントが依然として消費する。
+- **影響範囲**:
+  - `js/src/components/ScoreHistoryChart.tsx` — **削除**
+  - `js/src/__tests__/ScoreHistoryChart.test.tsx` — **削除**
+  - `js/src/tabs/ResultsTab.tsx` — imports / レイアウト変更
+  - `js/src/widget.css` — スタイル削除
+  - `BLUEPRINT.md` §5.x Tune 完了 — 記述更新
+  - `HISTORY.md` — 本 proposal
+- **互換性**:
+  - `tune_summary` traitlet の構造は変更なし（BoundaryExpansionPanel / ConvergenceSignal が使用中）。
+  - Adapter Protocol 変更なし。
+  - Python API 変更なし。
+  - UI 上「Score History」という表示名は「Tuning History」に変わる（ユーザー向けの視認的変更のみ）。
+- **代替案（却下）**:
+  - **案A: Plots セレクタに含めるだけ** — 1 クリック余分にかかり、Tune 完了時に即座に履歴が見えないため UX が退化。
+  - **案C: ScoreHistoryChart を残す** — lizyml 側の機能更新が Widget に反映されない永続的な負債となるため不採用。
+- **受け入れ基準**:
+  - Tune 完了後、Results タブに "Tuning History" Accordion が常時表示され、
+    lizyml backend の `tuning_plot` が描画される。
+  - Plots セレクタに `optimization-history` が重複表示されない。
+  - `ScoreHistoryChart.tsx` とそのテストが削除される。
+  - `.lzw-score-history` CSS 参照が残らない。
+  - Python テスト 845 パス（変更なし）、JS vitest は ScoreHistoryChart 関連の 3 tests が削除されて **159 テスト**（162 → 159）が全パス。
+  - ruff / mypy / eslint / tsc クリーン。
+
+---
+
+### P-028: Re-tune Launcher（`w.retune()` Python API + `retune` action + UI ボタン）
+
+- **日付**: 2026-04-12
+- **ステータス**: 承認・実装
+- **背景**:
+  - P-027 で Re-tune の **モニタリング** 側（Round progress, Boundary Expansion panel, Score History chart）は実装したが、
+    **起動** 側（lizyml 0.9.0 の `Model.tune(resume=True, ...)` を呼び出す経路）は未実装だった。
+  - 現状ユーザーは `w.get_model().tune(resume=True, ...)` のように Widget を迂回して直接 backend を呼ぶしかなく、
+    その経路では `tune_summary` traitlet が更新されないため Widget UI にラウンド境界や boundary expansion が
+    反映されない。
+  - A案（起動 + monitoring を end-to-end で繋ぐ）を採用する。
+- **提案内容**:
+  - **Adapter**:
+    - `BackendAdapter.tune()` Protocol に kwargs を追加:
+      - `resume: bool = False`
+      - `n_trials: int | None = None`
+      - `expand_boundary: bool | None = None`
+      - `boundary_threshold: float = 0.05`
+    - `LizyMLAdapter.tune()` で `model.tune(resume=..., n_trials=..., expand_boundary=..., boundary_threshold=..., progress_callback=...)` に透過。
+  - **Service**:
+    - `WidgetService.tune()` に同じ kwargs を追加。
+    - `resume=True` のとき、`self._model` を再利用する（None の場合は明示的 `ValueError`）。
+    - `resume=False` のとき、従来通り `create_model` で新規 model を作る。
+  - **Widget Python API**:
+    - `LizyWidget.retune(*, n_trials=None, expand_boundary=None, boundary_threshold=0.05, timeout=None) -> LizyWidget`
+      を追加。
+    - 初回 tune が存在しない場合（`tune_summary` が空）は呼び出し時点で `ValueError`。
+  - **Action**:
+    - 新 `retune` action を追加（payload: `{n_trials?, expand_boundary?, boundary_threshold?}`）。
+    - `_run_job("tune")` 経路を再利用しつつ、`retune_kwargs` を closure で渡す。
+    - `job_type` は `"tune"` のまま（Re-tune も Tune の一種として扱う）。
+    - traitlet の `progress.round >= 2` で UI 側が Re-tune ラウンドを識別する。
+  - **UI (ResultsTab)**:
+    - `RetuneControls` を新規コンポーネントとして追加。
+    - Best Params Accordion 内の "Apply to Fit" ボタンの下に配置。
+    - 入力: `n_trials` (NumericStepper), `expand_boundary` (checkbox), `boundary_threshold` (NumericStepper, 0.0-1.0)。
+    - "Re-tune (resume)" ボタン押下で `sendAction("retune", payload)`。
+    - 初回 tune 完了後（`hasTune`）のみ表示。
+- **影響範囲**:
+  - `src/lizyml_widget/adapter.py` — Protocol シグネチャ + LizyMLAdapter 実装（**change gate**）
+  - `src/lizyml_widget/service.py` — tune() 拡張、resume 経路
+  - `src/lizyml_widget/widget.py` — `retune()` メソッド + `retune` action handler（**change gate**）
+  - `js/src/components/RetuneControls.tsx` — 新規
+  - `js/src/tabs/ResultsTab.tsx` — RetuneControls 組み込み
+  - `js/src/widget.css` — RetuneControls スタイル
+  - `tests/test_retune_monitoring.py` — Re-tune 起動経路のテスト追加
+  - `js/src/__tests__/RetuneControls.test.tsx` — 新規
+  - `BLUEPRINT.md` §3.6 actions、§5.x Tune UI
+  - `README.md` — Re-tune 使用例
+- **互換性**:
+  - Adapter Protocol の新 kwargs は全てデフォルト値付きなので、既存 Adapter 実装（Mock 等）は変更不要。
+  - `WidgetService.tune()` / `LizyWidget.tune()` の既存シグネチャは保持（kwargs 追加のみ）。
+  - `tune_summary` / `progress` traitlet の構造は P-027 のまま変更なし。
+- **代替案（却下）**:
+  - **案A: 既存 `tune()` を拡張**（`w.tune(resume=True, n_trials=30)`） — 初回 tune と re-tune の呼び分けが曖昧になり、テスト/ドキュメントが複雑化するため不採用。
+  - **案C: 回避策として `w.get_model().tune(...)` を推奨** — Widget UI とモニタリング機能が動作しないため不採用。
+- **受け入れ基準**:
+  - `w.tune()` → `w.retune(n_trials=30)` で `tune_summary.rounds` が 2 要素になる。
+  - `w.retune()` を prior tune なしで呼ぶと明示的 `ValueError`。
+  - UI Results タブに "Re-tune (resume)" ボタンが Tune 完了後のみ表示される。
+  - UI から Re-tune を発動すると Progress View に Round 2 バッジ、完了後に Score History Chart に
+    ラウンド境界が追加される。
+  - `resume=True` 時 Service は既存 `self._model` を再利用する。
+  - 既存 Python テスト + 新規テスト全パス、既存 vitest + 新規テスト全パス。
+  - ruff / mypy / eslint / tsc クリーン。
+
+---
+
+### P-027: Re-tune Monitoring（ラウンド対応 Progress + Boundary Expansion + Score History Chart）
+
+- **日付**: 2026-04-12
+- **ステータス**: 承認・実装
+- **背景**:
+  - LizyML H-0068 で re-tune（Study Resume + Boundary Expansion）が追加され、`TuneProgressInfo` と `TuningResult` に
+    新しいフィールドが導入された（GitHub Issue #101）。
+    - `TuneProgressInfo.round` / `cumulative_trials` / `expanded_dims`
+    - `TuningResult.rounds: tuple[RoundSummary, ...]`
+    - `TuningResult.boundary_report: BoundaryReport | None`
+  - 既存 Widget の Tune Progress 表示は「単一ラウンド / 単一 trial 番号」が前提で、
+    ラウンド境界・累積 trial 数・境界拡張の可視化ができない。
+  - Widget の `progress` traitlet は `{current, total, message}` のみで round 情報を持たない。
+  - Score History の可視化が未実装（Trial 状態のカウント表示のみ）。
+- **提案内容**:
+  - **Python**:
+    - `types.py`:
+      - `TuningSummary` に `rounds: list[dict]` と `boundary_report: dict | None` を追加（必須フィールド、B案）。
+      - 既存 `trials` 要素に `round: int` を含める（lizyml 0.9.0 の `TrialResult.round` を透過）。
+    - `adapter.py`:
+      - `LizyMLAdapter.tune()` の `progress_cb` を拡張し、`round`, `cumulative_trials`, `expanded_dims` を
+        `on_progress` payload に含める。
+      - `TuningSummary` 生成時に `rounds`, `boundary_report` をシリアライズ。
+    - `widget.py`:
+      - `progress` traitlet のスキーマを拡張:
+        `{current, total, message, round, total_rounds, cumulative_trials, expanded_dims}`（追加は optional な存在）。
+      - `tune_summary` に `rounds` / `boundary_report` を格納。
+      - `on_progress` シグネチャを後方互換な dict-payload 渡しに拡張
+        （`def on_progress(current, total, message, *, round=None, cumulative_trials=None, expanded_dims=None)`）。
+    - **バージョン互換**: `lizyml >= 0.9.0` を必須にする（B案）:
+      - `pyproject.toml` の `optional-dependencies.lizyml` と `dependency-groups.dev` を `>=0.9.0` に引き上げ。
+      - `LizyMLAdapter.__init__` でランタイム version check を実施、`lizyml < 0.9.0` なら明示的 ImportError。
+      - README と BLUEPRINT にバージョン互換性マトリクスを追記。
+      - `docs/VERSION_COMPAT.md` を新規作成してユーザー向けガイダンスを集約。
+  - **TypeScript/JS**:
+    - `ProgressView.tsx`:
+      - Tune 中に `Round X/Y` バッジと累積 trial 進捗を表示。
+      - 前ラウンドのベスト比較（improvement delta）を表示。
+    - `BoundaryExpansionPanel.tsx` (新規):
+      - `expanded_dims` を受け取り、拡張された dim を方向（lower/upper）と旧値→新値の範囲で表示。
+      - 未拡張 dim 数のサマリーを表示。
+      - ラウンド 2 以降かつ `expanded_dims` が非空のときのみ表示。
+    - `ScoreHistoryChart.tsx` (新規):
+      - Plotly.js で trial × score の scatter / line を描画。
+      - `rounds` に含まれる境界でラウンド区切り線（vertical dashed）を引く。
+      - ラウンドごとに expanded_dims のアノテーションを重ねる。
+      - 各 trial の state（COMPLETE/PRUNED/FAIL）で色分け。
+      - 既存の Plotly CDN dynamic import パターンを再利用。
+    - `ConvergenceSignal.tsx` (新規):
+      - 再ラウンドで `expanded_dims` が空のときに "No expansion needed — search space is sufficient" を表示、
+        Fit への導線ボタンを提供。
+    - `ResultsTab.tsx`:
+      - Tune 完了時に Best Params → Boundary Expansion → Score History Chart → Trials Summary の順で表示。
+- **影響範囲**:
+  - `src/lizyml_widget/types.py` — `TuningSummary` フィールド追加（**change gate**）
+  - `src/lizyml_widget/adapter.py` — tune() 進捗払出＆summary 生成
+  - `src/lizyml_widget/service.py` — 型中継
+  - `src/lizyml_widget/widget.py` — progress traitlet / tune_summary 構造拡張（**change gate**）
+  - `js/src/components/ProgressView.tsx` — ラウンド対応
+  - `js/src/components/BoundaryExpansionPanel.tsx` — 新規
+  - `js/src/components/ScoreHistoryChart.tsx` — 新規
+  - `js/src/components/ConvergenceSignal.tsx` — 新規
+  - `js/src/tabs/ResultsTab.tsx` — レイアウト拡張
+  - `pyproject.toml` — lizyml 制約引き上げ（**change gate**: dependency upper/lower bound 変更）
+  - `README.md` — Install/Requirements 節にバージョンマトリクス追記
+  - `docs/VERSION_COMPAT.md` — 新規
+  - `BLUEPRINT.md` §Tune UI / §Traitlets — 更新
+- **互換性（B案: 破壊的変更）**:
+  - lizyml < 0.9.0 では動作しない（明示的 ImportError）。
+  - ユーザー向けには `pip install "lizyml-widget[lizyml]"` で `lizyml>=0.9.0` を自動解決する仕組みを維持。
+  - 既に `lizyml==0.7.x` などの古いバージョンを手動固定しているユーザーへは、
+    README の互換性マトリクスで明示し、インストール時に pip resolver が衝突を検出できるよう
+    dependency の lower bound を厳密化する。
+- **代替案（A案: 後方互換の段階的拡張）**:
+  - `progress` traitlet に optional フィールドとして新情報を追加、lizyml 0.7.x でも動く。
+  - メリット: 旧版ユーザーを壊さない。
+  - デメリット: 新機能（boundary expansion, score history chart）が旧版では常にダミー表示になり、
+    JS 分岐が肥大化してメンテナンス負荷が上がる。
+  - **採用しない理由**: ユーザー指示により B案を採用。リリースノート・バージョンマトリクスで
+    アップグレードガイダンスを丁寧にカバーする方針。
+- **受け入れ基準**:
+  - `lizyml>=0.9.0` で Tune 実行時に Round/累積 trial 情報が Widget に伝播し、ProgressView に反映される。
+  - `expanded_dims` が非空のラウンドで BoundaryExpansionPanel が表示される。
+  - Score History Chart が Tune 完了後に表示され、ラウンド境界が可視化される。
+  - 再ラウンドで `expanded_dims` が空のとき ConvergenceSignal が表示される。
+  - `lizyml<0.9.0` が入っている環境で Widget import 時に明確な ImportError が出る。
+  - README / docs にバージョン互換性マトリクスが記載される。
+  - 既存 Python テスト + 新規テスト（adapter tune, widget progress, types）が全パス。
+  - JS: vitest / biome / tsc が全パス + 新コンポーネントに単体テスト追加。
+
+---
+
 ### P-001: `set_task` アクション追加
 
 - **日付**: 2026-03-10

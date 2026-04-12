@@ -46,13 +46,20 @@ class FitSummary:
 
 @dataclass
 class TuningSummary:
-    """Summary of a tuning run."""
+    """Summary of a tuning run.
+
+    Fields ``rounds`` and ``boundary_report`` require lizyml>=0.9.0 (re-tune
+    support, proposal P-027). For single-round tuning both collapse to a
+    single-element ``rounds`` list and ``boundary_report=None``.
+    """
 
     best_params: dict[str, Any]
     best_score: float
-    trials: list[dict[str, Any]]  # [{number, params, score, state}, ...]
+    trials: list[dict[str, Any]]  # [{number, params, score, state, round}, ...]
     metric_name: str
     direction: str  # "minimize" | "maximize"
+    rounds: list[dict[str, Any]] = field(default_factory=list)  # per-round summary
+    boundary_report: dict[str, Any] | None = None  # None when no resume rounds ran
 
 
 @dataclass

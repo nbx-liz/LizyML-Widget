@@ -37,7 +37,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 10
 
@@ -50,7 +50,8 @@ jobs:
       - name: Build JS
         run: |
           cd js
-          pnpm install
+          pnpm install --ignore-scripts
+          pnpm rebuild esbuild
           pnpm build
 
       - name: Build sdist and wheel

@@ -86,12 +86,14 @@ def _capture_log(logger: logging.Logger, level: int = logging.WARNING):
 
 
 class TestInfo:
-    @patch.dict("sys.modules", {"lizyml": MagicMock(__version__="1.2.3")})
+    # P-027: adapter.__init__ now asserts lizyml is in the supported range,
+    # so the sentinel version must fall within LIZYML_MIN/MAX.
+    @patch.dict("sys.modules", {"lizyml": MagicMock(__version__="0.9.1")})
     def test_info(self) -> None:
         adapter = LizyMLAdapter()
         info = adapter.info
         assert info.name == "lizyml"
-        assert info.version == "1.2.3"
+        assert info.version == "0.9.1"
 
 
 class TestConfigContractValidation:
@@ -244,7 +246,7 @@ class TestTune:
 
         progress_calls: list[tuple[int, int, str]] = []
 
-        def on_progress(current: int, total: int, message: str) -> None:
+        def on_progress(current: int, total: int, message: str, **_: Any) -> None:
             progress_calls.append((current, total, message))
 
         adapter.tune(mock_model, on_progress=on_progress)
@@ -288,7 +290,7 @@ class TestTune:
 
         progress_calls: list[tuple[int, int, str]] = []
 
-        def on_progress(current: int, total: int, message: str) -> None:
+        def on_progress(current: int, total: int, message: str, **_: Any) -> None:
             progress_calls.append((current, total, message))
 
         result = adapter.tune(mock_model, on_progress=on_progress)
@@ -314,7 +316,7 @@ class TestTune:
 
         progress_calls: list[tuple[int, int, str]] = []
 
-        def on_progress(current: int, total: int, message: str) -> None:
+        def on_progress(current: int, total: int, message: str, **_: Any) -> None:
             progress_calls.append((current, total, message))
 
         result = adapter.fit(mock_model, on_progress=on_progress)
@@ -334,7 +336,7 @@ class TestTune:
 
         call_count = 0
 
-        def on_progress_cancel(current: int, total: int, message: str) -> None:
+        def on_progress_cancel(current: int, total: int, message: str, **_: Any) -> None:
             nonlocal call_count
             call_count += 1
             if call_count >= 2:
@@ -780,7 +782,7 @@ class TestCancelPollingErrorPropagation:
         def failing_target() -> None:
             raise ValueError("bad value")
 
-        def on_progress(cur: int, total: int, msg: str) -> None:
+        def on_progress(cur: int, total: int, msg: str, **_: Any) -> None:
             pass
 
         with pytest.raises(ValueError, match="bad value"):

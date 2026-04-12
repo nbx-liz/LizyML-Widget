@@ -71,18 +71,34 @@ def run_job(
     with contextlib.suppress(OSError, ValueError):
         signal.signal(signal.SIGTERM, _sigterm_handler)
 
-    def on_progress(current: int, total: int, message: str) -> None:
+    def on_progress(
+        current: int,
+        total: int,
+        message: str,
+        **extra: Any,
+    ) -> None:
         if cancel_flag.is_set():
             raise InterruptedError("Job cancelled by user")
-        send_message(
-            output,
-            {
-                "type": "progress",
-                "current": current,
-                "total": total,
-                "message": message,
-            },
-        )
+        payload: dict[str, Any] = {
+            "type": "progress",
+            "current": current,
+            "total": total,
+            "message": message,
+        }
+        # Forward the P-027 re-tune fields so the parent widget's
+        # subprocess path can surface round-aware progress too.
+        for key in (
+            "round",
+            "total_rounds",
+            "cumulative_trials",
+            "expanded_dims",
+            "latest_score",
+            "latest_state",
+            "best_score",
+        ):
+            if key in extra and extra[key] is not None:
+                payload[key] = extra[key]
+        send_message(output, payload)
 
     try:
         adapter = _create_adapter()
@@ -112,6 +128,8 @@ def run_job(
                     "trials": summary_t.trials,
                     "metric_name": summary_t.metric_name,
                     "direction": summary_t.direction,
+                    "rounds": summary_t.rounds,
+                    "boundary_report": summary_t.boundary_report,
                 },
                 "eval_table": adapter.evaluate_table(model),
                 "split_summary": adapter.split_summary(model),
