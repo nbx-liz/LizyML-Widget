@@ -10,15 +10,21 @@ import {
   BoundaryExpansionPanel,
   type BoundaryReport,
 } from "../components/BoundaryExpansionPanel";
-import {
-  ScoreHistoryChart,
-  type TrialRecord,
-  type RoundRecord,
-} from "../components/ScoreHistoryChart";
 import { ConvergenceSignal } from "../components/ConvergenceSignal";
 import { RetuneControls } from "../components/RetuneControls";
 import type { ResolvedTheme } from "../hooks/useTheme";
 import type { PlotRequestOptions } from "../hooks/usePlot";
+
+/** Subset of per-round summary fields consumed by this component.
+ *  Only ``round`` (for the convergence signal round number) and
+ *  ``expanded_dims`` (for the empty-expansion check) are read.
+ *  Other RoundSummary fields (``n_trials``, ``best_score_before``,
+ *  ``best_score_after``) used to be consumed by ScoreHistoryChart
+ *  but P-029 moved that rendering to lizyml's ``tuning_plot``. */
+interface TuneRoundRecord {
+  round: number;
+  expanded_dims: string[];
+}
 
 interface ResultsTabProps {
   status: string;
@@ -139,10 +145,18 @@ export function ResultsTab({
     inferenceResult.status === "completed" &&
     inferenceResult.data?.length > 0;
 
+  // P-029: The "optimization-history" plot is surfaced in a dedicated
+  // "Tuning History" accordion above, so we hide it from the generic
+  // Plots chip selector to avoid showing the same figure twice.
+  const plotSelectorOptions = useMemo(
+    () => availablePlots.filter((p) => p !== "optimization-history"),
+    [availablePlots],
+  );
+
   // Auto-select first available plot, or keep user's selection if still valid
-  const activePlot = (selectedPlot && availablePlots.includes(selectedPlot))
+  const activePlot = (selectedPlot && plotSelectorOptions.includes(selectedPlot))
     ? selectedPlot
-    : availablePlots[0] ?? null;
+    : plotSelectorOptions[0] ?? null;
 
   // P-026: Extract model metric list from fitSummary.params for learning curve selector.
   // Combines native metrics (from "metric" row) and feval display names
@@ -289,16 +303,19 @@ export function ResultsTab({
             })()}
           </Accordion>
 
-          {/* P-027: Convergence signal when the last resume round did not expand anything. */}
+          {/* P-027: Convergence signal when the last resume round did not
+              expand anything.  ``RoundSummary.round`` from lizyml is already
+              1-indexed (documented in lizyml/core/types/tuning_result.py),
+              so it is passed through as-is — the earlier "+1" was a bug. */}
           {(() => {
-            const rounds = (tuneSummary.rounds ?? []) as RoundRecord[];
+            const rounds = (tuneSummary.rounds ?? []) as TuneRoundRecord[];
             const lastRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
             const report = (tuneSummary.boundary_report ?? null) as BoundaryReport | null;
             const expandedInLast = lastRound ? lastRound.expanded_dims.length : 0;
-            if (lastRound && lastRound.round >= 1 && expandedInLast === 0 && rounds.length > 1) {
+            if (lastRound && expandedInLast === 0 && rounds.length > 1) {
               return (
                 <ConvergenceSignal
-                  round={lastRound.round + 1 /* 0-indexed → 1-indexed */}
+                  round={lastRound.round}
                   checkedDims={report?.dims.length ?? 0}
                   onProceedToFit={() => {
                     if (tuneSummary.best_params) {
@@ -321,16 +338,23 @@ export function ResultsTab({
             </Accordion>
           )}
 
-          {/* P-027: Score History chart — always shown for tune results. */}
-          <Accordion title="Score History" defaultOpen={true}>
-            <ScoreHistoryChart
-              trials={(tuneSummary.trials ?? []) as TrialRecord[]}
-              rounds={(tuneSummary.rounds ?? []) as RoundRecord[]}
-              direction={String(tuneSummary.direction ?? "minimize")}
-              metricName={String(tuneSummary.metric_name ?? "score")}
-              theme={theme}
-            />
-          </Accordion>
+          {/* P-029: Tuning History — unified on lizyml's tuning_plot
+              (previously a widget-local ScoreHistoryChart duplicate).
+              The accordion is always shown on tune completion so the
+              user sees trial history immediately, and the PlotViewer
+              fetches the figure via the standard request_plot path
+              that feeds every other Plotly chart in the widget. */}
+          {availablePlots.includes("optimization-history") && (
+            <Accordion title="Tuning History" defaultOpen={true}>
+              <PlotViewer
+                plotType="optimization-history"
+                plots={plots}
+                loading={plotLoading}
+                onRequest={handlePlotRequest}
+                theme={theme}
+              />
+            </Accordion>
+          )}
         </>
       )}
 
@@ -342,12 +366,13 @@ export function ResultsTab({
         </div>
       )}
 
-      {/* Unified Plots section */}
-      {availablePlots.length > 0 && (
+      {/* Unified Plots section (P-029: optimization-history is hidden —
+           it renders in the dedicated Tuning History accordion above). */}
+      {plotSelectorOptions.length > 0 && (
         <div style="margin-bottom: 12px;">
           <div style="font-weight: 600; margin-bottom: 8px;">Plots</div>
           <div class="lzw-chip-group" style="margin-bottom: 8px;">
-            {availablePlots.map((p) => (
+            {plotSelectorOptions.map((p) => (
               <button
                 key={p}
                 type="button"

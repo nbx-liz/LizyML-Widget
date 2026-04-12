@@ -742,15 +742,6 @@
   white-space: nowrap;
 }
 
-.lzw-score-history {
-  margin-top: 4px;
-}
-
-.lzw-score-history__canvas {
-  width: 100%;
-  min-height: 260px;
-}
-
 .lzw-convergence-signal {
   display: flex;
   align-items: flex-start;

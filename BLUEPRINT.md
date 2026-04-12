@@ -1108,15 +1108,16 @@ Tune 実行中は Fold の代わりに Trial 進捗を表示する。P-027（liz
 
 #### Tune 完了
 
-Fit 完了と同じ構成に加え、先頭に探索結果を追加する。P-027 で再チューニング（re-tune）結果の可視化セクションを追加した。
-P-028 で Re-tune の起動 UI（RetuneControls）を Best Params Accordion 内に追加した。
+Fit 完了と同じ構成に加え、先頭に探索結果を追加する。P-027 で re-tune 結果の可視化セクションを追加し、
+P-028 で Re-tune 起動 UI（RetuneControls）を Best Params Accordion 内に追加した。
+P-029 で自前の Score History Chart を廃止し、lizyml backend の `tuning_plot` (`optimization-history`) に一本化した。
 
 ```
 Best Params → [Apply to Fit ▸]
 → RetuneControls (n_trials / expand_boundary / boundary_threshold + [Re-tune (resume) ↻])
 → Convergence Signal (ラウンド 2+ かつ expanded_dims が空のときのみ)
 → Boundary Expansion (boundary_report が非 None のときのみ)
-→ Score History Chart (常時)
+→ Tuning History (P-029: lizyml tuning_plot を PlotViewer で描画、常時表示)
 → Score → Learning Curve → Plots → Accordion(Feature Importance / Fold Details / Parameters)
 ```
 
@@ -1134,9 +1135,11 @@ Optuna study を継続したまま追加 trial を実行する。完了すると
 **Boundary Expansion (P-027):** `boundary_report.dims` を基に、境界拡張された dim を `[low, high] → [new_low, new_high]` の形式で列挙する。
 未拡張 dim 数はフッターに折り畳む。全 dim が未拡張のときは「No expansion needed」コピーに縮退する。
 
-**Score History Chart (P-027):** Trial 番号 vs スコアの Plotly scatter + 累積ベストの折れ線。
-ラウンド境界は vertical dashed line で区切り、各ラウンドの `expanded_dims` をアノテーションとして重ねる。
-既存の `optimization-history` plot（LizyML の `tuning_plot`）は Plots セレクタからも引き続き利用可能。
+**Tuning History (P-029):** lizyml の `tuning_plot()` が返す Plotly Figure を `PlotViewer` で描画する専用 Accordion。
+Trial 別 scatter + 累積ベスト折れ線 + ラウンド境界 dashed line + `expanded_dims` annotation を含む。
+`available_plots` に `optimization-history` が含まれていれば常時表示する。Widget は自前の再実装を持たず、
+backend 側の Figure をそのまま使うため、lizyml の可視化拡張が自動的に反映される。
+Plots セレクタからは `optimization-history` を除外しており、重複表示されない。
 
 Search Space で `metric` を探索対象に含めた場合、`best_params.metric` は LightGBM `model.params.metric` として解釈する。
 

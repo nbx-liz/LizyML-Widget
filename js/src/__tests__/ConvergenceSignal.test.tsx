@@ -42,4 +42,19 @@ describe("ConvergenceSignal", () => {
     render(<ConvergenceSignal round={2} checkedDims={4} />);
     expect(screen.queryByText(/Proceed to Fit/)).toBeNull();
   });
+
+  // Regression test for a bug where the icon slot contained the 6-character
+  // string "\u2713" instead of the actual check-mark glyph because JSX text
+  // nodes do not interpret JavaScript escape sequences.  The raw literal
+  // must NOT appear in the DOM; only the resolved glyph should.
+  it("renders a real checkmark glyph, not the literal \\u2713", () => {
+    const { container } = render(<ConvergenceSignal round={2} checkedDims={1} />);
+    const icon = container.querySelector(".lzw-convergence-signal__icon");
+    expect(icon).not.toBeNull();
+    // The DOM text must be the glyph, not the escape sequence.
+    expect(icon!.textContent).toBe("\u2713");
+    expect(icon!.textContent).not.toContain("\\u");
+    // Container must not contain the literal escape anywhere.
+    expect(container.innerHTML).not.toContain("\\u2713");
+  });
 });

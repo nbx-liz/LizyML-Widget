@@ -30,7 +30,7 @@ export function ConvergenceSignal({
   return (
     <div class="lzw-convergence-signal" role="status">
       <div class="lzw-convergence-signal__icon" aria-hidden="true">
-        \u2713
+        {"\u2713"}
       </div>
       <div class="lzw-convergence-signal__body">
         <div class="lzw-convergence-signal__title">

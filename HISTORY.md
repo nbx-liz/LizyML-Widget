@@ -1,5 +1,101 @@
 ## LizyML-Widget 仕様変更履歴
 
+### Bug Fix: Convergence Signal の Round 表示 +1 ずれ + チェックマーク escape 不正
+
+- **日付**: 2026-04-12
+- **ステータス**: 承認・実装
+- **種別**: バグ修正（change gate 対象外）
+- **症状**: 3 回目の tune（= `w.tune()` + `w.retune()` × 2）完了後に Convergence Signal が
+  以下のように表示されていた:
+  - `\u2713` が 6 文字の文字列としてそのままレンダリングされる（チェックマーク glyph にならない）
+  - 「Round 4 finished without expanding any boundary」と表示（本来は「Round 3」）
+- **原因**:
+  1. [js/src/components/ConvergenceSignal.tsx](js/src/components/ConvergenceSignal.tsx):
+     JSX のテキストノードに `\u2713` を生書きしていた。JSX テキストは JavaScript 文字列リテラルではないため、
+     バックスラッシュエスケープは解釈されずそのまま文字列として DOM に流れる。
+     `{"\u2713"}` のように JSX 式で囲むか、`&#x2713;` の HTML entity を使う必要がある。
+  2. [js/src/tabs/ResultsTab.tsx](js/src/tabs/ResultsTab.tsx):
+     `lizyml.core.types.tuning_result.RoundSummary.round` は lizyml の docstring で
+     **「1-indexed」と明記** されているにもかかわらず、UI 側で `lastRound.round + 1` と
+     誤って +1 していた（P-027 実装時の誤解）。
+     さらに `lastRound.round >= 1` の冗長な guard も残っていた（1-indexed なので常に真）。
+- **修正内容**:
+  - `ConvergenceSignal.tsx` L33: `\u2713` → `{"\u2713"}`
+  - `ResultsTab.tsx` Convergence Signal 呼び出し:
+    - `round={lastRound.round + 1}` → `round={lastRound.round}`
+    - `lastRound.round >= 1` の冗長 guard を削除
+    - `RoundSummary.round` の 1-indexed 性をコメントで明記
+  - `ConvergenceSignal.test.tsx`: チェックマーク glyph が DOM に表示されることを assert する回帰テスト追加
+  - `ResultsTab-guards.test.tsx`: `rounds = [round:1, round:2, round:3 with empty expanded_dims]`
+    のケースで "Round 3 finished" が表示されることを検証する integration テスト追加
+- **影響範囲**:
+  - `js/src/components/ConvergenceSignal.tsx`
+  - `js/src/tabs/ResultsTab.tsx`
+  - `js/src/__tests__/ConvergenceSignal.test.tsx`（1 test 追加）
+  - `js/src/__tests__/ResultsTab-guards.test.tsx`（2 tests 追加）
+- **互換性**: 純粋な UI 文言修正。traitlet / action / API 変更なし。
+- **受け入れ基準**:
+  - ユーザー報告の 3 回目 tune で Convergence Signal が「Round 3 finished」と表示される。
+  - チェックマーク ✓ が DOM に正しく表示され、`\u2713` の escape 文字列は残らない。
+  - 既存 JS 159 + 新規 3 テスト = **162 テスト全パス**。
+
+---
+
+### P-029: Score History Chart を lizyml の Tuning History Plot に一本化
+
+- **日付**: 2026-04-12
+- **ステータス**: 承認・実装
+- **背景**:
+  - P-027 で Widget 独自の `ScoreHistoryChart` コンポーネント（`js/src/components/ScoreHistoryChart.tsx`）を実装したが、
+    lizyml 0.9.0 の `Model.tuning_plot()` (`plot_tuning_history`) が同じ機能を backend 側で完結して提供している:
+    - Trial 別 scatter（state 色分け）
+    - 累積ベストスコアの折れ線
+    - ラウンド境界の dashed line（H-0068）
+    - 各ラウンドの expanded dims annotation（H-0068）
+  - Widget 側の `ScoreHistoryChart` は `tuning_plot` の下位互換であり、**同じ描画を 2 実装持つ重複** となっていた。
+    lizyml 側で境界拡張の可視化が拡充されても、Widget 側の自前実装には反映されない。
+  - `optimization-history` は既に `available_plots()` に登録されており、PlotViewer で表示可能。
+- **提案内容**:
+  - **削除**:
+    - `js/src/components/ScoreHistoryChart.tsx`
+    - `js/src/__tests__/ScoreHistoryChart.test.tsx`
+    - `js/src/widget.css` の `.lzw-score-history` 関連スタイル
+  - **変更**:
+    - `js/src/tabs/ResultsTab.tsx` — Tune 完了時に **Tuning History Accordion を常時表示**し、
+      `PlotViewer` に `plotType="optimization-history"` を渡して lizyml backend の Figure を描画する（案B）。
+      BoundaryExpansionPanel と ConvergenceSignal の間に配置する。
+    - `js/src/tabs/ResultsTab.tsx` — Plots セレクタから `optimization-history` を除外する。
+      常時表示 Accordion と重複するため。
+  - **保持**:
+    - `BoundaryExpansionPanel` — `tuning_plot` に含まれない別情報（per-dim before/after ranges）なので残す。
+    - `ConvergenceSignal` — 同上（Fit 画面への遷移導線）。
+    - `tune_summary.rounds` / `boundary_report` traitlet — 上記 2 コンポーネントが依然として消費する。
+- **影響範囲**:
+  - `js/src/components/ScoreHistoryChart.tsx` — **削除**
+  - `js/src/__tests__/ScoreHistoryChart.test.tsx` — **削除**
+  - `js/src/tabs/ResultsTab.tsx` — imports / レイアウト変更
+  - `js/src/widget.css` — スタイル削除
+  - `BLUEPRINT.md` §5.x Tune 完了 — 記述更新
+  - `HISTORY.md` — 本 proposal
+- **互換性**:
+  - `tune_summary` traitlet の構造は変更なし（BoundaryExpansionPanel / ConvergenceSignal が使用中）。
+  - Adapter Protocol 変更なし。
+  - Python API 変更なし。
+  - UI 上「Score History」という表示名は「Tuning History」に変わる（ユーザー向けの視認的変更のみ）。
+- **代替案（却下）**:
+  - **案A: Plots セレクタに含めるだけ** — 1 クリック余分にかかり、Tune 完了時に即座に履歴が見えないため UX が退化。
+  - **案C: ScoreHistoryChart を残す** — lizyml 側の機能更新が Widget に反映されない永続的な負債となるため不採用。
+- **受け入れ基準**:
+  - Tune 完了後、Results タブに "Tuning History" Accordion が常時表示され、
+    lizyml backend の `tuning_plot` が描画される。
+  - Plots セレクタに `optimization-history` が重複表示されない。
+  - `ScoreHistoryChart.tsx` とそのテストが削除される。
+  - `.lzw-score-history` CSS 参照が残らない。
+  - Python テスト 845 パス（変更なし）、JS vitest は ScoreHistoryChart 関連の 3 tests が削除されて **159 テスト**（162 → 159）が全パス。
+  - ruff / mypy / eslint / tsc クリーン。
+
+---
+
 ### P-028: Re-tune Launcher（`w.retune()` Python API + `retune` action + UI ボタン）
 
 - **日付**: 2026-04-12
