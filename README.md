@@ -50,9 +50,9 @@ the widget targets a specific `lizyml` range:
 
 | lizyml-widget | lizyml           | Highlights                                                    |
 | ------------- | ---------------- | ------------------------------------------------------------- |
-| **0.5.x**     | `>=0.9.0,<0.10`  | Re-tune monitoring (round progress, boundary expansion, chart)|
-| 0.4.x         | `>=0.7.0,<0.9`   | Learning curve metric filter, CV strategy metadata            |
-| 0.3.x         | `>=0.5.0,<0.7`   | Canonical config, contract-driven UI                          |
+| **0.8.x**     | `>=0.9.0,<0.10`  | Re-tune (round progress, boundary expansion, tuning history, `w.retune()` API) |
+| 0.7.x         | `>=0.7.0,<0.9`   | Calibration / Search Space default refresh                    |
+| 0.6.x / 0.5.x | `>=0.5.0,<0.7`   | Learning curve metric filter, CV strategy metadata            |
 
 See [docs/VERSION_COMPAT.md](docs/VERSION_COMPAT.md) for the full matrix,
 troubleshooting, and upgrade guidance.

@@ -39,9 +39,9 @@ Widget は LizyML の型・契約（`BackendAdapter` Protocol, `TuningResult`, `
 
 | lizyml-widget | lizyml           | 主な新機能 / 破壊的変更                                               |
 | ------------- | ---------------- | --------------------------------------------------------------------- |
-| **0.5.x**     | `>=0.9.0,<0.10`  | P-027: Re-tune monitoring（Round progress, Boundary Expansion, Score History）|
-| 0.4.x         | `>=0.7.0,<0.9`   | Learning curve metrics フィルタ, CV strategy metadata                  |
-| 0.3.x         | `>=0.5.0,<0.7`   | Canonical config, Backend Contract 駆動 UI                             |
+| **0.8.x**     | `>=0.9.0,<0.10`  | P-027/P-028/P-029: Re-tune（Round progress, Boundary Expansion, Tuning History, `w.retune()` API, UI ボタン）|
+| 0.7.x         | `>=0.7.0,<0.9`   | Calibration / Search Space default refresh                             |
+| 0.6.x / 0.5.x | `>=0.5.0,<0.7`   | Learning curve metrics フィルタ, CV strategy metadata                  |
 
 推奨インストール: `pip install "lizyml-widget[lizyml]"` — extras 経由で互換な lizyml を自動解決する。`LizyMLAdapter.__init__` はランタイムで lizyml のバージョンを検証し、範囲外なら明確な ImportError を投げる。
 

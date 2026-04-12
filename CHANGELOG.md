@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-12
+
+### Added
+- **Re-tune monitoring (P-027)** — round-aware Tune progress display,
+  Boundary Expansion panel, Convergence Signal banner, and backend
+  version guard that requires `lizyml>=0.9.0,<0.10`. The `progress`
+  traitlet now carries optional `round`, `total_rounds`,
+  `cumulative_trials`, `expanded_dims`, `latest_score`, `latest_state`,
+  and `best_score` fields during Tune runs.
+- **Re-tune launcher (P-028)** — new `w.retune(n_trials=..., expand_boundary=..., boundary_threshold=...)`
+  Python API and a matching `retune` UI action. The Results tab gains
+  a "Re-tune (resume)" button inside the Best Params accordion so
+  users can resume the Optuna study with additional trials (and
+  optionally widen boundaries) without leaving the widget.
+- **Tuning History accordion (P-029)** — the Results tab now renders
+  lizyml's `Model.tuning_plot()` figure in a dedicated "Tuning History"
+  accordion on Tune completion, via the standard PlotViewer pipeline.
+- `TuningSummary` gains `rounds: list[dict]` and
+  `boundary_report: dict | None` fields, propagated through
+  `LizyMLAdapter.tune()` and the `tune_summary` traitlet so the new UI
+  components can render round-aware history.
+- `docs/VERSION_COMPAT.md` — documents the widget ↔ lizyml
+  compatibility matrix, supported upgrade paths, and install
+  recommendations.
+- `WidgetService` gains a dedicated `_tune_model` slot so an
+  intervening `fit()` cannot clobber the Optuna study that the next
+  `retune()` must resume.
+- Closes [#101](https://github.com/nbx-liz/LizyML-Widget/issues/101).
+
+### Changed
+- **Required lizyml version bumped to `>=0.9.0,<0.10`** (previously
+  `>=0.7.0`). The widget no longer works with lizyml 0.7.x / 0.8.x;
+  use `pip install "lizyml-widget[lizyml]"` to let pip auto-resolve a
+  compatible backend. `LizyMLAdapter.__init__` now validates the
+  installed lizyml version at import time and raises a clear
+  `ImportError` with an upgrade hint if the backend is out of range.
+- `ResultsTab` layout on Tune completion:
+  Best Params → RetuneControls → Convergence Signal →
+  Boundary Expansion → Tuning History → (existing) Score / Plots / etc.
+- `BackendAdapter.tune()` Protocol and `LizyMLAdapter.tune()` accept
+  `resume`, `n_trials`, `expand_boundary`, and `boundary_threshold`
+  kwargs (all default to their pre-P-028 values, so in-tree callers
+  are unchanged).
+- README adds a Re-tune usage section and a lizyml compatibility
+  matrix.
+
+### Removed
+- `js/src/components/ScoreHistoryChart.tsx` — the widget-local Plotly
+  duplicate of lizyml's `tuning_plot`. The P-029 refactor consolidates
+  on the backend figure, dropping roughly 2.4 KB from the production
+  bundle.
+
+### Fixed
+- **ConvergenceSignal** showed the literal 6-character string
+  `\u2713` instead of a real checkmark glyph because the JSX text node
+  was not wrapped in an expression.
+- **ConvergenceSignal** "Round N" label was off by one after the
+  third tune: `ResultsTab` was passing `lastRound.round + 1`, but
+  lizyml's `RoundSummary.round` is already 1-indexed. The `+1` has
+  been removed along with the now-redundant `>= 1` guard.
+- `WidgetService.tune(resume=True)` now takes the `_tune_model` check
+  inside the existing `_model_lock` section to close a TOCTOU window
+  where an intervening `load()` could race with the check.
+- `ResultsTab` Best Score row renders an em-dash placeholder instead
+  of the literal string `"undefined"` when `tune_summary.best_score`
+  is missing (defensive guard).
+
 ## [0.7.3] - 2026-04-08
 
 ### Changed
