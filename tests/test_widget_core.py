@@ -351,6 +351,21 @@ class TestUpdateCvValidation:
         assert w.error["code"] == "CV_ERROR"
         assert "n_splits" in w.error["message"]
 
+    def test_update_cv_before_load_returns_backend_not_ready(self) -> None:
+        """#130: update_cv before load() (no backend contract) fails fast.
+
+        Previously the widget kept a frozenset fallback of CV strategy
+        names so an action arriving pre-load would silently accept stale
+        options. The fallback was a backend-coupling smell; we now fail
+        fast with a structured ``BACKEND_NOT_READY`` error and require
+        callers to load() first.
+        """
+        w = _make_widget()
+        # No load() — backend_contract is empty. Trigger the action.
+        w.action = {"type": "update_cv", "payload": {"strategy": "kfold", "n_splits": 5}}
+        assert w.error["code"] == "BACKEND_NOT_READY"
+        assert "load(df)" in w.error["message"]
+
 
 class TestUpdateCvError:
     """Cover _handle_update_cv error path (widget.py lines 301-302)."""
