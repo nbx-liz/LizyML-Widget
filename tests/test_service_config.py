@@ -11,7 +11,31 @@ import pytest
 
 from lizyml_widget.adapter import LizyMLAdapter
 from lizyml_widget.service import WidgetService
-from lizyml_widget.types import BackendInfo
+from lizyml_widget.types import BackendInfo, TuningSummary
+
+
+def _seed_tune_summary(
+    svc: WidgetService,
+    config_snapshot: dict[str, Any],
+    *,
+    ui_snapshot: dict[str, Any] | None = None,
+) -> None:
+    """Inject a TuningSummary into the service to simulate a prior tune.
+
+    P-035: ``apply_best_params`` reads snapshots from the service's
+    ``_last_tune_summary`` instead of explicit kwargs. Tests that exercise
+    the snapshot path therefore seed it directly.
+    """
+    svc._last_tune_summary = TuningSummary(
+        best_params={},
+        best_score=0.0,
+        trials=[],
+        metric_name="auc",
+        direction="maximize",
+        config_snapshot=copy.deepcopy(config_snapshot),
+        ui_snapshot=copy.deepcopy(ui_snapshot or {}),
+    )
+    svc._tune_summary_invalidated_by_load = False
 
 
 def _mock_adapter() -> Any:
@@ -46,9 +70,7 @@ class TestApplyBestParams:
         """Model-category params go to model.params."""
         svc = self._make_service()
         config = svc.initialize_config()
-        result = svc.apply_best_params(
-            {"learning_rate": 0.05, "max_depth": 7}, config, tune_snapshot=None
-        )
+        result = svc.apply_best_params({"learning_rate": 0.05, "max_depth": 7}, config)
         assert result["model"]["params"]["learning_rate"] == 0.05
         assert result["model"]["params"]["max_depth"] == 7
 
@@ -59,7 +81,6 @@ class TestApplyBestParams:
         result = svc.apply_best_params(
             {"num_leaves_ratio": 0.7, "min_data_in_leaf_ratio": 0.05},
             config,
-            tune_snapshot=None,
         )
         assert result["model"]["num_leaves_ratio"] == 0.7
         assert result["model"]["min_data_in_leaf_ratio"] == 0.05
@@ -73,7 +94,6 @@ class TestApplyBestParams:
         result = svc.apply_best_params(
             {"early_stopping_rounds": 80, "validation_ratio": 0.2},
             config,
-            tune_snapshot=None,
         )
         es = result.get("training", {}).get("early_stopping", {})
         assert es.get("rounds") == 80
@@ -88,7 +108,7 @@ class TestApplyBestParams:
         """When validation_ratio is applied and inner_valid exists, ratio is updated."""
         svc = self._make_service()
         config = svc.initialize_config()
-        result = svc.apply_best_params({"validation_ratio": 0.2}, config, tune_snapshot=None)
+        result = svc.apply_best_params({"validation_ratio": 0.2}, config)
         es = result.get("training", {}).get("early_stopping", {})
         iv = es.get("inner_valid")
         if iv is not None:
@@ -109,7 +129,6 @@ class TestApplyBestParams:
                 "early_stopping_rounds": 80,
             },
             config,
-            tune_snapshot=None,
         )
         assert result["model"]["params"]["learning_rate"] == 0.05
         assert result["model"]["num_leaves_ratio"] == 0.7
@@ -117,7 +136,7 @@ class TestApplyBestParams:
         assert es["rounds"] == 80
 
     def test_tune_snapshot_restored(self) -> None:
-        """When tune_snapshot is provided, it replaces current config."""
+        """When the service holds a TuningSummary, its snapshot replaces current config."""
         svc = self._make_service()
         config = svc.initialize_config()
         # Modify config (simulating user changes after tune)
@@ -126,8 +145,9 @@ class TestApplyBestParams:
         snapshot = copy.deepcopy(config)
         snapshot["model"]["params"]["n_estimators"] = 1500  # original value
         snapshot["evaluation"] = {"metrics": ["auc"]}
+        _seed_tune_summary(svc, snapshot)
 
-        result = svc.apply_best_params({"learning_rate": 0.01}, config, tune_snapshot=snapshot)
+        result = svc.apply_best_params({"learning_rate": 0.01}, config)
         # Should use snapshot, not current config
         assert result["model"]["params"]["n_estimators"] == 1500
         assert result["model"]["params"]["learning_rate"] == 0.01
@@ -142,18 +162,33 @@ class TestApplyBestParams:
         snapshot["features"] = {"exclude": []}
         snapshot["split"] = {"method": "kfold"}
         snapshot["task"] = "binary"
+        _seed_tune_summary(svc, snapshot)
 
-        result = svc.apply_best_params({"learning_rate": 0.01}, config, tune_snapshot=snapshot)
+        result = svc.apply_best_params({"learning_rate": 0.01}, config)
         assert "data" not in result
         assert "features" not in result
         assert "split" not in result
         assert "task" not in result
 
+    def test_apply_best_params_after_load_raises(self) -> None:
+        """P-035 acceptance: load() after tune invalidates the summary; apply must error."""
+        svc = self._make_service()
+        config = svc.initialize_config()
+        snapshot = copy.deepcopy(config)
+        _seed_tune_summary(svc, snapshot)
+
+        # Re-loading new data invalidates the summary deliberately.
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        svc.load_data(df, target="y")
+
+        with pytest.raises(ValueError, match="tune summary cleared by load"):
+            svc.apply_best_params({"learning_rate": 0.01}, config)
+
     def test_empty_params_returns_canonicalized(self) -> None:
         """Empty params should still return a valid canonicalized config."""
         svc = self._make_service()
         config = svc.initialize_config()
-        result = svc.apply_best_params({}, config, tune_snapshot=None)
+        result = svc.apply_best_params({}, config)
         assert "model" in result
         assert result["model"]["name"] == "lgbm"
 
@@ -162,7 +197,7 @@ class TestApplyBestParams:
         svc = self._make_service()
         config = svc.initialize_config()
         original = copy.deepcopy(config)
-        svc.apply_best_params({"learning_rate": 0.05}, config, tune_snapshot=None)
+        svc.apply_best_params({"learning_rate": 0.05}, config)
         assert config == original
 
     def test_wrong_arity_classify_raises(self) -> None:
@@ -173,7 +208,7 @@ class TestApplyBestParams:
             return_value=({"lr": 0.1}, {"ratio": 0.5})  # 2-tuple
         )
         with pytest.raises(ValueError):
-            svc.apply_best_params({"lr": 0.1}, config, tune_snapshot=None)
+            svc.apply_best_params({"lr": 0.1}, config)
 
 
 class TestServiceValidationGuards:

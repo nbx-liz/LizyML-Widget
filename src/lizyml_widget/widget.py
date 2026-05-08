@@ -105,8 +105,9 @@ class LizyWidget(anywidget.AnyWidget):
         self._job_lock = threading.Lock()
         self._job_counter = 0
         self._inference_df: pd.DataFrame | None = None
-        self._tune_config_snapshot: dict[str, Any] | None = None
-        self._tune_ui_snapshot: dict[str, Any] | None = None
+        # P-035: tune snapshots now live on TuningSummary inside
+        # WidgetService, not on the widget. Removed _tune_config_snapshot
+        # and _tune_ui_snapshot.
         # #127: action handlers extracted to widget_actions.WidgetActionDispatcher.
         # The dispatcher holds a back-reference to this widget and reads/writes
         # traitlets through it; widget owns the state machine, dispatcher owns
@@ -548,9 +549,11 @@ class LizyWidget(anywidget.AnyWidget):
                 self.status = "failed"
                 return
 
-            if job_type == "tune":
-                self._tune_config_snapshot = copy.deepcopy(full_config)
-                self._tune_ui_snapshot = copy.deepcopy(dict(self.config))
+            # P-035: tune snapshots are now carried inside TuningSummary
+            # via JobSpec.ui_snapshot → service.tune (or
+            # service.record_subprocess_tune_summary for the subprocess
+            # path). The widget no longer keeps private snapshot attrs.
+            tune_ui_snapshot = copy.deepcopy(dict(self.config)) if job_type == "tune" else None
 
             # INV-D (BLUEPRINT §6.4): cancel flag is cleared exactly once
             # per job at startup; the worker / supervisor never write it
@@ -597,6 +600,7 @@ class LizyWidget(anywidget.AnyWidget):
             job_type=job_type,
             config=full_config,
             retune_kwargs=retune_kwargs,
+            ui_snapshot=tune_ui_snapshot,
         )
         thread = threading.Thread(
             target=self._supervise,

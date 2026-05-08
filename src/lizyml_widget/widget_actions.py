@@ -12,7 +12,6 @@ State-machine transitions still live in ``widget.py::_supervise`` /
 from __future__ import annotations
 
 import contextlib
-import copy
 import logging
 import os
 import re
@@ -442,20 +441,14 @@ class WidgetActionDispatcher:
             }
 
     def handle_apply_best_params(self, payload: dict[str, Any]) -> None:
+        # P-035: snapshots are owned by Service via _last_tune_summary;
+        # widget no longer holds _tune_config_snapshot / _tune_ui_snapshot.
         w = self._widget
         params = payload.get("params", {})
         if not params:
             return
-        with w._job_lock:
-            snapshot = copy.deepcopy(w._tune_config_snapshot) if w._tune_config_snapshot else None
-            ui_snapshot = copy.deepcopy(w._tune_ui_snapshot) if w._tune_ui_snapshot else None
         try:
-            w.config = self._service.apply_best_params(
-                params,
-                dict(w.config),
-                tune_snapshot=snapshot,
-                tune_ui_snapshot=ui_snapshot,
-            )
+            w.config = self._service.apply_best_params(params, dict(w.config))
         except Exception as e:
             w.error = {"code": "APPLY_ERROR", "message": str(e)}
 

@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **TuningSummary owns post-tune snapshots (P-035)**
+  ([#132](https://github.com/nbx-liz/LizyML-Widget/issues/132)).
+  ``TuningSummary`` gains two new fields — ``config_snapshot`` (canonical
+  run config) and ``ui_snapshot`` (widget ``config`` traitlet at tune
+  time) — so post-tune Apply-to-Fit no longer relies on Widget-side
+  ``_tune_config_snapshot`` / ``_tune_ui_snapshot`` private attributes
+  (CLAUDE.md §4 violation removed). ``WidgetService`` keeps the latest
+  ``TuningSummary`` in ``_last_tune_summary``; ``apply_best_params``
+  now reads snapshots from there. ``load_data`` invalidates a prior
+  summary explicitly so a stale-on-new-data Apply fails fast with
+  ``ValueError("tune summary cleared by load …")`` instead of silently
+  rebuilding from a snapshot pinned to the old DataFrame.
+  ``JobSpec.ui_snapshot`` carries the snapshot through both
+  ``ThreadJobRunner`` and ``SubprocessJobRunner`` (the latter calls a
+  new ``WidgetService.record_subprocess_tune_summary`` because the
+  child process cannot share Python objects with the parent).
+
+### Removed
+- ``LizyWidget._tune_config_snapshot`` / ``LizyWidget._tune_ui_snapshot``
+  attributes (P-035 — replaced by Service-owned ``_last_tune_summary``).
+- ``WidgetService.apply_best_params(params, current_config, *, tune_snapshot=...,
+  tune_ui_snapshot=...)`` kwargs. The public signature is now just
+  ``apply_best_params(params, current_config)``; tests that exercised
+  the snapshot path now seed ``service._last_tune_summary`` directly.
+
+### Changed
 - **service.py / adapter.py file-size split**
   ([#137](https://github.com/nbx-liz/LizyML-Widget/issues/137)).
   Both core modules now sit below the CLAUDE.md §8 < 800-line ceiling.

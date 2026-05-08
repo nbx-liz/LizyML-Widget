@@ -60,6 +60,13 @@ class WidgetService:
         # resume path needs.
         self._tune_model: Any = None
         self._model_lock = threading.Lock()
+        # P-035: latest TuningSummary, owned by Service so the Widget no
+        # longer holds time-series snapshots. Cleared by load_data; the
+        # ``_tune_summary_invalidated_by_load`` flag distinguishes
+        # "never tuned" (None, no flag) from "tuned then load wiped it"
+        # (None, flag) so apply_best_params can fail loud in the latter.
+        self._last_tune_summary: TuningSummary | None = None
+        self._tune_summary_invalidated_by_load: bool = False
 
     @property
     def info(self) -> BackendInfo:
@@ -81,6 +88,13 @@ class WidgetService:
         with self._model_lock:
             self._model = None
             self._tune_model = None
+            # P-035: any prior TuningSummary becomes stale because the data
+            # changed; flag it so apply_best_params fails loud rather than
+            # silently rebuilding from a snapshot pinned to the old data.
+            had_summary = self._last_tune_summary is not None
+            self._last_tune_summary = None
+            if had_summary:
+                self._tune_summary_invalidated_by_load = True
 
         columns: list[dict[str, Any]] = []
         for col in df.columns:
@@ -499,6 +513,7 @@ class WidgetService:
         self,
         config: dict[str, Any],
         *,
+        ui_snapshot: dict[str, Any] | None = None,
         on_progress: Callable[..., Any] | None = None,
         resume: bool = False,
         n_trials: int | None = None,
@@ -548,12 +563,55 @@ class WidgetService:
             expand_boundary=expand_boundary,
             boundary_threshold=boundary_threshold,
         )
+        # P-035: embed snapshots into the TuningSummary so apply_best_params
+        # can rebuild the post-tune Fit config without the Widget keeping
+        # private snapshot attributes.
+        from dataclasses import replace
+
+        summary = replace(
+            result,
+            config_snapshot=copy.deepcopy(config),
+            ui_snapshot=copy.deepcopy(ui_snapshot or {}),
+        )
         with self._model_lock:
             self._model = model
             # Record this as the reference tune model so subsequent retune()
             # calls (even after an intervening fit()) resume *this* study.
             self._tune_model = model
-        return result
+            self._last_tune_summary = summary
+            # A fresh tune always supersedes a prior load-invalidated one.
+            self._tune_summary_invalidated_by_load = False
+        return summary
+
+    def record_subprocess_tune_summary(
+        self,
+        tune_dict: dict[str, Any],
+        *,
+        config_snapshot: dict[str, Any],
+        ui_snapshot: dict[str, Any] | None,
+    ) -> None:
+        """Reconstruct and store a ``TuningSummary`` from a subprocess result.
+
+        Subprocess tune runs cannot share Python objects with the parent;
+        the parent receives the result as a dict (P-029 boundary). This
+        helper reconstructs a typed ``TuningSummary`` on the parent side
+        so ``apply_best_params`` continues to work on the same Service
+        instance the user interacts with via ``LizyWidget``.
+        """
+        summary = TuningSummary(
+            best_params=tune_dict.get("best_params", {}),
+            best_score=tune_dict.get("best_score", 0.0),
+            trials=tune_dict.get("trials", []),
+            metric_name=tune_dict.get("metric_name", ""),
+            direction=tune_dict.get("direction", "maximize"),
+            rounds=tune_dict.get("rounds", []),
+            boundary_report=tune_dict.get("boundary_report"),
+            config_snapshot=copy.deepcopy(config_snapshot),
+            ui_snapshot=copy.deepcopy(ui_snapshot or {}),
+        )
+        with self._model_lock:
+            self._last_tune_summary = summary
+            self._tune_summary_invalidated_by_load = False
 
     def predict(self, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary:
         """Run prediction on new data."""
@@ -624,29 +682,41 @@ class WidgetService:
         self,
         params: dict[str, Any],
         current_config: dict[str, Any],
-        *,
-        tune_snapshot: dict[str, Any] | None = None,
-        tune_ui_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Apply best_params from Tune to config, routing by category.
 
+        P-035: snapshot inputs are no longer accepted; the Service reads
+        ``config_snapshot`` and ``ui_snapshot`` from its own
+        ``_last_tune_summary`` (set by :meth:`tune`).
+
         Returns a canonicalized config with best params applied.
 
-        Uses *tune_snapshot* (the backend-ready run config) as the
-        authoritative base for ``model.params`` and ``training``, and
-        *tune_ui_snapshot* to recover calibration (stripped by
-        ``prepare_tune_overrides``) and smart params from older snapshots
-        that were generated before the smart-params-preservation fix.
+        Raises
+        ------
+        ValueError
+            If a prior tune ran but ``load_data`` invalidated its summary
+            (apply on stale data is rejected explicitly rather than
+            silently rebuilding from a snapshot pinned to the old data).
         """
         if not params:
             return self.canonicalize_config(copy.deepcopy(current_config))
 
+        if self._tune_summary_invalidated_by_load:
+            msg = (
+                "tune summary cleared by load — re-run w.tune() "
+                "before applying best params on the new data."
+            )
+            raise ValueError(msg)
+
+        with self._model_lock:
+            summary = self._last_tune_summary
+
         # 1. Choose base config from run snapshot, stripping Service-managed
         #    keys that are re-injected by build_config at execution time.
-        if tune_snapshot is not None:
+        if summary is not None and summary.config_snapshot:
             base = {
                 k: v
-                for k, v in copy.deepcopy(tune_snapshot).items()
+                for k, v in copy.deepcopy(summary.config_snapshot).items()
                 if k not in self._DATA_SECTION_KEYS
             }
         else:
@@ -656,8 +726,8 @@ class WidgetService:
         #    prepare_tune_overrides strips only calibration.  Smart params are
         #    now preserved in new snapshots, but older snapshots (generated
         #    before this fix) may still lack them — back-fill from UI snapshot.
-        if tune_ui_snapshot is not None:
-            ui = copy.deepcopy(tune_ui_snapshot)
+        if summary is not None and summary.ui_snapshot:
+            ui = copy.deepcopy(summary.ui_snapshot)
             ui_model = ui.get("model", {})
             base_model = base.get("model", {})
             for k, v in ui_model.items():

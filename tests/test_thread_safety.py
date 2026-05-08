@@ -2,7 +2,8 @@
 
 C-1: _run_job TOCTOU guard — double invocation must not spawn two workers.
 C-2: WidgetService._model must be protected during concurrent access.
-C-3: _tune_config_snapshot read in apply_best_params must be safe.
+C-3 (P-035): WidgetService._last_tune_summary read in apply_best_params
+    must be safe — snapshots now live on TuningSummary inside the service.
 """
 
 from __future__ import annotations
@@ -181,15 +182,26 @@ class TestModelLock:
 
 
 class TestTuneConfigSnapshotProtection:
-    """C-3: _tune_config_snapshot should be safely read."""
+    """C-3 (P-035): apply_best_params reads ``_last_tune_summary`` safely."""
 
     def test_apply_best_params_reads_snapshot_safely(self) -> None:
-        """apply_best_params should read a consistent snapshot."""
+        """apply_best_params should read a consistent TuningSummary snapshot."""
+        from lizyml_widget.types import TuningSummary
+
         w = _make_widget()
         _load_data(w)
 
-        # Set a snapshot as if tune completed
-        w._tune_config_snapshot = {"model": {"params": {"learning_rate": 0.1}}}
+        # Seed a TuningSummary as if tune completed.
+        w._service._last_tune_summary = TuningSummary(
+            best_params={},
+            best_score=0.0,
+            trials=[],
+            metric_name="auc",
+            direction="maximize",
+            config_snapshot={"model": {"params": {"learning_rate": 0.1}}},
+            ui_snapshot={},
+        )
+        w._service._tune_summary_invalidated_by_load = False
 
         # apply_best_params should read the snapshot
         w._handle_apply_best_params({"params": {"learning_rate": 0.05}})
