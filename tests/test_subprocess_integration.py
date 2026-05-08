@@ -106,63 +106,68 @@ class TestWidgetExecutionStrategy:
                 "lizyml_widget.widget.get_execution_strategy",
                 return_value=("subprocess", "/usr/lib/libomp5.so"),
             ),
+            patch.object(
+                __import__("lizyml_widget.widget", fromlist=["SubprocessJobRunner"]),
+                "SubprocessJobRunner",
+            ),
         ):
             w = _make_widget()
             df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
             w.load(df, target="y")
-
-            with patch.object(w, "_subprocess_job_worker"):
-                w._run_job("fit")
-                if w._job_thread:
-                    w._job_thread.join(timeout=2)
+            w._run_job("fit")
+            if w._job_thread:
+                w._job_thread.join(timeout=2)
 
             assert w._execution_strategy == "subprocess"
             assert w._libomp_path == "/usr/lib/libomp5.so"
 
 
 # ===========================================================================
-# Widget: _run_job branching
+# Widget: _run_job runner selection (P-032)
 # ===========================================================================
 
 
 class TestRunJobBranching:
-    """Test that _run_job delegates to correct worker based on strategy."""
+    """Test that _run_job picks the right JobRunner based on strategy."""
 
-    def test_thread_strategy_uses_job_worker(self) -> None:
-        """thread strategy calls _job_worker."""
-        with patch(
-            "lizyml_widget.widget.get_execution_strategy",
-            return_value=("thread", None),
+    def test_thread_strategy_uses_thread_runner(self) -> None:
+        """thread strategy constructs ThreadJobRunner."""
+        with (
+            patch(
+                "lizyml_widget.widget.get_execution_strategy",
+                return_value=("thread", None),
+            ),
+            patch("lizyml_widget.widget.ThreadJobRunner") as mock_thread_runner,
+            patch("lizyml_widget.widget.SubprocessJobRunner") as mock_sp_runner,
         ):
             w = _make_widget()
             df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
             w.load(df, target="y")
+            w._run_job("fit")
+            if w._job_thread:
+                w._job_thread.join(timeout=2)
+            mock_thread_runner.assert_called_once()
+            mock_sp_runner.assert_not_called()
 
-            with patch.object(w, "_job_worker") as mock_worker:
-                w._run_job("fit")
-                # Give thread time to start
-                if w._job_thread:
-                    w._job_thread.join(timeout=2)
-                mock_worker.assert_called_once()
-
-    def test_subprocess_strategy_uses_subprocess_worker(self) -> None:
-        """subprocess strategy calls _subprocess_job_worker."""
+    def test_subprocess_strategy_uses_subprocess_runner(self) -> None:
+        """subprocess strategy constructs SubprocessJobRunner."""
         with (
             _force_subprocess,
             patch(
                 "lizyml_widget.widget.get_execution_strategy",
                 return_value=("subprocess", "/usr/lib/libomp5.so"),
             ),
+            patch("lizyml_widget.widget.ThreadJobRunner") as mock_thread_runner,
+            patch("lizyml_widget.widget.SubprocessJobRunner") as mock_sp_runner,
         ):
             w = _make_widget()
             df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
             w.load(df, target="y")
-
-            with patch.object(w, "_subprocess_job_worker") as mock_worker:
-                w._run_job("fit")
-                if w._job_thread:
-                    w._job_thread.join(timeout=2)
-                mock_worker.assert_called_once()
+            w._run_job("fit")
+            if w._job_thread:
+                w._job_thread.join(timeout=2)
+            mock_sp_runner.assert_called_once()
+            mock_thread_runner.assert_not_called()
 
 
 # ===========================================================================
@@ -196,7 +201,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 return_value=mock_result,
             ),
         ):
@@ -236,7 +241,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 return_value=mock_result,
             ),
         ):
@@ -259,7 +264,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 side_effect=RuntimeError("[RuntimeError] LightGBM crashed"),
             ),
         ):
@@ -282,7 +287,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 side_effect=InterruptedError("Job cancelled"),
             ),
         ):
@@ -315,7 +320,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 return_value=mock_result,
             ),
         ):
@@ -348,7 +353,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 return_value=mock_result,
             ),
         ):
