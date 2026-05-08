@@ -3,6 +3,10 @@
  *
  * Extracted from ConfigTab.tsx to keep file size under 800 lines (P-014).
  * Contains: TypedParamsEditor, ModelSection, FeatureWeightsEditor, AdditionalParamsEditor.
+ *
+ * #119: backend-specific keys (smart_params group, hidden additional keys,
+ * num_leaves default) are derived from the backend contract — no LightGBM
+ * key names are hardcoded in this file.
  */
 import { NumericStepper } from "./NumericStepper";
 import { DynForm } from "./DynForm";
@@ -10,11 +14,33 @@ import { DynForm } from "./DynForm";
 type TypedParamKind = "objective" | "model_metric" | "integer" | "number" | "boolean";
 export interface TypedParamMeta { key: string; label: string; kind: TypedParamKind; step?: number; }
 
-/** Model section fields handled by custom ModelSection (not delegated to DynForm). */
-const HANDLED_MODEL_FIELDS = new Set([
-  "name", "auto_num_leaves", "num_leaves_ratio", "params",
-  "min_data_in_leaf_ratio", "min_data_in_bin_ratio", "feature_weights", "balanced",
-]);
+interface SmartParamCatalogEntry {
+  key: string;
+  title?: string;
+  paramType?: string;
+  group?: string;
+  default?: any;
+}
+
+/** Structural keys filtered from DynForm regardless of backend. */
+const STRUCTURAL_MODEL_FIELDS: ReadonlySet<string> = new Set(["name", "params"]);
+
+/** Read the smart_params group keys from search_space_catalog. */
+function getSmartParamsKeys(catalog: SmartParamCatalogEntry[]): Set<string> {
+  return new Set(
+    catalog
+      .filter((entry) => entry.group === "smart_params")
+      .map((entry) => entry.key),
+  );
+}
+
+/** Look up a default value for a smart_params catalog entry. */
+function getSmartParamDefault(
+  catalog: SmartParamCatalogEntry[],
+  key: string,
+): any {
+  return catalog.find((entry) => entry.key === key)?.default;
+}
 
 function TypedParamsEditor({
   task,
@@ -24,6 +50,8 @@ function TypedParamsEditor({
   parameterHints,
   optionSets,
   stepMap,
+  manualNumLeavesKey,
+  manualNumLeavesDefault,
 }: {
   task: string;
   autoNumLeaves: boolean;
@@ -32,6 +60,10 @@ function TypedParamsEditor({
   parameterHints: TypedParamMeta[];
   optionSets: Record<string, Record<string, string[]>>;
   stepMap: Record<string, number>;
+  /** Key for the manual leaf-count override (e.g. "num_leaves"); only rendered when defined. */
+  manualNumLeavesKey?: string;
+  /** Default leaf count used when toggle is off and value is unset. */
+  manualNumLeavesDefault?: number;
 }) {
   const set = (k: string, v: any) => onChange({ ...value, [k]: v });
 
@@ -132,14 +164,14 @@ function TypedParamsEditor({
         );
       })}
 
-      {!autoNumLeaves && (
+      {!autoNumLeaves && manualNumLeavesKey && (
         <div class="lzw-form-row">
           <label class="lzw-label">Num Leaves</label>
           <NumericStepper
-            value={value.num_leaves ?? 256}
+            value={value[manualNumLeavesKey] ?? manualNumLeavesDefault}
             min={2}
             step={1}
-            onChange={(v) => set("num_leaves", v ?? 256)}
+            onChange={(v) => set(manualNumLeavesKey, v ?? manualNumLeavesDefault)}
           />
         </div>
       )}
@@ -313,6 +345,8 @@ export function ModelSection({
   stepMap,
   columns,
   additionalParams,
+  searchSpaceCatalog,
+  additionalParamsHiddenKeys,
 }: {
   schema: Record<string, any>;
   rootSchema: Record<string, any>;
@@ -324,9 +358,45 @@ export function ModelSection({
   stepMap: Record<string, number>;
   columns: Array<{ name: string }>;
   additionalParams: string[];
+  /** search_space_catalog from backend ui_schema (optional; falls back to legacy literal set when absent). */
+  searchSpaceCatalog?: SmartParamCatalogEntry[];
+  /** Param keys hidden from Additional Params (e.g. verbose, num_threads). Sourced from contract capabilities. */
+  additionalParamsHiddenKeys?: string[];
 }) {
   const params = (value.params ?? {}) as Record<string, any>;
-  const autoNumLeaves = value.auto_num_leaves ?? true;
+  // Smart Params section is currently LightGBM-aware (the auto-num-leaves
+  // toggle pattern), but the *set* of smart-params keys comes from the
+  // contract — the JS no longer ships its own list (#119).
+  const catalog: SmartParamCatalogEntry[] = searchSpaceCatalog ?? [];
+  const smartParamsKeys =
+    catalog.length > 0
+      ? getSmartParamsKeys(catalog)
+      : new Set([
+          // Fallback for unit-test fixtures that omit the contract; production
+          // always supplies the catalog. Adding/removing smart params in the
+          // backend automatically propagates without touching this set.
+          "auto_num_leaves",
+          "num_leaves_ratio",
+          "num_leaves",
+          "min_data_in_leaf_ratio",
+          "min_data_in_bin_ratio",
+          "feature_weights",
+          "balanced",
+        ]);
+  const handledModelFields = new Set<string>([
+    ...STRUCTURAL_MODEL_FIELDS,
+    ...smartParamsKeys,
+  ]);
+
+  const autoNumLeavesKey = "auto_num_leaves";
+  const manualNumLeavesKey = smartParamsKeys.has("num_leaves") ? "num_leaves" : undefined;
+  // Default flows from the backend search_space_catalog — JS does not own a literal
+  // (#119). When the catalog is absent (test fixtures), undefined falls through to
+  // NumericStepper, which renders an empty stepper for the user to set.
+  const manualNumLeavesDefault: number | undefined = manualNumLeavesKey
+    ? (getSmartParamDefault(catalog, manualNumLeavesKey) as number | undefined)
+    : undefined;
+  const autoNumLeaves = value[autoNumLeavesKey] ?? true;
 
   const setField = (k: string, v: any) => onChange({ ...value, [k]: v });
   const setParam = (k: string, v: any) =>
@@ -335,15 +405,20 @@ export function ModelSection({
     onChange({ ...value, params: newParams });
 
   const hintKeys = new Set(parameterHints.map((h) => h.key));
-  const excludeFromAdditional = new Set([
-    ...hintKeys, "verbose", "num_leaves", "num_threads",
+  const hiddenKeys = additionalParamsHiddenKeys ?? [];
+  // Exclude from Additional Params: parameter_hints, smart_params keys, and
+  // backend-declared hidden keys (e.g. verbose, num_threads).
+  const excludeFromAdditional = new Set<string>([
+    ...hintKeys,
+    ...smartParamsKeys,
+    ...hiddenKeys,
   ]);
 
   const filteredSchema = {
     ...schema,
     properties: Object.fromEntries(
       Object.entries((schema.properties ?? {}) as Record<string, any>).filter(
-        ([k]) => !HANDLED_MODEL_FIELDS.has(k),
+        ([k]) => !handledModelFields.has(k),
       ),
     ),
   };
@@ -369,10 +444,19 @@ export function ModelSection({
             checked={autoNumLeaves}
             onChange={(e) => {
               const v = (e.target as HTMLInputElement).checked;
-              const updated = v
-                ? (() => { const { num_leaves: _, ...rest } = params; return rest; })()
-                : { ...params, num_leaves: params.num_leaves ?? 256 };
-              onChange({ ...value, auto_num_leaves: v, params: updated });
+              let updated: Record<string, any> = params;
+              if (manualNumLeavesKey) {
+                if (v) {
+                  const { [manualNumLeavesKey]: _drop, ...rest } = params;
+                  updated = rest;
+                } else {
+                  updated = {
+                    ...params,
+                    [manualNumLeavesKey]: params[manualNumLeavesKey] ?? manualNumLeavesDefault,
+                  };
+                }
+              }
+              onChange({ ...value, [autoNumLeavesKey]: v, params: updated });
             }}
           />
           <span class="lzw-toggle__slider" />
@@ -452,6 +536,8 @@ export function ModelSection({
         parameterHints={parameterHints}
         optionSets={optionSets}
         stepMap={stepMap}
+        manualNumLeavesKey={manualNumLeavesKey}
+        manualNumLeavesDefault={manualNumLeavesDefault}
       />
 
       <div class="lzw-form-row">

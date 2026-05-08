@@ -443,6 +443,24 @@ def build_capabilities() -> dict[str, Any]:
             "stratified_group_kfold",
             "blocked_group_kfold",
         ],
+        # Display labels for cv_strategies. JS falls back to a humanise() helper
+        # when a strategy is missing from this map, so adding a new strategy in
+        # cv_strategies still surfaces in the UI without a JS change (#119).
+        "cv_strategy_labels": {
+            "kfold": "KFold",
+            "stratified_kfold": "StratifiedKFold",
+            "group_kfold": "GroupKFold",
+            "stratified_group_kfold": "StratifiedGroup",
+            "time_series": "TimeSeriesSplit",
+            "purged_time_series": "PurgedTimeSeriesSplit",
+            "group_time_series": "GroupTimeSeriesSplit",
+            "blocked_group_kfold": "BlockedGroup",
+        },
+        # Param keys to hide from the Additional Params dropdown / list even
+        # though they are not in parameter_hints or smart_params. These are
+        # backend-internal knobs (logging, threading) the widget intentionally
+        # keeps off the tuning surface (#119).
+        "additional_params_hidden_keys": ["verbose", "num_threads"],
         "cv_strategy_fields": {
             "kfold": ["n_splits", "shuffle", "random_state"],
             "stratified_kfold": ["n_splits", "shuffle", "random_state"],

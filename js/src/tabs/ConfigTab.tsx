@@ -201,6 +201,7 @@ export function ConfigTab({
             localConfig={localConfig}
             configSchema={configSchema}
             uiSchema={uiSchema}
+            capabilities={capabilities}
             task={task}
             dfInfo={dfInfo}
             handleChange={handleChange}

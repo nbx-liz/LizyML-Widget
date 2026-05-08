@@ -27,12 +27,49 @@ const baseDfInfo = {
   },
 };
 
+/** Mirrors the live backend contract for cv strategies — see adapter_contract.build_capabilities. */
+const baseBackendContract = {
+  capabilities: {
+    cv_strategies: [
+      "kfold",
+      "stratified_kfold",
+      "group_kfold",
+      "stratified_group_kfold",
+      "time_series",
+      "purged_time_series",
+      "group_time_series",
+      "blocked_group_kfold",
+    ],
+    cv_strategy_labels: {
+      kfold: "KFold",
+      stratified_kfold: "StratifiedKFold",
+      group_kfold: "GroupKFold",
+      stratified_group_kfold: "StratifiedGroup",
+      time_series: "TimeSeriesSplit",
+      purged_time_series: "PurgedTimeSeriesSplit",
+      group_time_series: "GroupTimeSeriesSplit",
+      blocked_group_kfold: "BlockedGroup",
+    },
+    cv_strategy_fields: {
+      kfold: ["n_splits", "shuffle", "random_state"],
+      stratified_kfold: ["n_splits", "shuffle", "random_state"],
+      group_kfold: ["n_splits", "group_col"],
+      stratified_group_kfold: ["n_splits", "group_col"],
+      time_series: ["n_splits", "time_col", "gap", "max_train_size", "max_test_size"],
+      purged_time_series: ["n_splits", "time_col", "purge_gap", "embargo"],
+      group_time_series: ["n_splits", "group_col", "time_col", "gap"],
+      blocked_group_kfold: ["blocks_col", "groups_col"],
+    },
+  },
+};
+
 const defaultProps = {
   dfInfo: baseDfInfo,
   allColumns: ["x1", "x2", "x3", "y"],
   columnStats: null,
   splitPreview: null,
   sendAction: vi.fn(),
+  backendContract: baseBackendContract,
 };
 
 describe("DataTab — Target dropdown", () => {
@@ -118,6 +155,40 @@ describe("DataTab — CV strategy segment", () => {
       "update_cv",
       expect.objectContaining({ strategy: "stratified_kfold" }),
     );
+  });
+
+  it("renders an unknown CV strategy reported by backend without a JS edit (#119)", () => {
+    // Acceptance criterion: adding a new strategy in adapter_contract.py should
+    // surface in the UI without touching DataTab.tsx.
+    render(
+      <DataTab
+        {...defaultProps}
+        backendContract={{
+          capabilities: {
+            cv_strategies: ["future_strategy"],
+            cv_strategy_labels: { future_strategy: "Future Strategy" },
+            cv_strategy_fields: { future_strategy: ["n_splits"] },
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText("Future Strategy")).toBeDefined();
+  });
+
+  it("falls back to humanised label when cv_strategy_labels lacks an entry", () => {
+    render(
+      <DataTab
+        {...defaultProps}
+        backendContract={{
+          capabilities: {
+            cv_strategies: ["weird_one"],
+            cv_strategy_fields: { weird_one: ["n_splits"] },
+            // cv_strategy_labels deliberately omitted
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText("Weird One")).toBeDefined();
   });
 });
 
