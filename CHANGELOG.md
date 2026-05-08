@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Code quality**: Closed two HIGH-tier code-review findings ([#115](https://github.com/nbx-liz/LizyML-Widget/issues/115)).
+  - `LizyWidget.model_info` now routes through a new `WidgetService.model_info(model)`
+    delegate instead of reaching into `Service._adapter` private state.
+  - Bare `except Exception: pass` blocks in `WidgetService._default_strategy_for_task`,
+    `WidgetService._default_cv_state`, and `_job_worker`'s tune-only fit-summary
+    fallback have been narrowed to documented exception types and now leave a
+    `_log.debug` breadcrumb instead of swallowing silently.
+
 ## [0.9.0] - 2026-05-08
 
 ### Changed

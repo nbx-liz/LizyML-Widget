@@ -163,12 +163,13 @@ class TestServiceCvDelegation:
         # Task not in contract defaults -> fallback
         assert svc._default_strategy_for_task("unknown_task") == "kfold"
 
-    def test_default_strategy_fallback_on_adapter_error(self) -> None:
+    def test_default_strategy_fallback_on_contract_shape_error(self) -> None:
+        """KeyError/AttributeError on contract -> fall back silently (with debug log)."""
         from lizyml_widget.service import WidgetService
 
         adapter = MagicMock()
         adapter.info = {"name": "test", "version": "0.0.0"}
-        adapter.get_backend_contract.side_effect = RuntimeError("no contract")
+        adapter.get_backend_contract.side_effect = AttributeError("missing field")
         adapter.initialize_config.return_value = {
             "model": {"name": "lgbm", "params": {}},
             "training": {},
@@ -177,6 +178,23 @@ class TestServiceCvDelegation:
         assert svc._default_strategy_for_task("binary") == "stratified_kfold"
         assert svc._default_strategy_for_task("regression") == "kfold"
 
+    def test_default_strategy_propagates_unexpected_error(self) -> None:
+        """Non-shape errors (e.g., RuntimeError) must propagate, not silently fall back."""
+        import pytest
+
+        from lizyml_widget.service import WidgetService
+
+        adapter = MagicMock()
+        adapter.info = {"name": "test", "version": "0.0.0"}
+        adapter.get_backend_contract.side_effect = RuntimeError("backend dead")
+        adapter.initialize_config.return_value = {
+            "model": {"name": "lgbm", "params": {}},
+            "training": {},
+        }
+        svc = WidgetService(adapter)
+        with pytest.raises(RuntimeError, match="backend dead"):
+            svc._default_strategy_for_task("binary")
+
     def test_default_cv_state_from_contract(self, service_with_adapter: Any) -> None:
         svc = service_with_adapter
         state = svc._default_cv_state(strategy="kfold", n_splits=3)
@@ -184,12 +202,13 @@ class TestServiceCvDelegation:
         assert state["shuffle"] is False
         assert state["gap"] == 5
 
-    def test_default_cv_state_fallback_on_error(self) -> None:
+    def test_default_cv_state_fallback_on_contract_shape_error(self) -> None:
+        """KeyError/AttributeError on contract -> fall back to documented defaults."""
         from lizyml_widget.service import WidgetService
 
         adapter = MagicMock()
         adapter.info = {"name": "test", "version": "0.0.0"}
-        adapter.get_backend_contract.side_effect = RuntimeError("no contract")
+        adapter.get_backend_contract.side_effect = KeyError("cv_defaults")
         adapter.initialize_config.return_value = {
             "model": {"name": "lgbm", "params": {}},
             "training": {},
@@ -200,6 +219,23 @@ class TestServiceCvDelegation:
         assert state["random_state"] == 42
         assert state["shuffle"] is True
         assert state["gap"] == 0
+
+    def test_default_cv_state_propagates_unexpected_error(self) -> None:
+        """Non-shape errors must propagate, not be silently swallowed."""
+        import pytest
+
+        from lizyml_widget.service import WidgetService
+
+        adapter = MagicMock()
+        adapter.info = {"name": "test", "version": "0.0.0"}
+        adapter.get_backend_contract.side_effect = RuntimeError("backend dead")
+        adapter.initialize_config.return_value = {
+            "model": {"name": "lgbm", "params": {}},
+            "training": {},
+        }
+        svc = WidgetService(adapter)
+        with pytest.raises(RuntimeError, match="backend dead"):
+            svc._default_cv_state(strategy="kfold", n_splits=5)
 
 
 # ---------------------------------------------------------------------------
