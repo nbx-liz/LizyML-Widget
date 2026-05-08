@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **E2E test coverage Phase B** ([#114](https://github.com/nbx-liz/LizyML-Widget/issues/114)).
+  Four new test files plus a Tune→Apply→Re-tune extension to the existing
+  user-flow suite:
+  - `test_p030_compat.py` — multiclass string-label round-trip + smape/wape
+    regression chip rendering (locks in P-030 acceptance).
+  - `test_inference_flow.py` — Fit → Open Inference → Run Inference →
+    PredTable rows, plus SHAP-toggle dispatch.
+  - `test_error_flows.py` — backend-error banner + Re-run gate.
+  - `test_user_flows.py` — Tune → Apply to Fit → Re-tune resume → Boundary
+    Expansion panel.
+  Two new notebooks (`test_multiclass_strings.ipynb`,
+  `test_regression_smape_wape.ipynb`) drive the P-030 fixtures, with
+  matching `multiclass_widget_page` / `regression_smape_wape_page` Playwright
+  fixtures in `conftest.py`.
 - **JS test coverage Phase A** ([#114](https://github.com/nbx-liz/LizyML-Widget/issues/114)).
   Vitest suite expanded from 171 to 272 cases covering `App.tsx`, `Header.tsx`,
   `configHelpers.ts`, `ModelEditors.tsx`, `TuneSubTab.tsx`, `FitSubTab.tsx`,
