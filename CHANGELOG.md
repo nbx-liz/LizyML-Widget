@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **JobRunner Protocol extracted from widget.py** (P-032,
+  [#117](https://github.com/nbx-liz/LizyML-Widget/issues/117)).
+  The widget no longer carries two near-duplicate `_job_worker` methods
+  for the in-process and subprocess execution paths. A new
+  `src/lizyml_widget/job_runner.py` defines the `JobRunner` Protocol
+  with `ThreadJobRunner` / `SubprocessJobRunner` implementations, and
+  `widget.py::_supervise` owns all state-machine transitions, traitlet
+  plumbing, and error classification for both runners. The legacy
+  `_job_worker` and `_subprocess_job_worker` are removed; `JobSpec`
+  carries `job_type` / `config` / `retune_kwargs` immutably.
+  `RETUNE_SUBPROCESS_UNSUPPORTED` is now a typed
+  `RetuneSubprocessUnsupportedError` raised by `SubprocessJobRunner`
+  and translated to the widget error code in `_supervise`. New
+  `tests/test_job_runner.py` covers each runner across normal
+  completion / cancel / exception / retune-rejection.
 - **Adapter boundary typed via `LMResultView`** ([#116](https://github.com/nbx-liz/LizyML-Widget/issues/116)).
   All `getattr(...)` reads on lizyml result objects are consolidated into a
   new `adapter_views.py` module (`view_fit_result`, `view_tuning_result`,

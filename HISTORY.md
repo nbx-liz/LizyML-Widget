@@ -1,5 +1,72 @@
 ## LizyML-Widget 仕様変更履歴
 
+### P-032: JobRunner Protocol 抽出（widget.py God-class 分割）
+
+- **日付**: 2026-05-08
+- **ステータス**: 提案
+- **関連 Issue**: [#117](https://github.com/nbx-liz/LizyML-Widget/issues/117)
+- **背景**:
+  - `src/lizyml_widget/widget.py` は現在 1234 行（CLAUDE.md §8 の 800 行上限を超過）。
+    Python API surface（`load` / `fit` / `tune` / `set_config` / properties）と、
+    JS-action dispatcher + thread orchestrator + dual job worker
+    （`_run_job` / `_job_worker` / `_subprocess_job_worker`）を融合している。
+  - `_job_worker` と `_subprocess_job_worker` は state 遷移・error 分類・traitlet 配信を
+    near-duplicate で実装しており、再 tune 機能（P-028）は subprocess 経路でのフォーク維持コストが
+    高すぎたため subprocess 実行が **disable** されたままになっている（issue 本文参照）。
+  - 状態機械が複数箇所に分散しているため、INV-A..F（issue #118 で宣言予定）を後続で書く際にも
+    enforcement が困難。
+- **提案内容**:
+  - 新モジュール `src/lizyml_widget/job_runner.py` を作成し、以下を定義:
+    - `JobRunner` Protocol — `run(spec, on_progress, cancel_event) -> JobResult` の単一メソッド。
+    - `ThreadJobRunner` — 既存 `_job_worker` のロジックを移植したインプロセス実装。
+    - `SubprocessJobRunner` — 既存 `_subprocess_job_worker` のロジックを移植したアウトプロセス実装。
+  - `JobSpec` / `JobResult` を共通 dataclass として導入（job_type, config, retune_kwargs, etc.）。
+  - `widget.py::_run_job` は薄い supervisor に統合:
+    - state 遷移（status, job_type, job_index, progress, elapsed_sec, error, fit_summary, tune_summary）
+    - error classification（BACKEND_ERROR / INTERNAL_ERROR）
+    - traitlet 配信
+    - cancel flag のリセット
+
+    上記は単一の `_supervise(runner, spec)` 内で実装し、両 runner で共有する。
+  - 既存の `_job_worker` / `_subprocess_job_worker` を削除し、widget.py を 800 行未満に圧縮。
+  - 再 tune の subprocess 経路 enable は別 follow-up（model artifact ハンドオフが独立した設計を要する）。
+    本 Proposal の範囲では `RETUNE_SUBPROCESS_UNSUPPORTED` ガードを `SubprocessJobRunner` に移植するのみ。
+- **影響範囲**:
+  - `src/lizyml_widget/widget.py` — `_run_job` 簡略化、`_job_worker` / `_subprocess_job_worker` 削除（**change gate**: 並行性 / 所有権設計）
+  - `src/lizyml_widget/job_runner.py` — 新規（**change gate**: 共通型 `JobSpec` / `JobResult` 追加）
+  - `src/lizyml_widget/subprocess_runner.py` — `SubprocessJobRunner` への移植先として参照
+  - 既存 `tests/test_widget_jobs.py` / `tests/test_subprocess_integration.py` / `tests/test_thread_safety.py` —
+    新 API で再構成
+  - 新規 `tests/test_job_runner.py` — runner 単体（normal completion / cancel mid-run / exception mid-run）
+  - `CHANGELOG.md` — `[Unreleased]` セクション
+  - `HISTORY.md` — 本 Proposal
+- **互換性**:
+  - 公開 Python API（`LizyWidget.fit` / `tune` / `retune` / `load` / `predict` 等）の振る舞いは変更なし。
+  - 公開 traitlet（`status` / `job_type` / `job_index` / `progress` / `elapsed_sec` / `error` /
+    `fit_summary` / `tune_summary` / `available_plots` / `inference_result`）の意味論は変更なし。
+  - JS 側 action dispatcher の入出力契約は変更なし。
+  - `LZW_FORCE_SUBPROCESS=1` 環境変数の挙動は維持。
+- **代替案（却下）**:
+  - **案A: widget.py 内で `_job_worker` と `_subprocess_job_worker` の共通ロジックを helper に括り出すだけ** —
+    state machine が依然 widget.py に残るため、INV-A..F の宣言・enforcement と並行性設計の単一責任に矛盾する。
+    Issue #118 の前提を崩す。
+  - **案B: subprocess 実行をデフォルトに切り替える** — OpenMP 関連の現実的な fit 劣化は 1.0–1.2x で、
+    subprocess 起動 overhead（≈ 500ms import）の方がレイテンシ影響が大きい。デフォルト切り替えは
+    P-032 の範囲外。
+  - **案C: 抽出をやめて 1234 行の現状を許容** — CLAUDE.md §8（God-class 禁止）違反で、
+    今後の機能追加（async runner / WebWorker 等）に対する拡張コストが累積する。
+- **受け入れ基準**:
+  - `src/lizyml_widget/job_runner.py` が存在し、`JobRunner` Protocol + `ThreadJobRunner` +
+    `SubprocessJobRunner` を提供する。
+  - `widget.py` は 800 行未満。
+  - `widget.py` 内の state 遷移ロジックは `_supervise` のみが管理する（他の `self.status =` 代入は
+    Python API の data_loaded セットなど job 外の用途のみ）。
+  - 新規 `tests/test_job_runner.py` で各 runner について正常完了 / cancel / 例外を assert。
+  - 既存 898 Python テスト + 272 JS テスト + 24 e2e テストが green。
+  - `ruff check` / `ruff format --check` / `mypy --strict` / `pytest` / `eslint` / `tsc` / `vitest` 全 green。
+
+---
+
 ### P-030: lizyml 0.10 / 0.11 / 0.12 互換窓拡大
 
 - **日付**: 2026-05-08

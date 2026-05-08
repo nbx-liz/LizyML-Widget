@@ -18,9 +18,16 @@ import pandas as pd
 import traitlets
 
 from .adapter import BackendAdapter, LizyMLAdapter
+from .job_runner import (
+    JobResult,
+    JobRunner,
+    JobSpec,
+    RetuneSubprocessUnsupportedError,
+    SubprocessJobRunner,
+    ThreadJobRunner,
+)
 from .openmp_detect import get_execution_strategy
 from .service import WidgetService
-from .subprocess_runner import run_job_subprocess
 from .types import ConfigPatchOp, FitSummary, PredictionSummary, TuningSummary
 
 _log = logging.getLogger(__name__)
@@ -981,29 +988,35 @@ class LizyWidget(anywidget.AnyWidget):
         if prev is not None and prev.is_alive():
             prev.join(timeout=5.0)
 
-        worker = (
-            self._subprocess_job_worker
-            if self._execution_strategy == "subprocess"
-            else self._job_worker
+        # P-032: pick the runner strategy and hand it the immutable JobSpec.
+        # The supervisor in ``_supervise`` owns the state machine + traitlet
+        # plumbing for *both* runners, so the worker logic lives once.
+        runner: JobRunner
+        if self._execution_strategy == "subprocess":
+            runner = SubprocessJobRunner(self._service, libomp_path=self._libomp_path)
+        else:
+            runner = ThreadJobRunner(self._service)
+        spec = JobSpec(
+            job_type=job_type,
+            config=full_config,
+            retune_kwargs=retune_kwargs,
         )
-        # Pass retune_kwargs through the thread's ``args`` tuple so each
-        # worker receives its own snapshot.  Avoids storing transient job
-        # state on ``self`` where a subsequent main-thread call could race
-        # with a background consumer (P-028 HIGH-2 review fix).
         thread = threading.Thread(
-            target=worker,
-            args=(job_type, full_config, retune_kwargs),
+            target=self._supervise,
+            args=(runner, spec),
             daemon=False,
         )
         self._job_thread = thread
         thread.start()
 
-    def _job_worker(
-        self,
-        job_type: str,
-        config: dict[str, Any],
-        retune_kwargs: dict[str, Any] | None = None,
-    ) -> None:
+    def _supervise(self, runner: JobRunner, spec: JobSpec) -> None:
+        """Run *spec* through *runner* and own the state-machine transitions.
+
+        Single source of truth for status / traitlet updates during job
+        execution — both ``ThreadJobRunner`` and ``SubprocessJobRunner``
+        use this supervisor. INV-A..F (issue #118) will be encoded as
+        runtime guards inside this method once #118 lands.
+        """
         start = time.monotonic()
         timer_stop = threading.Event()
 
@@ -1015,232 +1028,94 @@ class LizyWidget(anywidget.AnyWidget):
         timer = threading.Thread(target=tick_elapsed, daemon=True)
         timer.start()
 
+        is_subprocess = getattr(runner, "kind", "thread") == "subprocess"
+
         def on_progress(
             current: int,
             total: int,
             message: str,
             **extra: Any,
         ) -> None:
-            """Update the progress traitlet and honour the cancel flag.
-
-            Delegates payload construction to
-            :func:`_build_progress_payload` so the round-aware key
-            whitelist stays in one place (shared with the subprocess
-            worker below).
-            """
-            if self._cancel_flag.is_set():
+            """Forward progress to the traitlet; raise to cancel (thread runner)."""
+            # Subprocess runner cancels via SIGTERM, so the parent
+            # process does not need to raise InterruptedError here. The
+            # in-process thread runner relies on this raise to abort the
+            # adapter's polling loop.
+            if not is_subprocess and self._cancel_flag.is_set():
                 raise InterruptedError("Job cancelled by user")
             self.progress = _build_progress_payload(current, total, message, extra)
             self.elapsed_sec = round(time.monotonic() - start, 1)
 
         try:
-            if job_type == "fit":
-                summary = self._service.fit(config, on_progress=on_progress)
-                normalized = self._normalize_metrics(self._service.get_evaluate_table())
-                fold_details = self._service.get_split_summary()
-                self.fit_summary = {
-                    "metrics": normalized if normalized else summary.metrics,
-                    "fold_count": summary.fold_count,
-                    "fold_details": fold_details,
-                    "params": summary.params,
-                }
-            elif job_type == "tune":
-                # P-028: retune_kwargs arrives as a thread-local parameter
-                # so there is no cross-thread state handoff to worry about.
-                tune_kwargs = retune_kwargs or {}
-                is_resume = bool(tune_kwargs.get("resume"))
-
-                n_trials = tune_kwargs.get("n_trials") or config.get("tuning", {}).get(
-                    "optuna", {}
-                ).get("params", {}).get("n_trials", 10)
-                # Show round 2+ badge eagerly when resuming so the user
-                # sees immediate feedback before the first trial fires.
-                initial_round = 2 if is_resume else 1
-                msg = (
-                    f"Resuming tune with {n_trials} more trials..."
-                    if is_resume
-                    else f"Tuning {n_trials} trials..."
-                )
-                on_progress(0, n_trials, msg, round=initial_round)
-                summary_t = self._service.tune(config, on_progress=on_progress, **tune_kwargs)
-                self.tune_summary = {
-                    "best_params": summary_t.best_params,
-                    "best_score": summary_t.best_score,
-                    "trials": summary_t.trials,
-                    "metric_name": summary_t.metric_name,
-                    "direction": summary_t.direction,
-                    "rounds": summary_t.rounds,
-                    "boundary_report": summary_t.boundary_report,
-                }
-                # After tune, model MAY be fitted — guard evaluate/split calls (P-004 R3)
-                try:
-                    normalized = self._normalize_metrics(self._service.get_evaluate_table())
-                    fold_details = self._service.get_split_summary()
-                    if normalized:
-                        self.fit_summary = {
-                            "metrics": normalized,
-                            "fold_count": len(fold_details),
-                            "fold_details": fold_details,
-                            "params": [],
-                        }
-                except (AttributeError, RuntimeError, ValueError) as exc:
-                    # Tune-only path: lizyml raises RuntimeError("Model has not been fitted")
-                    # when evaluate_table is called on an unfitted model (P-004 R3).
-                    # AttributeError/ValueError cover related "not fitted" surfaces.
-                    # Anything else propagates to the outer handler.
-                    _log.debug("Tune-only fit_summary skipped (model not fitted): %s", exc)
-
-            self.available_plots = self._service.get_available_plots()
+            result: JobResult = runner.run(spec, on_progress, self._cancel_flag)
+            self._apply_job_result(result)
             self.elapsed_sec = round(time.monotonic() - start, 1)
             self.status = "completed"
-
-        except InterruptedError:
+        except RetuneSubprocessUnsupportedError as exc:
             self.elapsed_sec = round(time.monotonic() - start, 1)
-            self.error = {"code": "CANCELLED", "message": "Job cancelled by user"}
-            self.status = "failed"
-
-        except Exception as e:
-            self.elapsed_sec = round(time.monotonic() - start, 1)
-            # Distinguish adapter/backend errors from internal widget errors
-            try:
-                mod = getattr(type(e), "__module__", "") or ""
-                code = "BACKEND_ERROR" if "lizyml" in mod.lower() else "INTERNAL_ERROR"
-            except Exception:
-                code = "INTERNAL_ERROR"
-            _log.error("Job %s failed (%s): %s", job_type, code, e, exc_info=True)
-            self.error = {
-                "code": code,
-                "message": str(e),
-            }
-            self.status = "failed"
-
-        finally:
-            timer_stop.set()
-            timer.join(timeout=2.0)
-
-    def _subprocess_job_worker(
-        self,
-        job_type: str,
-        config: dict[str, Any],
-        retune_kwargs: dict[str, Any] | None = None,
-    ) -> None:
-        """Run a job via subprocess for OpenMP-safe execution.
-
-        P-028 re-tune is not supported in this path yet: the backend model's
-        Optuna study cannot be picked back up in a fresh subprocess.  Emit
-        a clear error instead of silently running a fresh study.
-        """
-        if retune_kwargs:
             self.error = {
                 "code": "RETUNE_SUBPROCESS_UNSUPPORTED",
-                "message": (
-                    "Re-tune is not supported in subprocess execution mode. "
-                    "Unset LZW_FORCE_SUBPROCESS=1 or use w.tune() for a "
-                    "fresh study."
-                ),
+                "message": str(exc),
             }
             self.status = "failed"
-            return
-        start = time.monotonic()
-        timer_stop = threading.Event()
-
-        def tick_elapsed() -> None:
-            while not timer_stop.is_set():
-                self.elapsed_sec = round(time.monotonic() - start, 1)
-                timer_stop.wait(1.0)
-
-        timer = threading.Thread(target=tick_elapsed, daemon=True)
-        timer.start()
-
-        def on_progress(
-            current: int,
-            total: int,
-            message: str,
-            **extra: Any,
-        ) -> None:
-            """Update the progress traitlet from subprocess messages.
-
-            The subprocess path does not need a direct cancel check here
-            because the child process is signalled via SIGTERM from
-            ``subprocess_runner.run_job_subprocess``; the parent just
-            mirrors whatever the child emits.
-            """
-            self.progress = _build_progress_payload(current, total, message, extra)
-            self.elapsed_sec = round(time.monotonic() - start, 1)
-
-        import tempfile
-
-        model_out_path = tempfile.mkdtemp(prefix="lzw_model_")
-
-        try:
-            df = self._service.get_dataframe()
-            target = self._service.get_df_info().get("target", "")
-
-            result = run_job_subprocess(
-                job_type=job_type,
-                config=config,
-                df=df,
-                target=target,
-                libomp_path=self._libomp_path,
-                on_progress=on_progress,
-                cancel_flag=self._cancel_flag,
-                model_out_path=model_out_path,
-            )
-
-            if job_type == "fit":
-                normalized = self._normalize_metrics(result.eval_table)
-                self.fit_summary = {
-                    "metrics": normalized if normalized else result.fit_summary.get("metrics", {}),
-                    "fold_count": result.fit_summary.get("fold_count", 0),
-                    "fold_details": result.split_summary,
-                    "params": result.fit_summary.get("params", []),
-                }
-            elif job_type == "tune":
-                self.tune_summary = result.tune_summary
-                if result.eval_table:
-                    normalized = self._normalize_metrics(result.eval_table)
-                    if normalized:
-                        self.fit_summary = {
-                            "metrics": normalized,
-                            "fold_count": len(result.split_summary),
-                            "fold_details": result.split_summary,
-                            "params": [],
-                        }
-
-            # Load model back from subprocess
-            if result.model_path:
-                try:
-                    self._service.load_model_from_path(result.model_path)
-                except Exception as load_err:
-                    _log.warning("Model load from subprocess failed: %s", load_err)
-
-            self.available_plots = result.available_plots
-            self.elapsed_sec = round(time.monotonic() - start, 1)
-            self.status = "completed"
-
         except InterruptedError:
             self.elapsed_sec = round(time.monotonic() - start, 1)
             self.error = {"code": "CANCELLED", "message": "Job cancelled by user"}
             self.status = "failed"
-
-        except Exception as e:
+        except Exception as exc:  # noqa: BLE001 — outer-most boundary
             self.elapsed_sec = round(time.monotonic() - start, 1)
-            try:
-                exc_msg = str(e)
-                code = "BACKEND_ERROR" if "lizyml" in exc_msg.lower() else "SUBPROCESS_ERROR"
-            except Exception:
-                code = "SUBPROCESS_ERROR"
-            _log.error("Subprocess job %s failed (%s): %s", job_type, code, e, exc_info=True)
-            self.error = {"code": code, "message": str(e)}
+            code = self._classify_job_error(exc, subprocess=is_subprocess)
+            _log.error("Job %s failed (%s): %s", spec.job_type, code, exc, exc_info=True)
+            self.error = {"code": code, "message": str(exc)}
             self.status = "failed"
-
         finally:
             timer_stop.set()
             timer.join(timeout=2.0)
-            import shutil
 
-            with contextlib.suppress(OSError):
-                shutil.rmtree(model_out_path, ignore_errors=True)
+    def _apply_job_result(self, result: JobResult) -> None:
+        """Project a runner's :class:`JobResult` onto traitlets."""
+        if result.fit_summary:
+            normalized = self._normalize_metrics(result.eval_table)
+            self.fit_summary = {
+                "metrics": normalized if normalized else result.fit_summary.get("metrics", {}),
+                "fold_count": result.fit_summary.get("fold_count", 0),
+                "fold_details": result.split_summary or result.fit_summary.get("fold_details", []),
+                "params": result.fit_summary.get("params", []),
+            }
+        if result.tune_summary:
+            self.tune_summary = result.tune_summary
+            # After tune, evaluate_table may exist if the model was
+            # implicitly fitted on the best params — surface it as a
+            # fit_summary too so the Results tab can render the score
+            # table even without a separate fit run.
+            if result.eval_table:
+                normalized = self._normalize_metrics(result.eval_table)
+                if normalized:
+                    self.fit_summary = {
+                        "metrics": normalized,
+                        "fold_count": len(result.split_summary),
+                        "fold_details": result.split_summary,
+                        "params": [],
+                    }
+        if result.available_plots:
+            self.available_plots = result.available_plots
+
+    @staticmethod
+    def _classify_job_error(exc: BaseException, *, subprocess: bool) -> str:
+        """Map a worker exception to an error code for the widget banner."""
+        try:
+            mod = getattr(type(exc), "__module__", "") or ""
+            if "lizyml" in mod.lower():
+                return "BACKEND_ERROR"
+            # Subprocess errors arrive wrapped as RuntimeError("[ExcType] msg")
+            # — the prefix carries the original module name so we can still
+            # detect lizyml drift inside that envelope.
+            msg = str(exc).lower()
+        except Exception:  # noqa: BLE001
+            msg = ""
+        if "lizyml" in msg:
+            return "BACKEND_ERROR"
+        return "SUBPROCESS_ERROR" if subprocess else "INTERNAL_ERROR"
 
     # ── Config helpers ─────────────────────────────────────────
 

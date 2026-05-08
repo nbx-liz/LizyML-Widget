@@ -667,51 +667,66 @@ class TestRetuneAction:
 
 
 class TestRetuneSubprocessRejection:
-    """Re-tune is not supported in subprocess execution mode because the
-    Optuna study cannot be pickled across process boundaries.  The worker
-    must fail synchronously with a clear error rather than silently
-    running a fresh study.
+    """P-032: re-tune via SubprocessJobRunner raises RetuneSubprocessUnsupportedError.
 
-    These tests drive ``_subprocess_job_worker`` directly instead of the
-    full ``_run_job`` path to avoid spawning an actual subprocess."""
+    The supervisor turns this into the ``RETUNE_SUBPROCESS_UNSUPPORTED`` error
+    code on the widget. These tests drive the runner + supervisor directly
+    rather than spawning a real subprocess.
+    """
 
-    def test_subprocess_worker_rejects_retune_kwargs(self) -> None:
+    def test_subprocess_runner_rejects_retune_kwargs(self) -> None:
+        """SubprocessJobRunner.run raises immediately for any retune_kwargs."""
+        import threading
+
+        from lizyml_widget.job_runner import (
+            JobSpec,
+            RetuneSubprocessUnsupportedError,
+            SubprocessJobRunner,
+        )
+
         w = _make_widget()
-        # Force-seed job_thread / locks so _subprocess_job_worker is
-        # callable directly on the main thread without _run_job setup.
-        w._subprocess_job_worker(
-            "tune",
-            {"config_version": 1},
+        runner = SubprocessJobRunner(w._service)
+        spec = JobSpec(
+            job_type="tune",
+            config={"config_version": 1},
             retune_kwargs={"resume": True, "n_trials": 10},
         )
+        with pytest.raises(RetuneSubprocessUnsupportedError, match="subprocess"):
+            runner.run(spec, on_progress=lambda *a, **kw: None, cancel_event=threading.Event())
+
+    def test_supervise_translates_unsupported_error_to_traitlet(self) -> None:
+        """End-to-end: subprocess runner + retune → widget.error code is set."""
+        from lizyml_widget.job_runner import JobSpec, SubprocessJobRunner
+
+        w = _make_widget()
+        runner = SubprocessJobRunner(w._service)
+        spec = JobSpec(
+            job_type="tune",
+            config={"config_version": 1},
+            retune_kwargs={"resume": True, "n_trials": 10},
+        )
+        w._supervise(runner, spec)
+
         assert w.status == "failed"
         assert w.error["code"] == "RETUNE_SUBPROCESS_UNSUPPORTED"
         assert "subprocess" in w.error["message"].lower()
 
-    def test_subprocess_worker_accepts_normal_tune_when_retune_kwargs_is_none(
+    def test_subprocess_runner_accepts_normal_tune_when_retune_kwargs_is_none(
         self,
     ) -> None:
-        """Normal tune (retune_kwargs=None) must NOT trip the rejection
-        branch.  We patch run_job_subprocess so the rest of the worker
-        runs as a stub and returns quickly."""
-        w = _make_widget()
+        """Normal tune (retune_kwargs=None) must NOT trip the rejection branch."""
+        from unittest.mock import patch
 
-        from lizyml_widget import subprocess_runner
+        from lizyml_widget.job_runner import JobSpec, SubprocessJobRunner
         from lizyml_widget.subprocess_runner import SubprocessJobResult
 
-        def fake_run(
-            *,
-            job_type: str,
-            config: Any,
-            df: Any,
-            target: str,
-            libomp_path: Any,
-            on_progress: Any,
-            cancel_flag: Any,
-            model_out_path: Any = None,
-        ) -> SubprocessJobResult:
+        w = _make_widget()
+        runner = SubprocessJobRunner(w._service)
+        spec = JobSpec(job_type="tune", config={"config_version": 1}, retune_kwargs=None)
+
+        def fake_run(**_kw: Any) -> SubprocessJobResult:
             return SubprocessJobResult(
-                job_type=job_type,
+                job_type="tune",
                 fit_summary={},
                 tune_summary={
                     "best_params": {},
@@ -728,39 +743,35 @@ class TestRetuneSubprocessRejection:
                 model_path=None,
             )
 
-        original = subprocess_runner.run_job_subprocess
-        try:
-            # widget.py imports run_job_subprocess at module level
-            from lizyml_widget import widget as widget_module
+        # Need data loaded so SubprocessJobRunner.run can resolve dataframe / target.
+        df = pd.DataFrame({"x": list(range(50)), "y": [0, 1] * 25})
+        w.load(df, target="y")
+        with (
+            patch("lizyml_widget.job_runner.run_job_subprocess", side_effect=fake_run),
+            patch.object(w._service, "load_model_from_path"),
+        ):
+            w._supervise(runner, spec)
 
-            widget_module.run_job_subprocess = fake_run  # type: ignore[assignment]
-            w._subprocess_job_worker("tune", {"config_version": 1}, retune_kwargs=None)
-        finally:
-            widget_module.run_job_subprocess = original  # type: ignore[assignment]
-
-        # Success path: status completed, no RETUNE_SUBPROCESS_UNSUPPORTED error.
         assert w.error.get("code") != "RETUNE_SUBPROCESS_UNSUPPORTED"
-        assert w.status in ("completed", "failed")  # depends on other side effects
+        assert w.status == "completed"
 
     def test_subprocess_on_progress_forwards_round_fields(self) -> None:
-        """The subprocess worker's local on_progress must forward the
-        P-027 round-aware keys to ``self.progress`` just like the
-        in-process worker does.  Covers widget.py L1115, L1120, L1130-1132."""
-        w = _make_widget()
+        """Supervisor + SubprocessJobRunner: round-aware progress flows to traitlet."""
+        from unittest.mock import patch
 
-        from lizyml_widget import subprocess_runner
-        from lizyml_widget import widget as widget_module
+        from lizyml_widget.job_runner import JobSpec, SubprocessJobRunner
         from lizyml_widget.subprocess_runner import SubprocessJobResult
+
+        w = _make_widget()
+        df = pd.DataFrame({"x": list(range(50)), "y": [0, 1] * 25})
+        w.load(df, target="y")
+        runner = SubprocessJobRunner(w._service)
+        spec = JobSpec(job_type="tune", config={"config_version": 1}, retune_kwargs=None)
 
         captured_progress: dict[str, Any] = {}
 
-        def fake_run(
-            *,
-            job_type: str,
-            on_progress: Any,
-            **_: Any,
-        ) -> SubprocessJobResult:
-            # Simulate a round-aware progress callback from the subprocess.
+        def fake_run(**kw: Any) -> SubprocessJobResult:
+            on_progress = kw["on_progress"]
             on_progress(
                 17,
                 30,
@@ -774,7 +785,7 @@ class TestRetuneSubprocessRejection:
             )
             captured_progress.update(dict(w.progress))
             return SubprocessJobResult(
-                job_type=job_type,
+                job_type="tune",
                 fit_summary={},
                 tune_summary={
                     "best_params": {},
@@ -791,15 +802,12 @@ class TestRetuneSubprocessRejection:
                 model_path=None,
             )
 
-        original = subprocess_runner.run_job_subprocess
-        try:
-            widget_module.run_job_subprocess = fake_run  # type: ignore[assignment]
-            w._subprocess_job_worker("tune", {"config_version": 1}, retune_kwargs=None)
-        finally:
-            widget_module.run_job_subprocess = original  # type: ignore[assignment]
+        with (
+            patch("lizyml_widget.job_runner.run_job_subprocess", side_effect=fake_run),
+            patch.object(w._service, "load_model_from_path"),
+        ):
+            w._supervise(runner, spec)
 
-        # The progress traitlet snapshot taken inside fake_run must carry
-        # every new field (exercises the forwarding loop in _subprocess_job_worker).
         assert captured_progress["round"] == 2
         assert captured_progress["cumulative_trials"] == 67
         assert captured_progress["expanded_dims"] == ["learning_rate"]
