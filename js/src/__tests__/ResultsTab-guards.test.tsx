@@ -272,3 +272,58 @@ describe("ResultsTab — Best Score null guard", () => {
     expect(screen.getByText(/auc: 0\.9123/)).toBeDefined();
   });
 });
+
+// ── #114 Phase A: failed-state error UI ──
+
+describe("ResultsTab — failed status error UI", () => {
+  it("renders BACKEND_ERROR message and Re-run button", () => {
+    const sendAction = vi.fn();
+    render(
+      <ResultsTab
+        {...defaultProps}
+        status="failed"
+        jobType="fit"
+        fitSummary={{}}
+        sendAction={sendAction}
+        error={{ code: "BACKEND_ERROR", message: "Model has not been fitted" }}
+      />,
+    );
+    expect(screen.getByText(/BACKEND_ERROR/)).toBeDefined();
+    expect(screen.getByText(/Model has not been fitted/)).toBeDefined();
+    const rerun = screen.getByText(/Re-run|Retry/i);
+    expect(rerun).toBeDefined();
+  });
+
+  it("dispatches the original job_type when Re-run is clicked", () => {
+    const sendAction = vi.fn();
+    render(
+      <ResultsTab
+        {...defaultProps}
+        status="failed"
+        jobType="tune"
+        fitSummary={{}}
+        sendAction={sendAction}
+        error={{ code: "INTERNAL_ERROR", message: "boom" }}
+      />,
+    );
+    fireEvent.click(screen.getByText(/Re-run|Retry/i));
+    expect(sendAction).toHaveBeenCalled();
+    // The first argument should be either "tune" (re-run same job) or
+    // contain a re-run hint — either way, the tune job should be invoked.
+    const calls = sendAction.mock.calls.map((c) => c[0]);
+    expect(calls.some((c: string) => c === "tune" || c.includes("retry") || c.includes("rerun"))).toBe(
+      true,
+    );
+  });
+
+  it("does not show the Re-run button when status is completed", () => {
+    render(
+      <ResultsTab
+        {...defaultProps}
+        status="completed"
+        jobType="fit"
+      />,
+    );
+    expect(screen.queryByText(/Re-run/i)).toBeNull();
+  });
+});

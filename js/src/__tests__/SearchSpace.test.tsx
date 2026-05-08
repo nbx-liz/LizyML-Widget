@@ -163,6 +163,69 @@ describe("SearchSpace — Bug 7: metric Fixed→Choice mode switch", () => {
   });
 });
 
+// ── #114 Phase A: regression metric option set must include smape / wape (P-030) ──
+
+describe("SearchSpace — P-030 regression metric chips", () => {
+  const regressionUiSchema = {
+    option_sets: {
+      objective: { regression: ["huber", "mse"] },
+      // P-030: smape / wape are first-class regression metrics in lizyml 0.11.
+      // The widget must surface them through the contract; SearchSpace renders
+      // them as choice chips when the user picks the metric row.
+      model_metric: { regression: ["rmse", "mae", "smape", "wape"] },
+    },
+    step_map: {},
+    search_space_catalog: [
+      {
+        key: "metric",
+        title: "Metric",
+        paramType: "string",
+        modes: ["fixed", "choice"],
+        group: "model_params",
+      },
+    ],
+    special_search_space_fields: { metric: "model_metric" },
+    additional_params: [],
+    conditional_visibility: {},
+  };
+
+  it("renders smape and wape chips for the regression metric option set", () => {
+    render(
+      <SearchSpace
+        {...defaultProps}
+        task="regression"
+        uiSchema={regressionUiSchema}
+        fixedModelParams={{ metric: ["rmse"] }}
+        modelConfig={{ params: { metric: ["rmse"] } }}
+      />,
+    );
+    expect(screen.getByText("smape")).toBeDefined();
+    expect(screen.getByText("wape")).toBeDefined();
+  });
+
+  it("toggles smape into the fixed metric list when the chip is clicked", () => {
+    const onChange = vi.fn();
+    render(
+      <SearchSpace
+        {...defaultProps}
+        task="regression"
+        uiSchema={regressionUiSchema}
+        fixedModelParams={{ metric: ["rmse"] }}
+        modelConfig={{ params: { metric: ["rmse"] } }}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("smape"));
+    expect(onChange).toHaveBeenCalled();
+    // The most-recent invocation should now contain smape in the fixed metric.
+    const calls = onChange.mock.calls;
+    const last = calls[calls.length - 1][0];
+    const fixedMetric = last.fixedModelParams?.metric;
+    expect(Array.isArray(fixedMetric)).toBe(true);
+    expect(fixedMetric).toContain("smape");
+  });
+});
+
 // ── Bug 8: boolean Fixed→Choice should include both true and false ──
 
 describe("SearchSpace — Bug 8: boolean Fixed→Choice mode switch", () => {

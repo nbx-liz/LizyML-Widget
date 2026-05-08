@@ -148,10 +148,20 @@ uv run mypy src/lizyml_widget/
 # TypeScript
 cd js
 pnpm install
-pnpm dev    # watch build
-pnpm build  # production build
+pnpm dev               # watch build
+pnpm build             # production build
 pnpm lint
+pnpm test              # vitest run
+pnpm test:coverage     # vitest run --coverage (CI gate at 75% statements / 70% branches)
 ```
+
+### Test coverage targets
+
+- Python (pytest): **80% line coverage** — enforced in CI via `--cov-fail-under=80`.
+- TypeScript (vitest): **75% statements / lines, 70% branches, 50% functions** —
+  enforced via thresholds in [`js/vitest.config.ts`](js/vitest.config.ts).
+- E2E (Playwright + JupyterLab): suite under [`tests/e2e/`](tests/e2e/); CI prints
+  the test count so additions/removals are visible in PR diffs.
 
 ### Stable Notebook Launch
 

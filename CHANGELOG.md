@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **JS test coverage Phase A** ([#114](https://github.com/nbx-liz/LizyML-Widget/issues/114)).
+  Vitest suite expanded from 171 to 272 cases covering `App.tsx`, `Header.tsx`,
+  `configHelpers.ts`, `ModelEditors.tsx`, `TuneSubTab.tsx`, `FitSubTab.tsx`,
+  `DistributionBar.tsx`, `FoldPreview.tsx`, `PredTable.tsx`,
+  `BlockedGroupKFold.tsx`, plus the P-030 smape/wape regression chip in
+  `SearchSpace.tsx` and failed/error rendering paths in `ResultsTab.tsx`.
+  Statement coverage rose from 47% to 75%.
+- `pnpm test:coverage` script and `vitest.config.ts` `coverage.thresholds`
+  block (75% statements/lines, 70% branches, 50% functions). CI now runs
+  `pnpm test:coverage` and prints the e2e test count for visibility.
 - **Backend contract**: new `cv_strategy_labels` and `additional_params_hidden_keys`
   capabilities ([#119](https://github.com/nbx-liz/LizyML-Widget/issues/119)).
   Adding a new CV strategy in `adapter_contract.py` now surfaces in the UI dropdown
