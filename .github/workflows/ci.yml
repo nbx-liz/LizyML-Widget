@@ -46,8 +46,15 @@ jobs:
       - name: JS lint (eslint)
         run: cd js && pnpm lint
 
-      - name: JS test (vitest)
-        run: cd js && pnpm test
+      - name: JS test (vitest with coverage)
+        run: cd js && pnpm test:coverage
+
+      - name: JS E2E test count
+        # #114 Phase C: surface the e2e test count in PR diffs so adds/removes
+        # are visible without spelunking through tests/e2e/.
+        run: |
+          count=$(grep -RE "^\s*def test_" tests/e2e/ | wc -l)
+          echo "tests/e2e/: $count test cases"
 
       - name: Lint (ruff check)
         run: uv run ruff check .

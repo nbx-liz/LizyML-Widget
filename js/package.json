@@ -7,7 +7,8 @@
     "build": "esbuild src/index.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=preact --outfile=../src/lizyml_widget/static/widget.js --minify && cp src/widget.css ../src/lizyml_widget/static/widget.css",
     "lint": "eslint src/",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "preact": "^10.29.1"
