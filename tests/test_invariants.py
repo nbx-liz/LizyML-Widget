@@ -13,10 +13,11 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 
 from lizyml_widget.adapter import LizyMLAdapter
 from lizyml_widget.adapter_views import LMBoundaryDimView, LMBoundaryReportView
-from lizyml_widget.job_runner import JobSpec, ThreadJobRunner
+from lizyml_widget.job_runner import JobResult, JobSpec, ThreadJobRunner
 from lizyml_widget.types import BackendInfo, FitSummary, TuningSummary
 
 
@@ -165,8 +166,6 @@ class TestInvDCancelFlagLifecycle:
             return_value={"config_version": 1, "task": "binary", "model": {}}
         )
 
-        from lizyml_widget.job_runner import JobResult
-
         with patch("lizyml_widget.widget.ThreadJobRunner") as mock_runner_cls:
             mock_runner = mock_runner_cls.return_value
             mock_runner.kind = "thread"
@@ -181,11 +180,14 @@ class TestInvDCancelFlagLifecycle:
         )
 
     def test_cancel_during_running_transitions_to_failed_cancelled(self) -> None:
-
         w = _make_widget()
         w.load(pd.DataFrame({"x": list(range(20)), "y": [0, 1] * 10}), target="y")
         runner = ThreadJobRunner(w._service)
         spec = JobSpec(job_type="fit", config={"task": "binary"})
+
+        # _run_job sets status="running" inside the job lock before
+        # spawning the supervisor — emulate that pre-condition here.
+        w.status = "running"
 
         # Simulate the runner raising InterruptedError mid-flight.
         with patch.object(runner, "run", side_effect=InterruptedError("cancelled")):
@@ -216,7 +218,6 @@ class TestInvERoundMonotonic:
             for round_no in (1, 1, 2, 2, 3):
                 on_progress(0, 10, "tick", round=round_no)
                 captured_rounds.append(int(w.progress.get("round", 0)))
-            from lizyml_widget.job_runner import JobResult
 
             return JobResult(
                 job_type="tune",
@@ -235,6 +236,8 @@ class TestInvERoundMonotonic:
                 model_path=None,
             )
 
+        # _run_job sets status="running" before spawning supervise — emulate it.
+        w.status = "running"
         with patch.object(runner, "run", side_effect=fake_run):
             w._supervise(runner, spec)
 
@@ -317,3 +320,145 @@ class TestInvFBoundaryReportDimsUnique:
         assert len(names) != len(set(names)), (
             "Sanity: this fixture intentionally violates INV-F to verify the check"
         )
+
+
+# ── Runtime assertion gates (#135) ────────────────────────────────────
+
+
+def _make_tune_runner_emitting(rounds: list[int]) -> tuple[ThreadJobRunner, JobSpec, Any]:
+    """Build a runner whose ``run()`` drives ``on_progress`` with the given rounds.
+
+    Returns ``(runner, spec, widget)``. The caller invokes ``widget._supervise``
+    to exercise the supervisor's runtime guards.
+    """
+    w = _make_widget()
+    w.load(pd.DataFrame({"x": list(range(20)), "y": [0, 1] * 10}), target="y")
+    runner = ThreadJobRunner(w._service)
+    spec = JobSpec(job_type="tune", config={"task": "binary"})
+
+    def fake_run(spec_arg: JobSpec, on_progress: Any, cancel_event: Any) -> JobResult:
+        for round_no in rounds:
+            on_progress(0, 10, "tick", round=round_no)
+        return JobResult(
+            job_type="tune",
+            tune_summary={
+                "best_params": {},
+                "best_score": 0.0,
+                "trials": [],
+                "metric_name": "auc",
+                "direction": "maximize",
+                "rounds": [],
+                "boundary_report": None,
+            },
+            eval_table=[],
+            split_summary=[],
+            available_plots=[],
+            model_path=None,
+        )
+
+    runner.run = MagicMock(side_effect=fake_run)  # type: ignore[method-assign]
+    # _run_job sets status="running" before spawning supervise — emulate that.
+    w.status = "running"
+    w._cancel_flag.clear()
+    return runner, spec, w
+
+
+class TestRuntimeAssertionsSupervise:
+    """#135: ``_supervise`` enforces INV-A, INV-D, INV-E at runtime."""
+
+    def test_inv_a_entry_rejects_non_running_status(self) -> None:
+        """INV-A: supervisor must enter with status=='running'."""
+        runner, spec, w = _make_tune_runner_emitting([1])
+        w.status = "data_loaded"  # illegal: caller forgot to flip to running
+        with pytest.raises(AssertionError, match="INV-A"):
+            w._supervise(runner, spec)
+
+    def test_inv_d_entry_rejects_carryover_cancel_flag(self) -> None:
+        """INV-D: cancel flag must not be set when the supervisor enters."""
+        runner, spec, w = _make_tune_runner_emitting([1])
+        w._cancel_flag.set()  # illegal: stale cancel from a prior job
+        with pytest.raises(AssertionError, match="INV-D"):
+            w._supervise(runner, spec)
+
+    def test_inv_e_round_regression_raises(self) -> None:
+        """INV-E: a regressing round in on_progress raises AssertionError.
+
+        The supervisor's outer ``except Exception`` catches the assertion
+        and surfaces it as status=='failed' with the INV-E message in
+        ``error``. We assert on that path because production code runs
+        the supervisor under the same try/except boundary.
+        """
+        runner, spec, w = _make_tune_runner_emitting([2, 1])  # regression!
+        w._supervise(runner, spec)
+        assert w.status == "failed"
+        assert "INV-E" in w.error.get("message", ""), (
+            f"expected INV-E violation in error, got {w.error!r}"
+        )
+
+    def test_inv_a_exit_terminal_status_holds_on_completion(self) -> None:
+        """Happy path: supervisor exits with status in {completed, failed}."""
+        runner, spec, w = _make_tune_runner_emitting([1, 1, 2])
+        w._supervise(runner, spec)
+        assert w.status == "completed"
+
+
+class TestRuntimeAssertionsApplyResult:
+    """#135: ``_apply_job_result`` enforces INV-F at runtime."""
+
+    def test_inv_f_duplicate_dims_raises(self) -> None:
+        """INV-F: boundary_report.dims with duplicate names must raise."""
+        w = _make_widget()
+        w.load(pd.DataFrame({"x": list(range(20)), "y": [0, 1] * 10}), target="y")
+        result = JobResult(
+            job_type="tune",
+            tune_summary={
+                "best_params": {},
+                "best_score": 0.0,
+                "trials": [],
+                "metric_name": "auc",
+                "direction": "maximize",
+                "rounds": [],
+                "boundary_report": {
+                    "dims": [
+                        {"name": "lr", "best_value": 0.05},
+                        {"name": "lr", "best_value": 0.06},  # duplicate
+                    ],
+                    "expanded_names": [],
+                },
+            },
+            eval_table=[],
+            split_summary=[],
+            available_plots=[],
+            model_path=None,
+        )
+        with pytest.raises(AssertionError, match="INV-F"):
+            w._apply_job_result(result)
+
+    def test_inv_f_unique_dims_passes(self) -> None:
+        """INV-F: unique dim names pass without error."""
+        w = _make_widget()
+        w.load(pd.DataFrame({"x": list(range(20)), "y": [0, 1] * 10}), target="y")
+        result = JobResult(
+            job_type="tune",
+            tune_summary={
+                "best_params": {},
+                "best_score": 0.0,
+                "trials": [],
+                "metric_name": "auc",
+                "direction": "maximize",
+                "rounds": [],
+                "boundary_report": {
+                    "dims": [
+                        {"name": "lr", "best_value": 0.05},
+                        {"name": "num_leaves", "best_value": 64},
+                    ],
+                    "expanded_names": [],
+                },
+            },
+            eval_table=[],
+            split_summary=[],
+            available_plots=[],
+            model_path=None,
+        )
+        w._apply_job_result(result)
+        assert w.tune_summary["boundary_report"]["dims"][0]["name"] == "lr"

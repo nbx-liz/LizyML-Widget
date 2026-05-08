@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancels the pending debounce timer before resyncing local state.
 
 ### Added
+- **Runtime guards for state-machine invariants**
+  ([#135](https://github.com/nbx-liz/LizyML-Widget/issues/135)).
+  Follow-up to P-033: BLUEPRINT.md §6.4 INV-A / INV-D / INV-E / INV-F
+  are now enforced at runtime via `assert` statements inside
+  `widget.py::_supervise` and `_apply_job_result`. Production
+  behaviour is unchanged (`python -O` strips the asserts), but
+  development and CI runs surface invariant violations immediately
+  instead of as silent UI weirdness. Six new tests in
+  `tests/test_invariants.py` drive each violation path.
 - **State-machine invariants declared (INV-A..F)** (P-033,
   [#118](https://github.com/nbx-liz/LizyML-Widget/issues/118)).
   `BLUEPRINT.md` §6.4 now enumerates six invariants over the widget's
