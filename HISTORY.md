@@ -1,5 +1,69 @@
 ## LizyML-Widget 仕様変更履歴
 
+### P-033: 状態機械不変条件（INV-A..F）の宣言と enforcement
+
+- **日付**: 2026-05-08
+- **ステータス**: 提案
+- **関連 Issue**: [#118](https://github.com/nbx-liz/LizyML-Widget/issues/118)
+- **背景**:
+  - `~/.claude/rules/common/invariants-first.md` は並行性 / 状態機械 / リソース所有権を扱うコードに対して、
+    実装前に不変条件を宣言し、テストで enforce することを義務付けている。
+  - 本リポジトリの状態機械（`status` traitlet, `_job_thread`, `WidgetService._tune_model`, `_cancel_flag`,
+    `progress.round`, `tune_summary.boundary_report.dims`）には、これまで形式化された不変条件が存在しなかった
+    （`grep -r "INV-" docs/ src/` で 0 ヒット）。
+  - P-027 / P-028 / P-029 で発生したラウンド +1 ずれ等の状態機械バグは、不変条件が文書化されていなかったため
+    fix が "発見した症状" に対するパッチに留まり、累積的な負債となった（HISTORY.md Bug Fix 参照）。
+  - P-032（issue #117）で `_supervise` に状態遷移ロジックが集約されたため、ここで invariant assert を
+    encode する好機となる。
+- **提案内容**:
+  - **BLUEPRINT.md §6 に「State machine invariants」節（§6.4）を追加** し、INV-A..F を以下の形式で宣言:
+    - **INV-A**: `status` の遷移は `idle → data_loaded → running → {completed | failed} → running → ...`
+      の有限状態機械に従う。`idle → completed` 等の不正遷移は即座に拒否される。
+    - **INV-B**: `_job_thread` は同時に最大 1 個のライブワーカーのみを保持する。
+      `status == "running"` 中の `_run_job` 再呼び出しは黙って無視される（`widget.py::_run_job` の
+      ガード）。
+    - **INV-C**: `WidgetService._tune_model` は最直近の `tune` 呼び出しが所有する。
+      `tune` → `fit` → `retune` の順序で fit が `_tune_model` を破壊しない（P-028）。
+    - **INV-D**: `_cancel_flag` は各ジョブ開始時に `clear()` され、ジョブ終了まで Widget 側からは
+      書き込まれない。`status == "running"` 中の cancel は `failed` (`error.code == "CANCELLED"`)
+      へ遷移する。
+    - **INV-E**: `progress.round` は単一の tune 呼び出し（resume 含む）内で単調非減少。
+      P-029 のラウンド +1 オフバイワンに対するレギュラリゼーション。
+    - **INV-F**: `tune_summary.boundary_report.dims` は各 search space 次元を **過不足なく一度ずつ**
+      列挙する（重複・欠損なし）。ラウンドごとの差分ではなく累積スナップショット。
+  - **invariant tests を新規 `tests/test_invariants.py` に集約**:
+    - INV-A: 不正遷移 (`idle → completed`) を試み、`status` が変わらないこと。
+    - INV-B: `status == "running"` 中の `_run_job` 再呼び出しが `_job_counter` を増やさないこと。
+    - INV-C: `tune → fit → retune` シーケンスで `_tune_model` が破壊されない。
+    - INV-D: `_cancel_flag` が新規ジョブ開始時に `False` になる。Cancel 中の状態遷移が `failed` で
+      `error.code == "CANCELLED"` になる。
+    - INV-E: round が monotonic（連続した round 値が降順にならない）。
+    - INV-F: `boundary_report.dims` のすべての `name` が unique で、search space 全次元と一致する。
+- **影響範囲**:
+  - `BLUEPRINT.md` §6.4 — 新規節（**change gate**: invariants over shared state）
+  - `tests/test_invariants.py` — 新規（INV-A..F 検証）
+  - `src/lizyml_widget/widget.py` — runtime guard の comment 整備（INV-X breadcrumbs）
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]` セクション
+- **互換性**:
+  - 公開 Python API / traitlet / JS dispatcher 互換性は変更なし。
+  - 内部 assert / log は debug-level；ユーザーから観測可能な動作変化なし。
+- **代替案（却下）**:
+  - **案A: 不変条件はコメントのみで十分** — invariants-first.md は "executable checks > comments" を
+    明示。コメントは書き手のメンタルモデルしか保存しない。
+  - **案B: assert ではなく型レベルで強制（ブランド型）** — Python の型システムで状態機械を
+    完全エンコードするには `typing.Literal[...]` の transition 型が必要となり、コードが煩雑化する。
+    test + runtime assert で十分。
+- **受け入れ基準**:
+  - BLUEPRINT.md §6.4 に INV-A..F が `INV-N: <subject> ... — violated if <scenario>` 形式で宣言される。
+  - `tests/test_invariants.py` で INV-A..F 各々に対応する RED-then-GREEN テストが存在する。
+  - `_supervise` / `_run_job` の状態遷移ガードに対応する INV-X breadcrumb がある。
+  - 既存テスト全 green。
+  - 今後の `_supervise` / `status` / `_tune_model` / `_cancel_flag` を触る PR は body に
+    Invariants + Failure Paths セクションを含める運用が確立する。
+
+---
+
 ### P-032: JobRunner Protocol 抽出（widget.py God-class 分割）
 
 - **日付**: 2026-05-08
