@@ -1,5 +1,95 @@
 ## LizyML-Widget 仕様変更履歴
 
+### P-030: lizyml 0.10 / 0.11 / 0.12 互換窓拡大
+
+- **日付**: 2026-05-08
+- **ステータス**: 提案
+- **関連 Issue**: [#112](https://github.com/nbx-liz/LizyML-Widget/issues/112)
+- **背景**:
+  - LizyML が 0.9.0 公開後に `0.9.1` / `0.10.0` / `0.11.0` / `0.12.0` を続けて release。
+  - lizyml-widget 0.8.0 は `lizyml>=0.9.0,<0.10` に固定されており、`pyproject.toml` の extra と
+    `src/lizyml_widget/adapter.py` の `LIZYML_MIN_VERSION` / `LIZYML_MAX_VERSION` が二重に
+    範囲を強制するため、ユーザー側で `lizyml>=0.10` を選択できない。
+  - 0.10–0.12 の主な変更は **加算的（破壊的変更なし）**:
+    - **0.10**: 非数値分類ラベル自動エンコード（`FitResult.target_encoder` 新設、`FORMAT_VERSION` 1→2、
+      旧 v1 artifact は `Model.load()` が in-memory migrate する）、新エラーコード `TARGET_NOT_NUMERIC` /
+      `TARGET_UNSEEN_LABEL`。
+    - **0.11**: 回帰メトリック `smape` / `wape` を `MetricRegistry` に追加、LightGBM feval bridge 経由で
+      `eval_history` / 学習曲線にも反映。
+    - **0.12**: Optuna 永続化ストレージによる resumable tuning（`Tuner.tune(storage=, study_name=)` 追加、
+      `storage=None` で従来挙動）。
+- **提案内容**:
+  - **Phase 1 — 互換窓拡大（基盤）**:
+    - `pyproject.toml` の lizyml extras を `>=0.10.0,<0.13` に更新（**lower bound を 0.10 に切り上げ**: 0.10
+      の `target_encoder` 経由のラベル dtype 保持を Widget 側でも前提とするため）。
+    - `LIZYML_MIN_VERSION = (0, 10, 0)`, `LIZYML_MAX_VERSION = (0, 13, 0)` に更新。
+    - `tests/test_retune_monitoring.py` の guard 定数アサートを追従。
+    - `docs/VERSION_COMPAT.md` に新行追加（`lizyml-widget 0.9.x` ↔ `lizyml >=0.10.0,<0.13`）。
+    - `uv.lock` を `uv lock --upgrade-package lizyml` で再生成。
+  - **Phase 2 — 0.10 統合**:
+    - `LizyMLAdapter.predict()` は `result.pred` がすでに元 dtype（object / category / bool）でデコード済み
+      な前提で受け取り、pandas DataFrame に dtype を保持して載せ替えるだけに留める。
+    - 新エラーコード `TARGET_NOT_NUMERIC` / `TARGET_UNSEEN_LABEL` は `LizyMLError` の message に含めて
+      `BACKEND_ERROR` 配下で表示する（Widget 側で再分類はしない、UI 上はメッセージで識別）。
+    - 旧 v1 artifact の `Model.load()` 後方互換は lizyml 側で吸収済みのため、Widget 追加実装は不要。
+      回帰テストでのみ verify する。
+  - **Phase 3 — 0.11 統合**:
+    - `adapter_params.py` の回帰タスク metric option set に `smape` / `wape` を追加。
+    - `adapter_schema.py` の Search Space catalog（regression metric 選択肢）に `smape` / `wape` を加える。
+    - `LizyMLAdapter.plot()` の `learning-curve` 経路は既存 `metrics` kwarg 透過で動作（追加実装不要、
+      e2e テストで検証）。
+  - **Phase 4 — 0.12 決定**:
+    - **本 Proposal の範囲では UI 露出しない**。`Tuner.tune(storage=, study_name=)` を Widget で公開する場合
+      SQLite ファイル lifecycle / kernel 横断 study 共有 / cleanup の設計が必要となるため、別 Proposal
+      （P-031 仮）で扱う。compat 範囲に 0.12 を含めること自体の動作確認は Phase 1 + Phase 5 の smoke で
+      カバーする。
+- **影響範囲**:
+  - `pyproject.toml` — extras / dev dependency 範囲（**change gate**: 外部依存変更）
+  - `uv.lock` — 再生成
+  - `src/lizyml_widget/adapter.py` — `LIZYML_MIN_VERSION` / `LIZYML_MAX_VERSION` 定数（**change gate**:
+    BackendAdapter Protocol の依存）
+  - `src/lizyml_widget/adapter_params.py` — regression metric option set
+  - `src/lizyml_widget/adapter_schema.py` — Search Space catalog の regression metric
+  - `tests/test_retune_monitoring.py` — guard 定数アサート
+  - `tests/regression/test_reg_112_target_encoder_roundtrip.py` — 新規（非数値ラベル分類の round-trip）
+  - `tests/regression/test_reg_112_smape_wape.py` — 新規（回帰メトリック登録 + learning curve）
+  - `docs/VERSION_COMPAT.md` — 新行
+  - `CHANGELOG.md` — `[0.9.0]` セクション
+  - `HISTORY.md` — 本 Proposal
+- **互換性**:
+  - **Widget 0.9.0 リリース時、lizyml 0.9.x ユーザーは強制的に 0.10 へアップグレードが必要**。
+    0.9.x の `Model.fit` / `Model.tune` / `Model.predict` 公開 API は 0.10 で互換維持されているため、
+    アップグレード自体は import 互換のはず（ただし `FORMAT_VERSION` バンプにより lizyml 0.9 で保存した
+    `model.lizyml` artifact を 0.9 で再ロードする経路は 0.10 への移行で 1 度だけ migrate される）。
+  - `BackendAdapter` Protocol のシグネチャは無変更。
+  - `FitSummary` / `TuningSummary` / `PredictionSummary` / `BackendInfo` の構造は無変更（0.10 の
+    `target_encoder` フィールドは Adapter 内部で吸収、Widget の共通型には漏らさない）。
+  - 既存 traitlet / action / Python API の互換破壊なし。
+  - JS 側の backend_contract 駆動 UI は無変更（metric option set は backend 経由で配信）。
+- **代替案（却下）**:
+  - **案A: 0.10 / 0.11 / 0.12 を別々の PR / Proposal に分割** — 加算的変更が中心で blast radius が小さい
+    ため、3 PR 分の CI / レビューコストに見合わない。単一 PR で段階コミットする方が churn が少ない。
+  - **案B: 互換窓を `>=0.9.0,<0.13` のままにして 0.9 ユーザーを残す** — 0.10 の `target_encoder` を
+    Adapter 内で前提として書くと 0.9 環境では型・属性が存在せず実行時に失敗する。条件分岐で吸収する
+    複雑さは長期保守負債になるため不採用。
+  - **案C: 0.12 の resumable tuning を本 PR で UI 露出する** — SQLite path 解決 / kernel restart 横断 /
+    Widget 間 study 共有 / cleanup は独立した設計が必要。本 Proposal の主目的（compat 窓拡大）から外して
+    P-031（仮）に分離する。
+- **受け入れ基準**:
+  - `pip install "lizyml-widget[lizyml]"` で `lizyml==0.12.x` が解決される。
+  - `LizyWidget` の import / Fit / Tune / Inference が `lizyml==0.12.0` で全 green
+    （Python 3.10 / 3.11 / 3.12 マトリクス CI）。
+  - 非数値ラベル分類（`y` が `object` / `category` / `bool`）で `LizyWidget.fit()` → `predict()` が
+    元 dtype を保持して結果を返す（回帰テストで assert）。
+  - 回帰タスクで `metric=["smape", "wape"]` が backend に届き、学習曲線にプロットされる
+    （e2e テストで assert）。
+  - 旧 lizyml 0.9.x で保存された `model.lizyml` artifact が `Model.load()` 経由で読み込めることを
+    smoke テストで確認（fixture 整備）。
+  - `ruff check` / `ruff format --check` / `mypy --strict` / `pytest` / `eslint` / `tsc` / `vitest` 全 green。
+  - `docs/VERSION_COMPAT.md` の対応表最上行が `lizyml-widget 0.9.x ↔ lizyml >=0.10.0,<0.13` になっている。
+
+---
+
 ### Bug Fix: Convergence Signal の Round 表示 +1 ずれ + チェックマーク escape 不正
 
 - **日付**: 2026-04-12
