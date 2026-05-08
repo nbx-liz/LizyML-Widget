@@ -293,8 +293,9 @@ class LizyWidget(anywidget.AnyWidget):
         if model is None:
             return None
         try:
-            return self._service._adapter.model_info(model)  # noqa: SLF001
-        except Exception:
+            return self._service.model_info(model)
+        except Exception as exc:
+            _log.debug("model_info delegate failed, returning minimal info: %s", exc)
             return {"loaded": True}
 
     def load_inference(self, df: pd.DataFrame) -> LizyWidget:
@@ -1082,8 +1083,12 @@ class LizyWidget(anywidget.AnyWidget):
                             "fold_details": fold_details,
                             "params": [],
                         }
-                except Exception:
-                    pass  # Tune-only: no fit results available
+                except (AttributeError, RuntimeError, ValueError) as exc:
+                    # Tune-only path: lizyml raises RuntimeError("Model has not been fitted")
+                    # when evaluate_table is called on an unfitted model (P-004 R3).
+                    # AttributeError/ValueError cover related "not fitted" surfaces.
+                    # Anything else propagates to the outer handler.
+                    _log.debug("Tune-only fit_summary skipped (model not fitted): %s", exc)
 
             self.available_plots = self._service.get_available_plots()
             self.elapsed_sec = round(time.monotonic() - start, 1)

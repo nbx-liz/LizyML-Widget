@@ -77,3 +77,17 @@ class TestModelInfo:
         w._service._adapter.model_info = MagicMock(side_effect=RuntimeError("boom"))
         info = w.model_info
         assert info == {"loaded": True}
+
+    def test_model_info_routes_through_service_delegate(self) -> None:
+        """Widget must call WidgetService.model_info, not Service._adapter directly."""
+        w = _make_widget()
+        mock_model = MagicMock()
+        w._service._model = mock_model
+        # Replace the service-level delegate; if widget routes through it,
+        # the call signature here is what gets exercised.
+        w._service.model_info = MagicMock(  # type: ignore[method-assign]
+            return_value={"loaded": True, "task": "regression"}
+        )
+        info = w.model_info
+        w._service.model_info.assert_called_once_with(mock_model)
+        assert info == {"loaded": True, "task": "regression"}

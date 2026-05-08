@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without any JS edit; a `humaniseSnake()` fallback covers labels missing from the map.
 
 ### Changed
+- **Code quality**: Closed two HIGH-tier code-review findings ([#115](https://github.com/nbx-liz/LizyML-Widget/issues/115)).
+  - `LizyWidget.model_info` now routes through a new `WidgetService.model_info(model)`
+    delegate instead of reaching into `Service._adapter` private state.
+  - Bare `except Exception: pass` blocks in `WidgetService._default_strategy_for_task`,
+    `WidgetService._default_cv_state`, and `_job_worker`'s tune-only fit-summary
+    fallback have been narrowed to documented exception types and now leave a
+    `_log.debug` breadcrumb instead of swallowing silently.
 - **JS no longer hardcodes LightGBM-specific catalogs** ([#119](https://github.com/nbx-liz/LizyML-Widget/issues/119)).
   - `DataTab.tsx`: dropped the `CV_STRATEGIES` literal — strategy chips now derive
     from `backend_contract.capabilities.cv_strategies`/`cv_strategy_labels`. The
