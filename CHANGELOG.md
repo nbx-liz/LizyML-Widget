@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **ConfigTab debounce / traitlet sync race**
+  ([#136](https://github.com/nbx-liz/LizyML-Widget/issues/136)).
+  When Python pushed a new ``config`` (e.g. after ``apply_best_params``)
+  while a user edit was still mid-debounce, the pending timer fired
+  later and computed a patch against a stale baseline, silently
+  overwriting Python's update. The ``[config]`` ``useEffect`` now
+  cancels the pending debounce timer before resyncing local state.
+
 ### Changed
 - **Drop hardcoded CV-strategy fallback in widget**
   ([#130](https://github.com/nbx-liz/LizyML-Widget/issues/130)).
