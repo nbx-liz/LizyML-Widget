@@ -918,6 +918,9 @@ class LizyWidget(anywidget.AnyWidget):
         retune_kwargs: dict[str, Any] | None = None,
     ) -> None:
         with self._job_lock:
+            # INV-A / INV-B (BLUEPRINT §6.4): a job is already running,
+            # so reject this re-entry silently. Holds _job_thread to one
+            # live worker and keeps status FSM linear.
             if self.status == "running":
                 return
 
@@ -959,6 +962,10 @@ class LizyWidget(anywidget.AnyWidget):
                 self._tune_config_snapshot = copy.deepcopy(full_config)
                 self._tune_ui_snapshot = copy.deepcopy(dict(self.config))
 
+            # INV-D (BLUEPRINT §6.4): cancel flag is cleared exactly once
+            # per job at startup; the worker / supervisor never write it
+            # back. Reading it later is safe even if a previous job ended
+            # via cancel.
             self._cancel_flag.clear()
             self._job_counter += 1
             self.job_type = job_type
@@ -1059,6 +1066,7 @@ class LizyWidget(anywidget.AnyWidget):
             }
             self.status = "failed"
         except InterruptedError:
+            # INV-D (BLUEPRINT §6.4): cancel during running -> failed/CANCELLED.
             self.elapsed_sec = round(time.monotonic() - start, 1)
             self.error = {"code": "CANCELLED", "message": "Job cancelled by user"}
             self.status = "failed"

@@ -1320,6 +1320,38 @@ UI は Search Space の `mode=Fixed/Range/Choice` のような表示用 state �
 
 ---
 
+### 6.4 状態機械不変条件 (INV-A..F)
+
+並行性 / 状態機械 / リソース所有権を扱うコードに対して、`~/.claude/rules/common/invariants-first.md`
+に従い不変条件を宣言する。各 INV は `tests/test_invariants.py` に対応する RED-then-GREEN テストを持ち、
+runtime assert / breadcrumb log として `_supervise` / `_run_job` に encode される（P-033 / [#118](https://github.com/nbx-liz/LizyML-Widget/issues/118)）。
+
+| ID | 不変条件 | 違反シナリオ |
+|---|---|---|
+| **INV-A** | `status` 遷移は `idle → data_loaded → running → {completed | failed} → running → ...` の有限状態機械に従う。 | `idle → completed` 等の不正遷移が発生する。 |
+| **INV-B** | `_job_thread` は同時に最大 1 個のライブワーカーのみを保持する。 | `status == "running"` 中の `_run_job` 再呼び出しで `_job_counter` が増える、または 2 本目のスレッドが起動する。 |
+| **INV-C** | `WidgetService._tune_model` は最直近の `tune` 呼び出しが所有する。 | `tune` → `fit` → `retune` の中間 fit が `_tune_model` を破壊して resume が新規 study になる（P-028 で導入された専用スロットを失う）。 |
+| **INV-D** | `_cancel_flag` は各ジョブ開始時に `clear()` され、ジョブ終了まで Widget 側からは書き込まれない。Cancel は `failed` (`error.code == "CANCELLED"`) へ遷移する。 | 前回ジョブの cancel フラグが残ったまま新規ジョブが起動して、即座に `CANCELLED` で落ちる。 |
+| **INV-E** | `progress.round` は単一の tune 呼び出し（resume 含む）内で単調非減少。 | round が降順になる、または同一ラウンドで `round` 値が +1 ずれる（P-029 オフバイワンの再発）。 |
+| **INV-F** | `tune_summary.boundary_report.dims` は各 search space 次元を過不足なく一度ずつ列挙する。ラウンド差分ではなく累積スナップショット。 | dims が重複する、または search space に存在する次元が dims に欠ける。 |
+
+**運用ルール**: `_supervise` / `_run_job` / `_tune_model` / `_cancel_flag` / `status` / `progress` /
+`boundary_report` を変更する PR は body に以下を含める。
+
+```markdown
+## Invariants
+- INV-X: ... (touched? new?)
+- INV-Y: ...
+
+## Failure Paths Covered
+- [x] Normal completion
+- [x] Cancellation
+- [x] Exception
+- [x] Abnormal exit / crash
+```
+
+---
+
 ## 7. フロントエンド設計
 
 ### 7.1 技術スタック

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **State-machine invariants declared (INV-A..F)** (P-033,
+  [#118](https://github.com/nbx-liz/LizyML-Widget/issues/118)).
+  `BLUEPRINT.md` §6.4 now enumerates six invariants over the widget's
+  status FSM, job-thread singleton, `_tune_model` ownership,
+  `_cancel_flag` lifecycle, `progress.round` monotonicity, and
+  `boundary_report.dims` uniqueness. Each invariant has a
+  RED-then-GREEN test in `tests/test_invariants.py`, and the relevant
+  guards in `widget.py::_run_job` / `_supervise` carry inline INV-X
+  breadcrumbs so future PRs reviewing those sites see the contract
+  they must preserve.
+
 ### Changed
 - **JobRunner Protocol extracted from widget.py** (P-032,
   [#117](https://github.com/nbx-liz/LizyML-Widget/issues/117)).
