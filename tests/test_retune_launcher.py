@@ -705,6 +705,9 @@ class TestRetuneSubprocessRejection:
             config={"config_version": 1},
             retune_kwargs={"resume": True, "n_trials": 10},
         )
+        # _run_job sets status="running" inside the job lock before
+        # spawning the supervisor — emulate that pre-condition (INV-A).
+        w.status = "running"
         w._supervise(runner, spec)
 
         assert w.status == "failed"
@@ -746,6 +749,8 @@ class TestRetuneSubprocessRejection:
         # Need data loaded so SubprocessJobRunner.run can resolve dataframe / target.
         df = pd.DataFrame({"x": list(range(50)), "y": [0, 1] * 25})
         w.load(df, target="y")
+        # Emulate _run_job's pre-supervise FSM transition (INV-A).
+        w.status = "running"
         with (
             patch("lizyml_widget.job_runner.run_job_subprocess", side_effect=fake_run),
             patch.object(w._service, "load_model_from_path"),
@@ -802,6 +807,8 @@ class TestRetuneSubprocessRejection:
                 model_path=None,
             )
 
+        # Emulate _run_job's pre-supervise FSM transition (INV-A).
+        w.status = "running"
         with (
             patch("lizyml_widget.job_runner.run_job_subprocess", side_effect=fake_run),
             patch.object(w._service, "load_model_from_path"),

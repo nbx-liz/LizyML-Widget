@@ -1021,11 +1021,28 @@ class LizyWidget(anywidget.AnyWidget):
 
         Single source of truth for status / traitlet updates during job
         execution — both ``ThreadJobRunner`` and ``SubprocessJobRunner``
-        use this supervisor. INV-A..F (issue #118) will be encoded as
-        runtime guards inside this method once #118 lands.
+        use this supervisor. Runtime invariants (BLUEPRINT §6.4 INV-A..F)
+        are encoded inline as ``assert`` guards; running under
+        ``python -O`` strips them, so production behaviour is unchanged.
         """
+        # INV-A entry: a supervisor only runs when status was set to "running"
+        # by ``_run_job`` under the job lock. Any other status means the
+        # caller violated the FSM (e.g., a stray supervisor thread).
+        assert self.status == "running", (
+            f"INV-A violated: supervisor entered with status={self.status!r}"
+        )
+        # INV-D entry: ``_run_job`` clears the cancel flag inside the job lock
+        # immediately before spawning this thread, so it must be clear here.
+        # If it's set we'd cancel the new job before its first tick.
+        assert not self._cancel_flag.is_set(), (
+            "INV-D violated: cancel flag carried over into a new job"
+        )
+
         start = time.monotonic()
         timer_stop = threading.Event()
+        # INV-E: track the highest progress.round seen so we can assert
+        # monotonicity across ``on_progress`` callbacks within this job.
+        last_round: list[int] = [0]
 
         def tick_elapsed() -> None:
             while not timer_stop.is_set():
@@ -1050,6 +1067,13 @@ class LizyWidget(anywidget.AnyWidget):
             # adapter's polling loop.
             if not is_subprocess and self._cancel_flag.is_set():
                 raise InterruptedError("Job cancelled by user")
+            # INV-E: round must be monotonic non-decreasing within a job.
+            round_no = extra.get("round")
+            if isinstance(round_no, int):
+                assert round_no >= last_round[0], (
+                    f"INV-E violated: round regressed {last_round[0]} -> {round_no}"
+                )
+                last_round[0] = round_no
             self.progress = _build_progress_payload(current, total, message, extra)
             self.elapsed_sec = round(time.monotonic() - start, 1)
 
@@ -1079,6 +1103,12 @@ class LizyWidget(anywidget.AnyWidget):
         finally:
             timer_stop.set()
             timer.join(timeout=2.0)
+            # INV-A exit: status FSM only allows terminal states once the
+            # supervisor returns. Catches any future code path that forgets
+            # to write the status.
+            assert self.status in {"completed", "failed"}, (
+                f"INV-A violated: terminal status invalid ({self.status!r})"
+            )
 
     def _apply_job_result(self, result: JobResult) -> None:
         """Project a runner's :class:`JobResult` onto traitlets."""
@@ -1091,6 +1121,16 @@ class LizyWidget(anywidget.AnyWidget):
                 "params": result.fit_summary.get("params", []),
             }
         if result.tune_summary:
+            # INV-F (BLUEPRINT §6.4): boundary_report.dims must list each
+            # search-space dim exactly once. Check before publishing so a
+            # backend regression surfaces here instead of as silent UI weirdness.
+            br = result.tune_summary.get("boundary_report")
+            if isinstance(br, dict):
+                dims = br.get("dims") or []
+                names = [d.get("name") for d in dims if isinstance(d, dict) and d.get("name")]
+                assert len(names) == len(set(names)), (
+                    f"INV-F violated: boundary_report.dims has duplicates: {names}"
+                )
             self.tune_summary = result.tune_summary
             # After tune, evaluate_table may exist if the model was
             # implicitly fitted on the best params — surface it as a
