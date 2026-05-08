@@ -740,6 +740,10 @@ class WidgetService:
         with self._model_lock:
             return self._model
 
+    def model_info(self, model: Any) -> dict[str, Any]:
+        """Return adapter-side metadata for the given model."""
+        return self._adapter.model_info(model)
+
     def classify_best_params(
         self, params: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -905,8 +909,8 @@ class WidgetService:
             defaults = contract.capabilities.get("cv_default_strategy", {})
             if task in defaults:
                 return str(defaults[task])
-        except Exception:
-            pass
+        except (AttributeError, KeyError, TypeError) as exc:
+            _log.debug("cv_default_strategy contract read failed: %s", exc)
         # Fallback
         return "stratified_kfold" if task in ("binary", "multiclass") else "kfold"
 
@@ -917,8 +921,8 @@ class WidgetService:
         try:
             contract = self._adapter.get_backend_contract()
             cv_defaults = contract.capabilities.get("cv_defaults", {})
-        except Exception:
-            pass
+        except (AttributeError, KeyError, TypeError) as exc:
+            _log.debug("cv_defaults contract read failed: %s", exc)
 
         return {
             "strategy": strategy,
