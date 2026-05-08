@@ -88,12 +88,13 @@ def _capture_log(logger: logging.Logger, level: int = logging.WARNING):
 class TestInfo:
     # P-027: adapter.__init__ now asserts lizyml is in the supported range,
     # so the sentinel version must fall within LIZYML_MIN/MAX.
-    @patch.dict("sys.modules", {"lizyml": MagicMock(__version__="0.9.1")})
+    # P-030: window bumped to >=0.10.0,<0.13.0.
+    @patch.dict("sys.modules", {"lizyml": MagicMock(__version__="0.12.0")})
     def test_info(self) -> None:
         adapter = LizyMLAdapter()
         info = adapter.info
         assert info.name == "lizyml"
-        assert info.version == "0.9.1"
+        assert info.version == "0.12.0"
 
 
 class TestConfigContractValidation:

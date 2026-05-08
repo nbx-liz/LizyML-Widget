@@ -129,10 +129,12 @@ class BackendAdapter(Protocol):
     def plot_inference(self, predictions: pd.DataFrame, plot_type: str) -> PlotData: ...
 
 
-#: Minimum supported lizyml version (inclusive). P-027: re-tune monitoring.
-LIZYML_MIN_VERSION = (0, 9, 0)
-#: Maximum supported lizyml version (exclusive).
-LIZYML_MAX_VERSION = (0, 10, 0)
+#: Minimum supported lizyml version (inclusive). P-030: bumped to 0.10.0
+#: because the Adapter assumes target_encoder-driven label dtype preservation
+#: (FitResult.target_encoder, FORMAT_VERSION=2 — added in lizyml 0.10).
+LIZYML_MIN_VERSION = (0, 10, 0)
+#: Maximum supported lizyml version (exclusive). P-030: covers 0.10 / 0.11 / 0.12.
+LIZYML_MAX_VERSION = (0, 13, 0)
 
 
 def _parse_lizyml_version(raw: str) -> tuple[int, ...]:
