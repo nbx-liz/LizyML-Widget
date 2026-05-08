@@ -32,21 +32,6 @@ _log = logging.getLogger(__name__)
 
 _VALID_COL_TYPES: frozenset[str] = frozenset({"numeric", "categorical"})
 
-#: Fallback CV strategies when ``backend_contract`` is not yet loaded.
-#: TODO(#130): drop this in favour of a structured BACKEND_NOT_READY error.
-_FALLBACK_STRATEGIES: frozenset[str] = frozenset(
-    {
-        "kfold",
-        "stratified_kfold",
-        "time_series",
-        "group_time_series",
-        "purged_time_series",
-        "group_kfold",
-        "stratified_group_kfold",
-        "blocked_group_kfold",
-    }
-)
-
 #: Safe path pattern for ``patch_config``: dotted identifiers, no dunder.
 _SAFE_PATH_RE = re.compile(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$")
 _VALID_PATCH_OPS: frozenset[str] = frozenset({"set", "unset", "merge"})
@@ -141,8 +126,21 @@ class WidgetActionDispatcher:
     def handle_update_cv(self, payload: dict[str, Any]) -> None:
         w = self._widget
         strategy = payload.get("strategy", "kfold")
+        # #130: the widget no longer keeps a hardcoded fallback list of CV
+        # strategies. The backend contract is the single source of truth;
+        # if it is missing or incomplete the action fails fast so a backend
+        # that adds a new CV strategy is never silently rejected against an
+        # outdated allowlist.
         valid = w.backend_contract.get("capabilities", {}).get("cv_strategies")
-        valid_set = frozenset(valid) if valid else _FALLBACK_STRATEGIES
+        if not valid:
+            w.error = {
+                "code": "BACKEND_NOT_READY",
+                "message": (
+                    "Backend contract is not loaded yet. Call load(df) before configuring CV."
+                ),
+            }
+            return
+        valid_set = frozenset(valid)
         if strategy not in valid_set:
             w.error = {"code": "CV_ERROR", "message": f"Invalid strategy: {strategy!r}"}
             return

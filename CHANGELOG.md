@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overwriting Python's update. The ``[config]`` ``useEffect`` now
   cancels the pending debounce timer before resyncing local state.
 
+### Changed
+- **Drop hardcoded CV-strategy fallback in widget**
+  ([#130](https://github.com/nbx-liz/LizyML-Widget/issues/130)).
+  `LizyWidget._handle_update_cv` no longer keeps a `_FALLBACK_STRATEGIES`
+  frozenset for the case where ``backend_contract`` is unloaded.
+  The contract is now the single source of truth: a missing
+  ``capabilities.cv_strategies`` returns a structured
+  ``BACKEND_NOT_READY`` error instead of silently validating against an
+  outdated allowlist. CLAUDE.md §8 (no backend-specific option sets in
+  Widget / JS) is respected uniformly.
+
 ### Added
 - **Runtime guards for state-machine invariants**
   ([#135](https://github.com/nbx-liz/LizyML-Widget/issues/135)).
