@@ -1,5 +1,136 @@
 ## LizyML-Widget 仕様変更履歴
 
+### P-035: TuningSummary に config_snapshot / ui_snapshot を追加
+
+- **日付**: 2026-05-08
+- **ステータス**: 提案
+- **関連 Issue**: [#132](https://github.com/nbx-liz/LizyML-Widget/issues/132)
+- **背景**:
+  - 現状、`LizyWidget` は `_tune_config_snapshot` / `_tune_ui_snapshot` の 2 個の
+    private 属性を保持し、`_run_job("tune")` 開始時に当時の `full_config` と `self.config`
+    のコピーを書き込む（[widget.py:961-963](https://github.com/nbx-liz/LizyML-Widget/blob/develop/src/lizyml_widget/widget.py#L961-L963)）。
+  - これらは後の `_handle_apply_best_params` で `service.apply_best_params(..., tune_snapshot=...,
+    tune_ui_snapshot=...)` に渡される（[widget.py:823-840](https://github.com/nbx-liz/LizyML-Widget/blob/develop/src/lizyml_widget/widget.py#L823-L840)）。
+  - 結果として Widget が "ジョブ実行時の時系列スナップショット" を保持しており、
+    CLAUDE.md §4 が定義する Widget の責務（traitlets 定義 / Action 処理 / スレッド管理のみ）に違反する。
+    また `tune` と `apply_best_params` の間に `load()` / `set_target()` 等が走るとスナップショットが
+    silently stale になり、apply 結果が誤った config を生成する隠れた時系列依存が発生する。
+- **提案内容**:
+  - 共通型 `TuningSummary`（`src/lizyml_widget/types.py`）に 2 つの読み取り専用フィールドを追加:
+    ```python
+    @dataclass(frozen=True)
+    class TuningSummary:
+        # ... existing fields ...
+        config_snapshot: Mapping[str, Any] = field(default_factory=dict)  # canonical full_config
+        ui_snapshot: Mapping[str, Any] = field(default_factory=dict)      # widget-side ui config
+    ```
+  - `BackendAdapter.tune` / `Adapter.tune` は `TuningSummary(config_snapshot=...,
+    ui_snapshot=...)` を返すよう更新する（adapter は呼び出し元から受け取った canonical config と
+    ui config を Result に閉じ込める）。
+  - `WidgetService.tune` は `_tune_model` だけでなく最新 `TuningSummary` も保持し、
+    `apply_best_params` は `tune_snapshot=...` / `tune_ui_snapshot=...` の引数を取らず、
+    Service が保持する最新 summary から読み出す。
+  - `LizyWidget` から `_tune_config_snapshot` / `_tune_ui_snapshot` を削除。
+- **影響範囲**:
+  - `src/lizyml_widget/types.py` — `TuningSummary` に 2 フィールド追加（共通型変更：change gate）
+  - `src/lizyml_widget/adapter.py` — `tune` 結果に snapshot を埋める
+  - `src/lizyml_widget/service.py` — `apply_best_params` のシグネチャ変更（snapshot 引数削除）
+  - `src/lizyml_widget/widget.py` — `_tune_*_snapshot` 属性削除、`_handle_apply_best_params` 簡素化
+  - `BLUEPRINT.md` §3.2 / §6 — 共通型と Widget 責務の対応更新
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]`
+  - `tests/test_widget_actions.py`, `tests/test_service*.py` — `apply_best_params` のシグネチャに合わせて更新
+- **互換性**:
+  - 公開 Python API（`w.tune()`, `w.apply_best_params(...)`）は変わらない。
+  - `TuningSummary` は dataclass で `default_factory=dict` を持つため、既存テストが
+    construct する `TuningSummary(...)` は引数を増やさなくても通る（後方互換）。
+  - `Service.apply_best_params` の `tune_snapshot=` / `tune_ui_snapshot=` 引数を削除するのは
+    Widget 内部の呼び出し元のみ（外部公開なし）。
+- **代替案（却下）**:
+  - **案A: snapshot は Widget 側に保持したままにする** — CLAUDE.md §4 の Widget 責務違反を
+    残し、tune/apply 間の競合バグの根本原因が解消されない。
+  - **案B: snapshot を `_tune_model` の attribute として lizyml model に書き込む**
+    — `model._widget_config` で過去に同種の私有書き込みを禁じた経緯（#116）がある。
+    Adapter の id-based registry に置く案も検討したが、TuningSummary（既に DTO として存在）に
+    含めるほうが意味論的に正しい。
+- **受け入れ基準**:
+  - `TuningSummary` に `config_snapshot` / `ui_snapshot` フィールドが追加され、Adapter が埋める。
+  - `LizyWidget._tune_config_snapshot` / `_tune_ui_snapshot` が削除される。
+  - `Service.apply_best_params(params, current_config)` のシグネチャは外部から見て不変
+    （内部実装が `_last_tune_summary` から snapshot を取り出す）。
+  - 新規テスト: `apply_best_params` 直前に `load()` が走った場合に、stale な snapshot から
+    再構築するのではなく明示エラー（"tune summary cleared by load"）を返す。
+  - 既存 `tests/test_widget_actions.py::test_apply_best_params_*` が引き続き green。
+  - `mypy --strict` 通過。
+
+---
+
+### P-034: BackendContract に UI defaults / step_map を追加
+
+- **日付**: 2026-05-08
+- **ステータス**: 提案
+- **関連 Issue**: [#131](https://github.com/nbx-liz/LizyML-Widget/issues/131)
+- **背景**:
+  - PR #119 / #121 で JS から backend 固有 option set / parameter catalog をハードコードする
+    箇所をほぼ撤廃したが、**数値デフォルト** と **step 値** は対象外だった:
+    - `DataTab.tsx`: `n_splits ?? 5`, `random_state ?? 42`, `gap ?? 0`, `purge_gap ?? 0`,
+      `embargo ?? 0`
+    - `TuneSubTab.tsx` / `SearchSpace.tsx`: `n_trials ?? 10`, `_precision_at_k_k ?? 10`
+    - `ModelEditors.tsx`, `SearchSpace.tsx`: feature weight `step={0.1}`
+    - `RetuneControls.tsx`: `boundary_threshold` `step={0.01}`
+  - これらは "payload 未設定時のフォールバック" として `??` 演算子で書かれているが、
+    backend 仕様（lizyml）が変わると JS 側のコード変更なしには反映されない。
+    CLAUDE.md §8 の "JS に backend 固有値をハードコードしない" 原則を厳密に守ると違反となる。
+- **提案内容**:
+  - `BackendContract.ui_schema`（`src/lizyml_widget/adapter_contract.py`）に 2 つの dict を追加:
+    ```python
+    ui_schema["defaults"] = {
+        "cv": {
+            "n_splits": 5, "random_state": 42, "gap": 0,
+            "purge_gap": 0, "embargo": 0,
+        },
+        "tune": {"n_trials": 10},
+        "metric_params": {"precision_at_k_k": 10},
+    }
+    ui_schema["step_map"] = {
+        # 既存エントリに加えて:
+        "feature_weights": 0.1,
+        "boundary_threshold": 0.01,
+    }
+    ```
+  - JS 側で `??` リテラルフォールバックを撤廃し、`capabilities.ui_schema.defaults.cv.n_splits`
+    / `step_map.feature_weights` 等を look-up する。
+- **影響範囲**:
+  - `src/lizyml_widget/adapter_schema.py` または `adapter_contract.py` — `defaults` / `step_map` 拡張
+    （**change gate**: data contract / backend contract 変更）
+  - `js/src/tabs/DataTab.tsx` / `TuneSubTab.tsx` / `components/SearchSpace.tsx`
+    / `ModelEditors.tsx` / `RetuneControls.tsx` — `??` フォールバック削除
+  - `tests/test_adapter_contract.py` 等 — contract shape の golden test 追加
+  - `js/src/__tests__/` — contract-driven レンダリングのケース追加
+  - `BLUEPRINT.md` §3.2 — backend contract 形状の更新
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]`
+- **互換性**:
+  - `BackendContract` schema_version は据え置き（後方互換な追加のみ）。
+  - 既存の `step_map` キーには手を入れず、`feature_weights` / `boundary_threshold` を**追加**するのみ。
+  - 新規 `defaults` キーは optional：JS 側はキー欠落時に既存の `??` 値（互換のため一時保持）を使う
+    実装にする → 移行完了 PR で `??` を全削除。
+- **代替案（却下）**:
+  - **案A: 数値リテラル程度なら JS にハードコードしてよい** — 既存 PR #119 の方針と矛盾し、
+    "backend 固有値は contract 由来" の不変条件を弱める。
+  - **案B: 個別の traitlet で defaults を渡す** — 既に `backend_contract` 経由で
+    capabilities が流れているため、新 traitlet を増やすと sync 経路が増えて煩雑になる。
+- **受け入れ基準**:
+  - `BackendContract.ui_schema.defaults` と `step_map` の追加分が adapter から流れ、
+    `tests/test_adapter_contract.py`（または `test_frontend_contract.py`）の golden test で
+    shape が固定される。
+  - JS 側の `?? 5`, `?? 10`, `?? 42`, `step={0.1}`, `step={0.01}` リテラルが Issue に列挙された
+    すべてのファイルから消える（grep で残存 0）。
+  - `pnpm test:coverage` の vitest threshold（statements 75% / branches 70%）を維持。
+  - `js/src/__tests__/` で contract-driven レンダリング経路を最低 1 ケースずつ検証。
+
+---
+
 ### P-033: 状態機械不変条件（INV-A..F）の宣言と enforcement
 
 - **日付**: 2026-05-08
