@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Widget action dispatcher extracted to `widget_actions.py`**
+  ([#127](https://github.com/nbx-liz/LizyML-Widget/issues/127)).
+  Follow-up to #117. All 19 ``_handle_*`` action handlers now live in
+  a new ``WidgetActionDispatcher`` class in
+  ``src/lizyml_widget/widget_actions.py``. ``LizyWidget`` retains
+  ``_handle_custom_msg`` / ``_on_action`` as the JS-facing dispatch
+  entry points and delegates to ``self._dispatcher.dispatch(...)``.
+  ``widget.py`` shrinks from 1158 → 788 lines, satisfying the
+  CLAUDE.md §8 < 800 ceiling. A ``__getattr__`` proxy keeps the legacy
+  ``_handle_*`` names callable so existing tests need no changes.
+
 ### Fixed
 - **ConfigTab debounce / traitlet sync race**
   ([#136](https://github.com/nbx-liz/LizyML-Widget/issues/136)).
