@@ -108,6 +108,8 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                     "rmse",
                     "quantile",
                     "mape",
+                    "smape",
+                    "wape",
                     "huber",
                     "fair",
                     "poisson",

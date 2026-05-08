@@ -30,6 +30,9 @@ EXPECTED_REGRESSION = {
     # LizyML feval
     "r2",
     "rmsle",
+    # P-030: zero-tolerant percentage-style metrics added in lizyml 0.11.
+    "smape",
+    "wape",
 }
 
 EXPECTED_BINARY = {
