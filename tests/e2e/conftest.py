@@ -131,3 +131,50 @@ def learning_curve_page(
 
     yield page
     page.close()
+
+
+def _open_widget_notebook(base: str, token: str, page: Page, notebook: str) -> Page:
+    """Open a notebook, run all cells, wait for the widget root."""
+    page.goto(f"{base}/lab/tree/{notebook}?token={token}")
+    page.wait_for_selector(".jp-Notebook", timeout=30_000)
+    page.wait_for_timeout(3_000)  # Wait for kernel connection
+
+    page.locator(".lm-MenuBar-itemLabel", has_text="Run").click()
+    page.wait_for_timeout(500)
+    page.get_by_text("Run All Cells", exact=True).click()
+
+    page.wait_for_selector(".lzw-app", timeout=60_000)
+    return page
+
+
+@pytest.fixture()
+def multiclass_widget_page(jupyter_server: dict[str, str | int], page: Page) -> Page:
+    """#114 Phase B: open the multiclass-with-string-labels notebook.
+
+    Used by `test_p030_compat.py` to verify lizyml 0.10's TargetEncoder
+    decoding round-trips through the widget so prediction labels render
+    as the original strings (e.g. ``setosa`` / ``versicolor`` /
+    ``virginica``) rather than int codes.
+    """
+    return _open_widget_notebook(
+        str(jupyter_server["url"]),
+        str(jupyter_server["token"]),
+        page,
+        "test_multiclass_strings.ipynb",
+    )
+
+
+@pytest.fixture()
+def regression_smape_wape_page(jupyter_server: dict[str, str | int], page: Page) -> Page:
+    """#114 Phase B: open the regression notebook configured with smape/wape.
+
+    Used by `test_p030_compat.py` to verify P-030's smape / wape regression
+    metrics surface in the Search Space chip group and learning-curve
+    switcher.
+    """
+    return _open_widget_notebook(
+        str(jupyter_server["url"]),
+        str(jupyter_server["token"]),
+        page,
+        "test_regression_smape_wape.ipynb",
+    )
