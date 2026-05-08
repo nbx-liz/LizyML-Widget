@@ -67,7 +67,7 @@ class TestTuneProgress:
         df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
 
-        def mock_tune(config: Any, *, on_progress: Any = None) -> Any:
+        def mock_tune(config: Any, *, on_progress: Any = None, **_kwargs: Any) -> Any:
             # Capture progress calls and return a mock summary
             return TuningSummary(
                 best_params={"lr": 0.01},

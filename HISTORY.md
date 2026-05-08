@@ -2,8 +2,8 @@
 
 ### P-035: TuningSummary に config_snapshot / ui_snapshot を追加
 
-- **日付**: 2026-05-08
-- **ステータス**: 提案
+- **日付**: 2026-05-08（提案）/ 2026-05-09（決定・実装）
+- **ステータス**: 決定（実装済み — PR #132 → develop）
 - **関連 Issue**: [#132](https://github.com/nbx-liz/LizyML-Widget/issues/132)
 - **背景**:
   - 現状、`LizyWidget` は `_tune_config_snapshot` / `_tune_ui_snapshot` の 2 個の
@@ -62,6 +62,22 @@
     再構築するのではなく明示エラー（"tune summary cleared by load"）を返す。
   - 既存 `tests/test_widget_actions.py::test_apply_best_params_*` が引き続き green。
   - `mypy --strict` 通過。
+- **実装ノート（2026-05-09）**:
+  - `TuningSummary` に `config_snapshot` / `ui_snapshot` を追加（dataclass のため
+    `default_factory=dict` で後方互換）。
+  - `WidgetService.tune` は新しく `ui_snapshot=` kwarg を受け取り、Adapter 結果を
+    `dataclasses.replace` で `config_snapshot` / `ui_snapshot` 入りに差し替えて
+    `_last_tune_summary` に格納する（Service 内 lock 配下）。
+  - `Service.apply_best_params` は `tune_snapshot=` / `tune_ui_snapshot=` の kwarg を
+    完全削除。`_last_tune_summary` がなければ `current_config` ベース、
+    `load_data` 後の stale 状態では `ValueError("tune summary cleared by load …")` を発火。
+  - `JobSpec.ui_snapshot` を新設し、Widget の `_run_job` で
+    `copy.deepcopy(dict(self.config))` を tune ジョブのみ詰める。
+  - `SubprocessJobRunner` は `service.record_subprocess_tune_summary(...)` 経由で
+    親プロセス側 Service に TuningSummary を再構築する（subprocess 経路は別 process なので
+    `service.tune` 側で記録できないため）。
+  - `LizyWidget.__init__` から `_tune_config_snapshot` / `_tune_ui_snapshot` を削除、
+    `WidgetActionDispatcher.handle_apply_best_params` も簡素化（snapshot 受け渡しなし）。
 
 ---
 

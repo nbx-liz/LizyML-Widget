@@ -332,7 +332,7 @@ class TestWidgetProgressTraitletRoundFields:
 
         w = self._make_widget()
 
-        def mock_tune(config: Any, *, on_progress: Any = None) -> Any:
+        def mock_tune(config: Any, *, on_progress: Any = None, **_kwargs: Any) -> Any:
             assert on_progress is not None
             # Simulate a re-tune round 2 progress update.
             on_progress(

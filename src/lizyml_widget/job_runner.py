@@ -59,11 +59,16 @@ class JobSpec:
     it to the selected runner. Snapshotting ``config`` and
     ``retune_kwargs`` per-spec eliminates the cross-thread state handoff
     that the P-028 HIGH-2 review fix originally addressed.
+
+    P-035: ``ui_snapshot`` carries the widget-side ``config`` traitlet at
+    job-start time, so tune jobs can land snapshots inside the
+    ``TuningSummary`` returned to the supervisor.
     """
 
     job_type: str
     config: dict[str, Any]
     retune_kwargs: dict[str, Any] | None = None
+    ui_snapshot: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -174,7 +179,12 @@ class ThreadJobRunner:
             else f"Tuning {n_trials} trials..."
         )
         on_progress(0, n_trials, msg, round=initial_round)
-        summary_t = self._service.tune(spec.config, on_progress=on_progress, **tune_kwargs)
+        summary_t = self._service.tune(
+            spec.config,
+            ui_snapshot=spec.ui_snapshot,
+            on_progress=on_progress,
+            **tune_kwargs,
+        )
         tune_summary = {
             "best_params": summary_t.best_params,
             "best_score": summary_t.best_score,
@@ -265,6 +275,16 @@ class SubprocessJobRunner:
                     self._service.load_model_from_path(sp_result.model_path)
                 except Exception as load_err:  # noqa: BLE001
                     _log.warning("Model load from subprocess failed: %s", load_err)
+
+            # P-035: subprocess tune does not populate parent-side
+            # ``_last_tune_summary`` automatically; reconstruct it on the
+            # parent so ``apply_best_params`` works.
+            if spec.job_type == "tune" and sp_result.tune_summary:
+                self._service.record_subprocess_tune_summary(
+                    sp_result.tune_summary,
+                    config_snapshot=spec.config,
+                    ui_snapshot=spec.ui_snapshot,
+                )
 
             return JobResult(
                 job_type=spec.job_type,

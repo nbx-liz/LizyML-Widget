@@ -440,8 +440,10 @@ class TestApplyBestParamsSnapshot:
     """Tests for Apply to Fit config snapshot restoration (P-005)."""
 
     def test_apply_best_params_restores_tune_snapshot(self) -> None:
-        """When tune snapshot exists, Apply to Fit restores it."""
+        """When the service holds a TuningSummary, Apply to Fit restores its snapshot."""
         import copy
+
+        from lizyml_widget.types import TuningSummary
 
         w = _make_widget()
         df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
@@ -458,7 +460,17 @@ class TestApplyBestParamsSnapshot:
             "split": {"method": "kfold"},
             "task": "binary",
         }
-        w._tune_config_snapshot = copy.deepcopy(snapshot)
+        # P-035: the snapshot now lives on the service's TuningSummary.
+        w._service._last_tune_summary = TuningSummary(
+            best_params={},
+            best_score=0.0,
+            trials=[],
+            metric_name="auc",
+            direction="maximize",
+            config_snapshot=copy.deepcopy(snapshot),
+            ui_snapshot={},
+        )
+        w._service._tune_summary_invalidated_by_load = False
 
         # Change config after tune
         w.config = {
@@ -483,6 +495,8 @@ class TestApplyBestParamsSnapshot:
         """Snapshot restoration should not include data/features/split/task."""
         import copy
 
+        from lizyml_widget.types import TuningSummary
+
         w = _make_widget()
         df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
         w.load(df, target="y")
@@ -494,7 +508,16 @@ class TestApplyBestParamsSnapshot:
             "split": {"method": "kfold"},
             "task": "binary",
         }
-        w._tune_config_snapshot = copy.deepcopy(snapshot)
+        w._service._last_tune_summary = TuningSummary(
+            best_params={},
+            best_score=0.0,
+            trials=[],
+            metric_name="auc",
+            direction="maximize",
+            config_snapshot=copy.deepcopy(snapshot),
+            ui_snapshot={},
+        )
+        w._service._tune_summary_invalidated_by_load = False
 
         w.action = {
             "type": "apply_best_params",
