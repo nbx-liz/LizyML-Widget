@@ -876,6 +876,10 @@ class LizyMLAdapter:
     ) -> PredictionSummary:
         import numpy as np
 
+        # P-030: lizyml>=0.10 returns ``result.pred`` already decoded back to
+        # the original target dtype (e.g. "Adelie" rather than int code 2)
+        # via ``FitResult.target_encoder``. Pandas preserves that dtype when
+        # we wrap it directly, so no extra conversion is needed here.
         result = model.predict(data, return_shap=return_shap)
         df = pd.DataFrame({"pred": result.pred})
 
