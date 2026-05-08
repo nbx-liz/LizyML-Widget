@@ -3,6 +3,7 @@ import { Accordion } from "../components/Accordion";
 import { BlockedGroupKFold } from "../components/BlockedGroupKFold";
 import { ColumnTable } from "../components/ColumnTable";
 import { NumericStepper } from "../components/NumericStepper";
+import { humaniseSnake } from "../utils/humanise";
 
 interface CvInfo {
   strategy: string;
@@ -41,24 +42,30 @@ interface DataTabProps {
   backendContract?: Record<string, any> | null;
 }
 
-const CV_STRATEGIES = [
-  { value: "kfold", label: "KFold" },
-  { value: "stratified_kfold", label: "StratifiedKFold" },
-  { value: "group_kfold", label: "GroupKFold" },
-  { value: "stratified_group_kfold", label: "StratifiedGroup" },
-  { value: "time_series", label: "TimeSeriesSplit" },
-  { value: "purged_time_series", label: "PurgedTimeSeriesSplit" },
-  { value: "group_time_series", label: "GroupTimeSeriesSplit" },
-  { value: "blocked_group_kfold", label: "BlockedGroup" },
+/* Fallback Sets used when backend_contract does not provide cv_strategy_fields.
+ * Production runs always supply the contract (see adapter_contract.py); these
+ * fallbacks exist only so unit-test fixtures that omit the contract still
+ * render meaningful UI. They are NOT a source of truth — adding a new strategy
+ * in the backend automatically surfaces in the dropdown via the contract. */
+const FALLBACK_CV_STRATEGIES = [
+  "kfold",
+  "stratified_kfold",
+  "group_kfold",
+  "stratified_group_kfold",
+  "time_series",
+  "purged_time_series",
+  "group_time_series",
+  "blocked_group_kfold",
 ];
-
-/* Fallback Sets used when backend_contract does not provide cv_strategy_fields */
 const FALLBACK_NEEDS_GROUP = new Set(["group_kfold", "stratified_group_kfold", "group_time_series"]);
 const FALLBACK_NEEDS_TIME = new Set(["time_series", "purged_time_series", "group_time_series"]);
 const FALLBACK_NEEDS_RANDOM_STATE = new Set(["kfold", "stratified_kfold", "stratified_group_kfold"]);
+const FALLBACK_NEEDS_SHUFFLE = new Set(["kfold", "stratified_kfold"]);
 const FALLBACK_NEEDS_GAP = new Set(["time_series", "group_time_series"]);
 const FALLBACK_NEEDS_PURGE = new Set(["purged_time_series"]);
 const FALLBACK_IS_TIME_SERIES = new Set(["time_series", "purged_time_series", "group_time_series"]);
+const FALLBACK_IS_BLOCKED = new Set(["blocked_group_kfold"]);
+const FALLBACK_BLOCKED_FIELD = "blocks_col";
 
 /** Derive a Set of strategy names whose fields include any of the given field names. */
 function deriveStrategiesWithField(
@@ -74,9 +81,15 @@ function deriveStrategiesWithField(
 
 export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAction, backendContract }: DataTabProps) {
   // Read CV strategy fields from backend contract, derive Sets with fallbacks
-  const cvStrategyFields: Record<string, string[]> =
-    backendContract?.capabilities?.cv_strategy_fields ?? {};
+  const capabilities: Record<string, any> = backendContract?.capabilities ?? {};
+  const cvStrategyFields: Record<string, string[]> = capabilities.cv_strategy_fields ?? {};
   const hasContractFields = Object.keys(cvStrategyFields).length > 0;
+  const contractStrategies: string[] | undefined = capabilities.cv_strategies;
+  const cvStrategyLabels: Record<string, string> = capabilities.cv_strategy_labels ?? {};
+
+  // Strategy list: prefer backend contract, fall back to historical literal so
+  // unit-test fixtures without a contract still render a dropdown.
+  const strategyList: string[] = contractStrategies ?? FALLBACK_CV_STRATEGIES;
 
   const NEEDS_GROUP = hasContractFields
     ? deriveStrategiesWithField(cvStrategyFields, ["group_col", "groups_col"])
@@ -87,6 +100,9 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
   const NEEDS_RANDOM_STATE = hasContractFields
     ? deriveStrategiesWithField(cvStrategyFields, ["random_state"])
     : FALLBACK_NEEDS_RANDOM_STATE;
+  const NEEDS_SHUFFLE = hasContractFields
+    ? deriveStrategiesWithField(cvStrategyFields, ["shuffle"])
+    : FALLBACK_NEEDS_SHUFFLE;
   const NEEDS_GAP = hasContractFields
     ? deriveStrategiesWithField(cvStrategyFields, ["gap"])
     : FALLBACK_NEEDS_GAP;
@@ -96,9 +112,19 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
   const IS_TIME_SERIES = hasContractFields
     ? deriveStrategiesWithField(cvStrategyFields, ["max_train_size", "max_test_size"])
     : FALLBACK_IS_TIME_SERIES;
+  const IS_BLOCKED = hasContractFields
+    ? deriveStrategiesWithField(cvStrategyFields, [FALLBACK_BLOCKED_FIELD])
+    : FALLBACK_IS_BLOCKED;
   const shape = dfInfo.shape ?? [0, 0];
   const columns = dfInfo.columns ?? [];
-  const cv = dfInfo.cv ?? { strategy: "kfold", n_splits: 5 };
+  // Fallback strategy for when cv is missing entirely. Prefer the contract's
+  // default-by-task; otherwise the first strategy advertised by the backend.
+  const cvDefaultByTask: Record<string, string> = capabilities.cv_default_strategy ?? {};
+  const fallbackStrategy =
+    (dfInfo.task && cvDefaultByTask[dfInfo.task]) ||
+    strategyList[0] ||
+    FALLBACK_CV_STRATEGIES[0];
+  const cv = dfInfo.cv ?? { strategy: fallbackStrategy, n_splits: 5 };
   const fs = dfInfo.feature_summary;
   const featureCols = columns.filter((c: any) => !c.excluded).map((c: any) => c.name);
   const hasTarget = Boolean(dfInfo.target);
@@ -169,20 +195,23 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
         <div class="lzw-form-row" style="align-items:flex-start">
           <label class="lzw-label">Strategy</label>
           <div class="lzw-chip-group">
-            {CV_STRATEGIES.map((s) => (
-              <button
-                key={s.value}
-                type="button"
-                class={`lzw-chip lzw-chip--square ${cv.strategy === s.value ? "lzw-chip--active" : ""}`}
-                aria-pressed={cv.strategy === s.value}
-                onClick={() => sendCv({ ...cv, strategy: s.value })}
-              >
-                {s.label}
-              </button>
-            ))}
+            {strategyList.map((value) => {
+              const label = cvStrategyLabels[value] ?? humaniseSnake(value);
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  class={`lzw-chip lzw-chip--square ${cv.strategy === value ? "lzw-chip--active" : ""}`}
+                  aria-pressed={cv.strategy === value}
+                  onClick={() => sendCv({ ...cv, strategy: value })}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
-        {cv.strategy === "blocked_group_kfold" ? (
+        {IS_BLOCKED.has(cv.strategy) ? (
           <BlockedGroupKFold
             cv={cv}
             allColumns={featureCols}
@@ -213,7 +242,7 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
             />
           </div>
         )}
-        {cv.strategy === "kfold" && (
+        {NEEDS_SHUFFLE.has(cv.strategy) && (
           <div class="lzw-form-row">
             <label class="lzw-label">Shuffle</label>
             <input

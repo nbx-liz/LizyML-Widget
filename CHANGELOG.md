@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Backend contract**: new `cv_strategy_labels` and `additional_params_hidden_keys`
+  capabilities ([#119](https://github.com/nbx-liz/LizyML-Widget/issues/119)).
+  Adding a new CV strategy in `adapter_contract.py` now surfaces in the UI dropdown
+  without any JS edit; a `humaniseSnake()` fallback covers labels missing from the map.
+
 ### Changed
 - **Code quality**: Closed two HIGH-tier code-review findings ([#115](https://github.com/nbx-liz/LizyML-Widget/issues/115)).
   - `LizyWidget.model_info` now routes through a new `WidgetService.model_info(model)`
@@ -15,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `WidgetService._default_cv_state`, and `_job_worker`'s tune-only fit-summary
     fallback have been narrowed to documented exception types and now leave a
     `_log.debug` breadcrumb instead of swallowing silently.
+- **JS no longer hardcodes LightGBM-specific catalogs** ([#119](https://github.com/nbx-liz/LizyML-Widget/issues/119)).
+  - `DataTab.tsx`: dropped the `CV_STRATEGIES` literal — strategy chips now derive
+    from `backend_contract.capabilities.cv_strategies`/`cv_strategy_labels`. The
+    `cv.strategy === "kfold"` and `cv.strategy === "blocked_group_kfold"`
+    equality literals are replaced with capability-driven checks.
+  - `FitSubTab.tsx`: `GROUP_STRATEGIES`/`TIME_STRATEGIES` literals replaced with
+    `cv_strategy_fields`-driven derivation.
+  - `ModelEditors.tsx`: `HANDLED_MODEL_FIELDS` static set is gone — derived from
+    `search_space_catalog` (smart_params group) plus structural keys. The
+    `num_leaves ?? 256` defaults are removed; default flows from the catalog.
+    The `verbose / num_threads` exclusion comes from
+    `additional_params_hidden_keys`.
 
 ## [0.9.0] - 2026-05-08
 
