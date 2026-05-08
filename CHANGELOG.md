@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-08
+
+### Changed
+- **Required lizyml version bumped to `>=0.10.0,<0.13`** (P-030, [#112](https://github.com/nbx-liz/LizyML-Widget/issues/112))
+  — the widget now admits lizyml 0.10 / 0.11 / 0.12. Lower bound is raised to
+  0.10.0 because the Adapter relies on lizyml 0.10's `FitResult.target_encoder`
+  for label dtype preservation; running the new code paths against 0.9.x would
+  surface late-bound `AttributeError`. Existing users on lizyml 0.9.x must
+  upgrade alongside the widget.
+
+### Added
+- **Non-numeric classification target round-trip** (P-030) — lizyml 0.10
+  auto-encodes non-numeric `y` (`object` / `pd.StringDtype` / `category` / `bool`)
+  via `TargetEncoder` and decodes predictions back to the original label dtype.
+  The widget now passes that contract through transparently: `LizyWidget.predict()`
+  on a multiclass model trained on string labels returns `pred` values like
+  `"Adelie"` / `"Chinstrap"` rather than int codes. New regression test
+  `test_reg_112_target_encoder_roundtrip.py` locks this in.
+- **smape / wape regression metrics** (P-030) — lizyml 0.11's zero-tolerant
+  percentage-style regression metrics are now exposed in the BackendContract
+  `model_metric.regression` option set, surfaced as Search Space / Model tab
+  metric chips, and routed correctly by tune direction resolution
+  (`MODEL_METRIC_TO_EVAL` identity mappings + `minimize` direction).
+
+### Compatibility
+- The widget's compat-matrix doc (`docs/VERSION_COMPAT.md`) gains a new top
+  row pinning `lizyml-widget 0.9.x` to `lizyml >=0.10.0,<0.13`. Older widgets
+  remain documented for past-release reference.
+- The 0.12 resumable-tuning Optuna storage is **not** surfaced through the
+  widget UI in this release — that exposure is tracked separately and will
+  ship under a follow-up Proposal.
+
 ## [0.8.0] - 2026-04-12
 
 ### Added
