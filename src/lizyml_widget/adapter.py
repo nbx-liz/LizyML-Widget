@@ -26,6 +26,14 @@ from .adapter_schema import (
     prepare_tune_overrides,
     strip_for_backend,
 )
+from .adapter_views import (
+    LMBoundaryReportView,
+    LMRoundView,
+    view_fit_result,
+    view_prediction_result,
+    view_tune_progress,
+    view_tuning_result,
+)
 from .types import (
     BackendContract,
     BackendInfo,
@@ -220,8 +228,8 @@ def _serialize_trials(trials: Any) -> list[dict[str, Any]]:
     return out
 
 
-def _serialize_rounds(rounds: Any) -> list[dict[str, Any]]:
-    """Convert a tuple of ``RoundSummary`` into plain dicts.
+def _serialize_rounds(rounds: Sequence[LMRoundView]) -> list[dict[str, Any]]:
+    """Convert a tuple of typed round views into JSON-serialisable dicts.
 
     ``space_snapshot`` is stripped because each entry is a dataclass
     (``FloatDim`` / ``IntDim`` / ``CategoricalDim``) that anywidget cannot
@@ -229,42 +237,40 @@ def _serialize_rounds(rounds: Any) -> list[dict[str, Any]]:
     (scores, expanded dim names); full space snapshots can be retrieved
     from ``boundary_report`` if needed in a future iteration.
     """
-    out: list[dict[str, Any]] = []
-    for r in rounds or ():
-        out.append(
-            {
-                "round": int(getattr(r, "round", 0)),
-                "n_trials": int(getattr(r, "n_trials", 0)),
-                "best_score_before": getattr(r, "best_score_before", None),
-                "best_score_after": float(getattr(r, "best_score_after", 0.0)),
-                "expanded_dims": list(getattr(r, "expanded_dims", ()) or ()),
-            }
-        )
-    return out
+    return [
+        {
+            "round": r.round,
+            "n_trials": r.n_trials,
+            "best_score_before": r.best_score_before,
+            "best_score_after": r.best_score_after,
+            "expanded_dims": list(r.expanded_dims),
+        }
+        for r in rounds
+    ]
 
 
-def _serialize_boundary_report(report: Any) -> dict[str, Any] | None:
-    """Convert ``BoundaryReport`` into a JSON-friendly dict (or None)."""
+def _serialize_boundary_report(
+    report: LMBoundaryReportView | None,
+) -> dict[str, Any] | None:
+    """Convert a typed boundary-report view into a JSON-friendly dict (or None)."""
     if report is None:
         return None
-    dims_out: list[dict[str, Any]] = []
-    for d in getattr(report, "dims", ()) or ():
-        dims_out.append(
-            {
-                "name": getattr(d, "name", ""),
-                "best_value": getattr(d, "best_value", None),
-                "low": getattr(d, "low", None),
-                "high": getattr(d, "high", None),
-                "position_pct": getattr(d, "position_pct", None),
-                "edge": getattr(d, "edge", ""),
-                "expanded": bool(getattr(d, "expanded", False)),
-                "new_low": getattr(d, "new_low", None),
-                "new_high": getattr(d, "new_high", None),
-            }
-        )
     return {
-        "dims": dims_out,
-        "expanded_names": list(getattr(report, "expanded_names", ()) or ()),
+        "dims": [
+            {
+                "name": d.name,
+                "best_value": d.best_value,
+                "low": d.low,
+                "high": d.high,
+                "position_pct": d.position_pct,
+                "edge": d.edge,
+                "expanded": d.expanded,
+                "new_low": d.new_low,
+                "new_high": d.new_high,
+            }
+            for d in report.dims
+        ],
+        "expanded_names": list(report.expanded_names),
     }
 
 
@@ -274,6 +280,11 @@ class LizyMLAdapter:
     def __init__(self) -> None:
         _check_lizyml_version()
         self._last_worker_thread: threading.Thread | None = None
+        # #116: Adapter-side config registry keyed by ``id(model)``. Replaces
+        # the previous ``model._widget_config`` private write. Used as the
+        # fallback path when reading task off lizyml's internal ``_cfg``
+        # also fails (e.g. an older / mocked model that lacks ``_cfg``).
+        self._model_configs: dict[int, dict[str, Any]] = {}
 
     @property
     def info(self) -> BackendInfo:
@@ -697,8 +708,34 @@ class LizyMLAdapter:
         from lizyml.core.model import Model
 
         model = Model(config, data=dataframe)
-        model._widget_config = copy.deepcopy(config)  # type: ignore[attr-defined]  # noqa: SLF001
+        # #116: register the config in the adapter rather than writing a
+        # private attr onto the lizyml object. The fallback in
+        # ``_task_for_model`` reads from this registry when ``model._cfg``
+        # is unavailable.
+        self._model_configs[id(model)] = copy.deepcopy(config)
         return model
+
+    def _task_for_model(self, model: Any) -> str:
+        """Return the task ('binary'/'multiclass'/'regression') for *model*.
+
+        #116: centralises the legacy ``_cfg.task`` private read with a
+        graceful fallback to the adapter-side config registry. Returns ""
+        if no source can be resolved (caller treats this as "unknown task").
+        """
+        # 1. Try lizyml's internal _cfg.task (the public path on supported
+        #    minors). Suppressed because mocked / loaded models may not
+        #    expose _cfg.
+        try:
+            return str(model._cfg.task)  # noqa: SLF001
+        except AttributeError:
+            pass
+        # 2. Fallback: adapter-side registry populated by create_model.
+        cfg = self._model_configs.get(id(model))
+        if cfg is not None:
+            task = cfg.get("task", "")
+            if isinstance(task, str):
+                return task
+        return ""
 
     def _run_with_cancel_polling(
         self,
@@ -764,9 +801,10 @@ class LizyMLAdapter:
             lambda: model.fit(params=params),
             on_progress,
         )
+        view = view_fit_result(result)
         return FitSummary(
-            metrics=result.metrics,
-            fold_count=len(getattr(getattr(result, "splits", None), "outer", [])),
+            metrics=view.metrics,
+            fold_count=view.fold_count,
             params=model.params_table().reset_index().to_dict(orient="records"),
         )
 
@@ -808,27 +846,20 @@ class LizyMLAdapter:
         if on_progress is not None:
 
             def progress_cb(info: TuneProgressInfo) -> None:
-                msg = f"Trial {info.current_trial}/{info.total_trials}"
-                if info.best_score is not None:
-                    msg += f" (best: {info.best_score:.4f})"
-                # Re-tune fields (lizyml>=0.9.0 only).  Default to sane
-                # single-round values so the widget traitlet can assume the
-                # keys are always present.
-                round_no = int(getattr(info, "round", 1) or 1)
-                cumulative = int(
-                    getattr(info, "cumulative_trials", info.current_trial) or info.current_trial
-                )
-                expanded = tuple(getattr(info, "expanded_dims", ()) or ())
+                view = view_tune_progress(info)
+                msg = f"Trial {view.current_trial}/{view.total_trials}"
+                if view.best_score is not None:
+                    msg += f" (best: {view.best_score:.4f})"
                 on_progress(
-                    info.current_trial,
-                    info.total_trials,
+                    view.current_trial,
+                    view.total_trials,
                     msg,
-                    round=round_no,
-                    cumulative_trials=cumulative,
-                    expanded_dims=list(expanded),
-                    latest_score=info.latest_score,
-                    latest_state=info.latest_state,
-                    best_score=info.best_score,
+                    round=view.round,
+                    cumulative_trials=view.cumulative_trials,
+                    expanded_dims=list(view.expanded_dims),
+                    latest_score=view.latest_score,
+                    latest_state=view.latest_state,
+                    best_score=view.best_score,
                 )
 
         def _cancel_only(_c: int, _t: int, _m: str) -> None:
@@ -856,15 +887,16 @@ class LizyMLAdapter:
             lambda: model.tune(**tune_kwargs),
             _cancel_only,
         )
+        view = view_tuning_result(result)
 
         return TuningSummary(
-            best_params=result.best_params,
-            best_score=result.best_score,
-            trials=_serialize_trials(result.trials),
-            metric_name=result.metric_name,
-            direction=result.direction,
-            rounds=_serialize_rounds(getattr(result, "rounds", ())),
-            boundary_report=_serialize_boundary_report(getattr(result, "boundary_report", None)),
+            best_params=view.best_params,
+            best_score=view.best_score,
+            trials=_serialize_trials(view.raw_trials),
+            metric_name=view.metric_name,
+            direction=view.direction,
+            rounds=_serialize_rounds(view.rounds),
+            boundary_report=_serialize_boundary_report(view.boundary_report),
         )
 
     def predict(
@@ -881,11 +913,12 @@ class LizyMLAdapter:
         # via ``FitResult.target_encoder``. Pandas preserves that dtype when
         # we wrap it directly, so no extra conversion is needed here.
         result = model.predict(data, return_shap=return_shap)
-        df = pd.DataFrame({"pred": result.pred})
+        view = view_prediction_result(result)
+        df = pd.DataFrame({"pred": view.pred})
 
         # Proba: expand 2D (multiclass) into per-class columns
-        if result.proba is not None:
-            proba = np.asarray(result.proba)
+        if view.proba is not None:
+            proba = np.asarray(view.proba)
             if proba.ndim == 2:
                 for i in range(proba.shape[1]):
                     df[f"proba_{i}"] = proba[:, i]
@@ -893,16 +926,15 @@ class LizyMLAdapter:
                 df["proba"] = proba
 
         # SHAP values: include if available
-        shap_values = getattr(result, "shap_values", None)
-        if shap_values is not None:
-            shap_arr = np.asarray(shap_values)
+        if view.shap_values is not None:
+            shap_arr = np.asarray(view.shap_values)
             if shap_arr.ndim == 2:
                 feature_names = list(data.columns)
                 for i, name in enumerate(feature_names):
                     if i < shap_arr.shape[1]:
                         df[f"shap_{name}"] = shap_arr[:, i]
 
-        return PredictionSummary(predictions=df, warnings=result.warnings)
+        return PredictionSummary(predictions=df, warnings=view.warnings)
 
     def evaluate_table(self, model: Any) -> list[dict[str, Any]]:
         df: pd.DataFrame = model.evaluate_table()
@@ -944,13 +976,9 @@ class LizyMLAdapter:
         return PlotData(plotly_json=fig.to_json())
 
     def available_plots(self, model: Any) -> list[str]:
-        # Extract task safely: try _cfg (LizyML internal), then widget fallback
-        task: str = ""
-        try:
-            task = model._cfg.task  # noqa: SLF001
-        except AttributeError:
-            cfg = getattr(model, "_widget_config", {})
-            task = cfg.get("task", "")
+        # #116: task lookup centralised in _task_for_model (registry-backed
+        # fallback replaces the legacy ``_widget_config`` private read).
+        task = self._task_for_model(model)
 
         # Check if model has been fitted (not just tuned) — P-004 R4
         is_fitted = False
@@ -961,7 +989,12 @@ class LizyMLAdapter:
         with contextlib.suppress(Exception):
             has_calibration = is_fitted and model.fit_result.calibrator is not None
 
-        has_tuning = getattr(model, "_tuning_result", None) is not None
+        # Feature-detection probe — model._tuning_result is a private slot
+        # lizyml exposes for tuning state. The presence check is intentional
+        # and does not read data off the value, so it is allowed by #116.
+        has_tuning = (
+            hasattr(model, "_tuning_result") and model._tuning_result is not None  # noqa: SLF001
+        )
 
         plots: list[str] = []
 
@@ -1066,8 +1099,9 @@ class LizyMLAdapter:
             if params_df is not None:
                 info["params"] = params_df.reset_index().to_dict(orient="records")
 
-        # Extract task from config
-        with contextlib.suppress(Exception):
-            info["task"] = model._cfg.task  # noqa: SLF001
+        # #116: task lookup centralised in _task_for_model.
+        task = self._task_for_model(model)
+        if task:
+            info["task"] = task
 
         return info

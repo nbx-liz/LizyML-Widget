@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Adapter boundary typed via `LMResultView`** ([#116](https://github.com/nbx-liz/LizyML-Widget/issues/116)).
+  All `getattr(...)` reads on lizyml result objects are consolidated into a
+  new `adapter_views.py` module (`view_fit_result`, `view_tuning_result`,
+  `view_tune_progress`, `view_prediction_result`, `view_boundary_report`,
+  `view_rounds`). Each view raises `LizyMLContractError` on a missing
+  required field, giving the version guard real teeth — a renamed field
+  in a future lizyml minor fails fast at the boundary rather than
+  silently degrading to `None` / `[]` deeper in the widget.
+- **Removed `model._widget_config` private write** ([#116](https://github.com/nbx-liz/LizyML-Widget/issues/116)).
+  `LizyMLAdapter.create_model` no longer monkey-patches the lizyml model
+  with a widget-specific attribute. Configs now live in an adapter-side
+  registry keyed by `id(model)`, and the legacy `_cfg.task` / fallback
+  config read is centralised in a single `_task_for_model(model)`
+  helper used by both `available_plots()` and `model_info()`.
+
 ### Added
 - **E2E test coverage Phase B** ([#114](https://github.com/nbx-liz/LizyML-Widget/issues/114)).
   Four new test files plus a Tune→Apply→Re-tune extension to the existing

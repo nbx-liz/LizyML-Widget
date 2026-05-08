@@ -469,11 +469,17 @@ class TestAvailablePlots:
         assert "optimization-history" in plots
 
     def test_available_plots_fallback_when_no_cfg(self) -> None:
+        """#116: when model lacks `_cfg`, the adapter falls back to its own
+        config registry (no longer to a `_widget_config` attribute on the model).
+        """
         adapter = LizyMLAdapter()
-        mock_model = MagicMock(spec=[])
-        mock_model._widget_config = {"task": "binary"}
+        mock_model = MagicMock(spec=["fit_result"])
         mock_model.fit_result = MagicMock()
         mock_model.fit_result.calibrator = None
+        # Seed the adapter-side config registry directly to simulate the
+        # path where `create_model` ran but `model._cfg` is absent (e.g. a
+        # mocked or a partially-loaded model).
+        adapter._model_configs[id(mock_model)] = {"task": "binary"}
 
         plots = adapter.available_plots(mock_model)
         assert "roc-curve" in plots
@@ -743,10 +749,10 @@ class TestShapOutput:
         assert shap_cols == []
 
 
-class TestCreateModelWidgetConfig:
-    """create_model should attach _widget_config to the model."""
+class TestCreateModelConfigRegistry:
+    """#116: create_model registers the config in the adapter (no private write to model)."""
 
-    def test_widget_config_attached(self) -> None:
+    def test_config_registered_in_adapter(self) -> None:
         adapter = LizyMLAdapter()
         config = adapter.initialize_config(task="binary")
         config.update(
@@ -759,10 +765,32 @@ class TestCreateModelWidgetConfig:
         )
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         model = adapter.create_model(config, df)
-        assert hasattr(model, "_widget_config")
-        assert model._widget_config["task"] == "binary"
-        # Should be a deep copy, not the same object
-        assert model._widget_config is not config
+
+        # The config must be retrievable from the adapter via id(model).
+        registered = adapter._model_configs[id(model)]
+        assert registered["task"] == "binary"
+        # Deep copy invariant: mutating the registry copy must not touch
+        # the caller's config dict.
+        registered["task"] = "regression"
+        assert config["task"] == "binary"
+
+    def test_no_private_attribute_on_model(self) -> None:
+        """#116: the legacy ``model._widget_config`` private attribute is gone."""
+        adapter = LizyMLAdapter()
+        config = adapter.initialize_config(task="binary")
+        config.update(
+            {
+                "task": "binary",
+                "data": {"target": "y"},
+                "features": {"categorical": [], "exclude": []},
+                "split": {"method": "kfold", "n_splits": 3, "random_state": 42},
+            }
+        )
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        model = adapter.create_model(config, df)
+        assert not hasattr(model, "_widget_config"), (
+            "create_model should no longer attach _widget_config to the model"
+        )
 
 
 class TestCancelPollingErrorPropagation:
