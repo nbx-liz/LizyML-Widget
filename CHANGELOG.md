@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **service.py / adapter.py file-size split**
+  ([#137](https://github.com/nbx-liz/LizyML-Widget/issues/137)).
+  Both core modules now sit below the CLAUDE.md §8 < 800-line ceiling.
+  ``service.py`` shrinks from 1019 → 790 lines by extracting CV helpers
+  (``service_cv.py``: ``compute_preview_splits``, ``validate_inner_valid``,
+  ``default_strategy_for_task``, ``default_cv_state``) and column
+  auto-detection helpers (``service_columns.py``: ``detect_task``,
+  ``auto_configure_column``, ``calc_feature_summary``,
+  ``merge_best_params_into_config``).
+  ``adapter.py`` shrinks from 1107 → 761 lines by moving stateless
+  helpers into ``adapter_internals.py`` (version guard, dict path
+  helpers, ``deep_merge``, ``extract_defaults``,
+  ``convert_metric_entries``, ``enforce_auto_num_leaves``,
+  ``_serialize_*``) and result-side helpers into ``adapter_results.py``
+  (``render_plot``, ``list_available_plots``, ``render_inference_plot``,
+  ``task_for_model``).  Composition only — no inheritance changes.
+  Backward-compatible ``LizyMLAdapter._<helper>`` static aliases keep
+  existing tests untouched. Public API and behavior are unchanged.
 - **Widget action dispatcher extracted to `widget_actions.py`**
   ([#127](https://github.com/nbx-liz/LizyML-Widget/issues/127)).
   Follow-up to #117. All 19 ``_handle_*`` action handlers now live in

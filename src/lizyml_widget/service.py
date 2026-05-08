@@ -11,6 +11,17 @@ from typing import Any
 import pandas as pd
 
 from .adapter import BackendAdapter
+from .service_columns import (
+    auto_configure_column,
+    calc_feature_summary,
+    detect_task,
+)
+from .service_cv import (
+    compute_preview_splits,
+    default_cv_state,
+    default_strategy_for_task,
+    validate_inner_valid,
+)
 from .types import (
     BackendContract,
     BackendInfo,
@@ -88,7 +99,7 @@ class WidgetService:
             "auto_task": None,
             "columns": columns,
             "cv": self._default_cv_state(strategy="kfold", n_splits=5),
-            "feature_summary": self._calc_feature_summary(columns),
+            "feature_summary": calc_feature_summary(columns),
         }
 
         if target:
@@ -110,7 +121,7 @@ class WidgetService:
         n_rows = len(df)
         n_unique = int(col.nunique())
 
-        task = self._detect_task(col, n_rows, n_unique)
+        task = detect_task(col, n_rows, n_unique)
 
         # Map existing column settings to detect manual overrides
         existing_settings = {c["name"]: c for c in self._df_info["columns"]}
@@ -125,7 +136,7 @@ class WidgetService:
                 "dtype": str(df[col_name].dtype),
                 "unique_count": int(df[col_name].nunique()),
             }
-            configured = self._auto_configure_column(col_info, n_rows)
+            configured = auto_configure_column(col_info, n_rows, self._df)
             # Preserve manual overrides from update_column()
             prev = existing_settings.get(col_name)
             if prev is not None:
@@ -140,7 +151,7 @@ class WidgetService:
             **self._df_info,
             "target": target,
             "columns": updated_columns,
-            "feature_summary": self._calc_feature_summary(updated_columns),
+            "feature_summary": calc_feature_summary(updated_columns),
         }
         self._apply_task_defaults(task, update_auto_task=True)
         return copy.deepcopy(self._df_info)
@@ -171,7 +182,7 @@ class WidgetService:
         self._df_info = {
             **self._df_info,
             "columns": new_columns,
-            "feature_summary": self._calc_feature_summary(new_columns),
+            "feature_summary": calc_feature_summary(new_columns),
         }
         return copy.deepcopy(self._df_info)
 
@@ -259,12 +270,7 @@ class WidgetService:
     def preview_splits(self) -> dict[str, Any]:
         """Estimate fold structure for blocked_group_kfold before Fit.
 
-        Reads self._df_info["cv"] for blocks config and groups config,
-        then computes the expected fold structure.
-
-        Returns
-        -------
-        dict with keys: total_folds, time_folds, group_folds, periods, folds.
+        Delegates to ``service_cv.compute_preview_splits``.
 
         Raises
         ------
@@ -274,106 +280,7 @@ class WidgetService:
         if self._df is None:
             msg = "No data loaded"
             raise ValueError(msg)
-        cv = self._df_info.get("cv", {})
-        if cv.get("strategy") != "blocked_group_kfold":
-            msg = "preview_splits only supports strategy='blocked_group_kfold'"
-            raise ValueError(msg)
-
-        blocks_cfg: dict[str, Any] = cv.get("blocks") or {}
-        groups_cfg: dict[str, Any] = cv.get("groups") or {}
-
-        blocks_col: str = blocks_cfg.get("col", "")
-        mode: str = blocks_cfg.get("mode", "expanding")
-        train_window: int | None = blocks_cfg.get("train_window")
-        group_folds: int = int(groups_cfg.get("n_splits", cv.get("n_splits", 2)))
-
-        # Build period list from blocks_col unique values sorted
-        if blocks_col and blocks_col in self._df.columns:
-            periods: list[str] = sorted(self._df[blocks_col].dropna().unique().tolist(), key=str)
-        else:
-            periods = []
-
-        num_periods = len(periods)
-        # Each time fold: trains on periods[0..t], validates on periods[t+1]
-        time_folds = max(0, num_periods - 1)
-        total_folds = time_folds * group_folds
-
-        # Precompute row counts per period (MEDIUM-2: O(1) per period lookup)
-        period_counts: dict[str, int] = {}
-        if blocks_col and blocks_col in self._df.columns:
-            vc = self._df[blocks_col].value_counts()
-            period_counts = {str(k): int(v) for k, v in vc.items()}
-
-        # Use cutoffs to group values into periods (MEDIUM-4)
-        cutoffs: list[Any] = blocks_cfg.get("cutoffs", [])
-        if cutoffs and blocks_col and blocks_col in self._df.columns:
-            sorted_values = sorted(self._df[blocks_col].dropna().unique().tolist(), key=str)
-            grouped_periods: list[list[Any]] = []
-            current_group: list[Any] = []
-            cutoff_idx = 0
-            for v in sorted_values:
-                if cutoff_idx < len(cutoffs) and str(v) >= str(cutoffs[cutoff_idx]):
-                    if current_group:
-                        grouped_periods.append(current_group)
-                    current_group = []
-                    cutoff_idx += 1
-                current_group.append(v)
-            if current_group:
-                grouped_periods.append(current_group)
-            # Replace periods with group labels
-            periods = [
-                str(gp[0]) if len(gp) == 1 else f"{gp[0]}..{gp[-1]}" for gp in grouped_periods
-            ]
-            # Rebuild period_counts for grouped periods
-            grouped_counts: dict[str, int] = {}
-            for gp, label in zip(grouped_periods, periods, strict=True):
-                grouped_counts[label] = sum(period_counts.get(str(v), 0) for v in gp)
-            period_counts = grouped_counts
-            num_periods = len(periods)
-            time_folds = max(0, num_periods - 1)
-            total_folds = time_folds * group_folds
-
-        # Build per-time-fold structures
-        folds: list[dict[str, Any]] = []
-        fold_index = 0
-        for t in range(time_folds):
-            valid_period = periods[t + 1]
-            # Expanding: train on all periods up to and including t
-            if mode == "sliding" and train_window is not None:
-                start = max(0, t + 1 - train_window)
-                train_periods_list = periods[start : t + 1]
-            else:
-                train_periods_list = periods[: t + 1]
-
-            # Use precomputed period_counts for O(1) lookup per period
-            train_rows = sum(period_counts.get(str(p), 0) for p in train_periods_list)
-            valid_rows = period_counts.get(str(valid_period), 0)
-
-            period_label = (
-                " + ".join(str(p) for p in train_periods_list) + " -> " + str(valid_period)
-            )
-
-            for group_idx in range(group_folds):
-                folds.append(
-                    {
-                        "fold": fold_index,
-                        "period_label": period_label,
-                        "group_label": f"G{group_idx}",
-                        "train_size": train_rows,
-                        "valid_size": valid_rows,
-                        "train_periods": list(train_periods_list),
-                        "valid_period": valid_period,
-                    }
-                )
-                fold_index += 1
-
-        return {
-            "total_folds": total_folds,
-            "time_folds": time_folds,
-            "group_folds": group_folds,
-            "periods": periods,
-            "folds": folds,
-        }
+        return compute_preview_splits(self._df, self._df_info)
 
     def get_df_info(self) -> dict[str, Any]:
         """Return a copy of the current df_info state."""
@@ -388,67 +295,27 @@ class WidgetService:
         return self._adapter.initialize_config(task=self._df_info.get("task"))
 
     def apply_config_patch(
-        self, config: dict[str, Any], ops: Sequence[ConfigPatchOp]
+        self,
+        config: dict[str, Any],
+        ops: Sequence[ConfigPatchOp],
     ) -> dict[str, Any]:
-        """Apply config patch operations (delegated to adapter)."""
+        """Apply a list of ConfigPatchOp to config (delegated to adapter)."""
         return self._adapter.apply_config_patch(config, ops, task=self._df_info.get("task"))
 
     def canonicalize_config(self, config: dict[str, Any]) -> dict[str, Any]:
-        """Canonicalize a partial/full config via adapter defaults (delegated to adapter)."""
+        """Canonicalize config via adapter."""
         return self._adapter.canonicalize_config(config, task=self._df_info.get("task"))
 
     def apply_task_params(self, config: dict[str, Any], task: str) -> dict[str, Any]:
-        """Apply task-dependent defaults via adapter (no backend-specific keys here)."""
+        """Apply task-dependent params to config via adapter.
+
+        Used when the user changes the task to refresh task-specific defaults.
+        """
         return self._adapter.apply_task_defaults(config, task=task)
 
-    # ── Config ───────────────────────────────────────────────
-
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
-        errors = self._validate_inner_valid(config)
+        errors = validate_inner_valid(config, self._df_info)
         errors.extend(self._adapter.validate_config(config))
-        return errors
-
-    _GROUP_STRATEGIES = frozenset(
-        {"group_kfold", "stratified_group_kfold", "group_time_series", "blocked_group_kfold"}
-    )
-    _TIME_STRATEGIES = frozenset({"time_series", "purged_time_series", "group_time_series"})
-
-    def _validate_inner_valid(self, config: dict[str, Any]) -> list[dict[str, Any]]:
-        """Check inner_valid method is compatible with CV strategy."""
-        training = config.get("training") or {}
-        early_stopping = training.get("early_stopping") or {}
-        inner_valid = early_stopping.get("inner_valid") or {}
-        method = (
-            inner_valid.get("method", "holdout") if isinstance(inner_valid, dict) else inner_valid
-        )
-
-        cv = self._df_info.get("cv") or {}
-        strategy = cv.get("strategy", "kfold")
-        errors: list[dict[str, Any]] = []
-
-        if method == "group_holdout" and strategy not in self._GROUP_STRATEGIES:
-            errors.append(
-                {
-                    "field": "training.early_stopping.inner_valid.method",
-                    "message": (
-                        "group_holdout requires a group-based CV strategy "
-                        "(e.g. group_kfold, stratified_group_kfold, group_time_series)."
-                    ),
-                    "type": "inner_valid_constraint",
-                }
-            )
-        elif method == "time_holdout" and strategy not in self._TIME_STRATEGIES:
-            errors.append(
-                {
-                    "field": "training.early_stopping.inner_valid.method",
-                    "message": (
-                        "time_holdout requires a time-based CV strategy "
-                        "(e.g. time_series, purged_time_series, group_time_series)."
-                    ),
-                    "type": "inner_valid_constraint",
-                }
-            )
-
         return errors
 
     def build_config(self, user_config: dict[str, Any]) -> dict[str, Any]:
@@ -592,7 +459,7 @@ class WidgetService:
             self._df_info = {
                 **self._df_info,
                 "columns": new_columns,
-                "feature_summary": self._calc_feature_summary(new_columns),
+                "feature_summary": calc_feature_summary(new_columns),
             }
 
         # Restore explicit task override
@@ -888,55 +755,11 @@ class WidgetService:
 
     # ── Auto-detection internals ─────────────────────────────
 
-    @staticmethod
-    def _detect_task(col: pd.Series[Any], n_rows: int, n_unique: int) -> str:
-        """Auto-detect task type from target column."""
-        if n_unique == 2:
-            return "binary"
-        if str(col.dtype) in ("object", "str", "string", "category"):
-            return "multiclass"
-        if pd.api.types.is_numeric_dtype(col):
-            threshold = max(20, int(n_rows * 0.05))
-            if n_unique <= threshold:
-                return "multiclass"
-            return "regression"
-        return "multiclass"
-
     def _default_strategy_for_task(self, task: str) -> str:
-        """Get default CV strategy for task from adapter contract."""
-        try:
-            contract = self._adapter.get_backend_contract()
-            defaults = contract.capabilities.get("cv_default_strategy", {})
-            if task in defaults:
-                return str(defaults[task])
-        except (AttributeError, KeyError, TypeError) as exc:
-            _log.debug("cv_default_strategy contract read failed: %s", exc)
-        # Fallback
-        return "stratified_kfold" if task in ("binary", "multiclass") else "kfold"
+        return default_strategy_for_task(self._adapter, task)
 
     def _default_cv_state(self, *, strategy: str, n_splits: int) -> dict[str, Any]:
-        """Build default CV state, reading defaults from adapter contract."""
-        # Read contract defaults with fallbacks
-        cv_defaults: dict[str, Any] = {}
-        try:
-            contract = self._adapter.get_backend_contract()
-            cv_defaults = contract.capabilities.get("cv_defaults", {})
-        except (AttributeError, KeyError, TypeError) as exc:
-            _log.debug("cv_defaults contract read failed: %s", exc)
-
-        return {
-            "strategy": strategy,
-            "n_splits": n_splits,
-            "group_column": None,
-            "time_column": None,
-            "random_state": cv_defaults.get("random_state", 42),
-            "shuffle": cv_defaults.get("shuffle", True),
-            "gap": cv_defaults.get("gap", 0),
-            "purge_gap": 0,
-            "embargo": 0,
-            "train_size_max": None,
-            "test_size_max": None,
-        }
+        return default_cv_state(self._adapter, strategy=strategy, n_splits=n_splits)
 
     def _apply_task_defaults(self, task: str, *, update_auto_task: bool) -> None:
         cv = self._df_info.get("cv", {})
@@ -964,56 +787,4 @@ class WidgetService:
             "task": task,
             **({"auto_task": task} if update_auto_task else {}),
             "cv": new_cv,
-        }
-
-    def _auto_configure_column(self, col_info: dict[str, Any], n_rows: int) -> dict[str, Any]:
-        """Auto-configure a single column (exclusion + type)."""
-        name = col_info["name"]
-        dtype = col_info["dtype"]
-        unique = col_info["unique_count"]
-
-        excluded = False
-        exclude_reason: str | None = None
-        col_type = "numeric"
-
-        # ID detection — only for integer/string columns, not floats
-        is_float = dtype.startswith("float") or dtype.startswith("Float")
-        if unique == n_rows and not is_float:
-            excluded = True
-            exclude_reason = "id"
-        # Constant detection
-        elif unique == 1:
-            excluded = True
-            exclude_reason = "constant"
-
-        # Type detection
-        if dtype in ("object", "str", "string", "category", "bool"):
-            col_type = "categorical"
-        elif self._df is not None and pd.api.types.is_numeric_dtype(self._df[name]):
-            threshold = max(20, int(n_rows * 0.05))
-            if unique <= threshold:
-                col_type = "categorical"
-
-        return {
-            **col_info,
-            "suggested_type": col_type,
-            "suggested_excluded": excluded,
-            "exclude_reason": exclude_reason,
-            "excluded": excluded,
-            "col_type": col_type,
-        }
-
-    @staticmethod
-    def _calc_feature_summary(columns: list[dict[str, Any]]) -> dict[str, int]:
-        """Calculate feature summary counts."""
-        active = [c for c in columns if not c.get("excluded", False)]
-        excluded = [c for c in columns if c.get("excluded", False)]
-        return {
-            "total": len(active),
-            "numeric": sum(1 for c in active if c.get("col_type") == "numeric"),
-            "categorical": sum(1 for c in active if c.get("col_type") == "categorical"),
-            "excluded": len(excluded),
-            "excluded_id": sum(1 for c in excluded if c.get("exclude_reason") == "id"),
-            "excluded_const": sum(1 for c in excluded if c.get("exclude_reason") == "constant"),
-            "excluded_manual": sum(1 for c in excluded if c.get("exclude_reason") is None),
         }

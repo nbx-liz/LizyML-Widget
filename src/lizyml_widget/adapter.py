@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import logging
 import threading
@@ -12,6 +11,22 @@ from typing import Any, Literal, Protocol
 import pandas as pd
 
 from .adapter_contract import build_capabilities, build_ui_schema
+from .adapter_internals import (
+    LIZYML_MAX_VERSION,
+    LIZYML_MIN_VERSION,
+    _check_lizyml_version,
+    _parse_lizyml_version,
+    _serialize_boundary_report,
+    _serialize_rounds,
+    _serialize_trials,
+    convert_metric_entries,
+    deep_merge,
+    enforce_auto_num_leaves,
+    extract_defaults,
+    get_nested,
+    set_nested,
+    unset_nested,
+)
 from .adapter_params import (
     LGBM_PARAMS_BY_TASK,
     LGBM_PARAMS_TASK_INDEPENDENT,
@@ -19,6 +34,12 @@ from .adapter_params import (
     get_eval_metrics_by_task,
 )
 from .adapter_params import classify_best_params as _classify_best_params_impl
+from .adapter_results import (
+    list_available_plots,
+    render_inference_plot,
+    render_plot,
+    task_for_model,
+)
 from .adapter_schema import (
     enforce_iv_exclusivity,
     get_default_search_space,
@@ -27,8 +48,6 @@ from .adapter_schema import (
     strip_for_backend,
 )
 from .adapter_views import (
-    LMBoundaryReportView,
-    LMRoundView,
     view_fit_result,
     view_prediction_result,
     view_tune_progress,
@@ -43,6 +62,20 @@ from .types import (
     PredictionSummary,
     TuningSummary,
 )
+
+# Re-export for tests / external imports that historically pulled these
+# symbols from ``lizyml_widget.adapter``.
+__all__ = [
+    "LIZYML_MAX_VERSION",
+    "LIZYML_MIN_VERSION",
+    "BackendAdapter",
+    "LizyMLAdapter",
+    "_check_lizyml_version",
+    "_parse_lizyml_version",
+    "_serialize_boundary_report",
+    "_serialize_rounds",
+    "_serialize_trials",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -137,143 +170,6 @@ class BackendAdapter(Protocol):
     def plot_inference(self, predictions: pd.DataFrame, plot_type: str) -> PlotData: ...
 
 
-#: Minimum supported lizyml version (inclusive). P-030: bumped to 0.10.0
-#: because the Adapter assumes target_encoder-driven label dtype preservation
-#: (FitResult.target_encoder, FORMAT_VERSION=2 — added in lizyml 0.10).
-LIZYML_MIN_VERSION = (0, 10, 0)
-#: Maximum supported lizyml version (exclusive). P-030: covers 0.10 / 0.11 / 0.12.
-LIZYML_MAX_VERSION = (0, 13, 0)
-
-
-def _parse_lizyml_version(raw: str) -> tuple[int, ...]:
-    """Parse a lizyml version string into a comparable tuple of ints.
-
-    Pre-release / dev suffixes ("0.9.0rc1", "0.9.0.dev3") are stripped so
-    they compare equal to their base release.  This keeps the version guard
-    permissive for local dev installs.
-    """
-    import re
-
-    core = re.split(r"[^0-9.]", raw, maxsplit=1)[0]
-    parts = core.split(".")
-    out: list[int] = []
-    for p in parts:
-        try:
-            out.append(int(p))
-        except ValueError:
-            break
-    # Pad to 3 components so comparisons work against (major, minor, patch).
-    while len(out) < 3:
-        out.append(0)
-    return tuple(out[:3])
-
-
-def _check_lizyml_version() -> None:
-    """Validate the installed lizyml version against the widget's contract.
-
-    Raises
-    ------
-    ImportError
-        When ``lizyml`` is missing or outside ``[LIZYML_MIN_VERSION,
-        LIZYML_MAX_VERSION)``.  The error message points the user at the
-        ``[lizyml]`` extras install command.
-    """
-    try:
-        import lizyml
-    except ImportError as exc:  # pragma: no cover - exercised via dedicated test
-        msg = (
-            "lizyml-widget requires the 'lizyml' backend. "
-            "Install it with:\n"
-            "    pip install 'lizyml-widget[lizyml]'\n"
-            "See docs/VERSION_COMPAT.md for details."
-        )
-        raise ImportError(msg) from exc
-
-    version_str = getattr(lizyml, "__version__", None)
-    # Unit tests often install ``lizyml`` as a ``MagicMock`` via
-    # ``sys.modules`` patching; in that case ``__version__`` is not a
-    # real string and the guard cannot reliably parse it.  Skip silently
-    # so mocked tests still exercise the adapter without being blocked
-    # by a version check that is irrelevant in that environment.
-    if not isinstance(version_str, str):
-        return
-
-    version = _parse_lizyml_version(version_str)
-    if version < LIZYML_MIN_VERSION or version >= LIZYML_MAX_VERSION:
-        min_s = ".".join(str(x) for x in LIZYML_MIN_VERSION)
-        max_s = ".".join(str(x) for x in LIZYML_MAX_VERSION)
-        msg = (
-            f"lizyml-widget requires lizyml>={min_s},<{max_s} "
-            f"(found: lizyml=={version_str}). Run:\n"
-            f"    pip install --upgrade "
-            f"'lizyml[plots,tuning,calibration,explain]>={min_s},<{max_s}'\n"
-            "See docs/VERSION_COMPAT.md for the full compatibility matrix."
-        )
-        raise ImportError(msg)
-
-
-def _serialize_trials(trials: Any) -> list[dict[str, Any]]:
-    """Convert a sequence of lizyml TrialResult into JSON-friendly dicts.
-
-    Each dict keeps ``round`` (defaulting to 1 for pre-re-tune backends)
-    so the UI can group trials by round when rendering the score history.
-    """
-    from dataclasses import asdict
-
-    out: list[dict[str, Any]] = []
-    for t in trials or ():
-        d = asdict(t)
-        d.setdefault("round", 1)
-        out.append(d)
-    return out
-
-
-def _serialize_rounds(rounds: Sequence[LMRoundView]) -> list[dict[str, Any]]:
-    """Convert a tuple of typed round views into JSON-serialisable dicts.
-
-    ``space_snapshot`` is stripped because each entry is a dataclass
-    (``FloatDim`` / ``IntDim`` / ``CategoricalDim``) that anywidget cannot
-    serialize directly.  The UI only needs the round-level metadata
-    (scores, expanded dim names); full space snapshots can be retrieved
-    from ``boundary_report`` if needed in a future iteration.
-    """
-    return [
-        {
-            "round": r.round,
-            "n_trials": r.n_trials,
-            "best_score_before": r.best_score_before,
-            "best_score_after": r.best_score_after,
-            "expanded_dims": list(r.expanded_dims),
-        }
-        for r in rounds
-    ]
-
-
-def _serialize_boundary_report(
-    report: LMBoundaryReportView | None,
-) -> dict[str, Any] | None:
-    """Convert a typed boundary-report view into a JSON-friendly dict (or None)."""
-    if report is None:
-        return None
-    return {
-        "dims": [
-            {
-                "name": d.name,
-                "best_value": d.best_value,
-                "low": d.low,
-                "high": d.high,
-                "position_pct": d.position_pct,
-                "edge": d.edge,
-                "expanded": d.expanded,
-                "new_low": d.new_low,
-                "new_high": d.new_high,
-            }
-            for d in report.dims
-        ],
-        "expanded_names": list(report.expanded_names),
-    }
-
-
 class LizyMLAdapter:
     """Adapter for the LizyML backend library."""
 
@@ -306,6 +202,18 @@ class LizyMLAdapter:
     _LGBM_PARAMS_TASK_INDEPENDENT = LGBM_PARAMS_TASK_INDEPENDENT
     _LGBM_PARAMS_BY_TASK = LGBM_PARAMS_BY_TASK
 
+    # Backward-compatible static aliases for helpers now living in
+    # ``adapter_internals`` (#137). Tests and external callers historically
+    # accessed these via ``LizyMLAdapter._<name>``; the aliases keep that
+    # interface stable.
+    _enforce_auto_num_leaves = staticmethod(enforce_auto_num_leaves)
+    _deep_merge = staticmethod(deep_merge)
+    _get_nested = staticmethod(get_nested)
+    _set_nested = staticmethod(set_nested)
+    _unset_nested = staticmethod(unset_nested)
+    _extract_defaults = staticmethod(extract_defaults)
+    _convert_metric_entries = staticmethod(convert_metric_entries)
+
     def classify_best_params(
         self,
         params: dict[str, Any],
@@ -328,7 +236,7 @@ class LizyMLAdapter:
     def initialize_config(self, *, task: str | None = None) -> dict[str, Any]:
         """Build the full initial config dict with backend-specific defaults."""
         schema = self.get_config_schema()
-        config = self._extract_defaults(schema)
+        config = extract_defaults(schema)
         config.setdefault("config_version", 1)
         if not config.get("output_dir"):
             config["output_dir"] = "outputs/"
@@ -366,15 +274,15 @@ class LizyMLAdapter:
         for op in ops:
             parts = op.path.split(".")
             if op.op == "set":
-                self._set_nested(result, parts, op.value)
+                set_nested(result, parts, op.value)
             elif op.op == "unset":
-                self._unset_nested(result, parts)
+                unset_nested(result, parts)
             elif op.op == "merge":
-                existing = self._get_nested(result, parts)
+                existing = get_nested(result, parts)
                 if isinstance(existing, dict) and isinstance(op.value, dict):
-                    self._set_nested(result, parts, {**existing, **op.value})
+                    set_nested(result, parts, {**existing, **op.value})
                 else:
-                    self._set_nested(result, parts, op.value)
+                    set_nested(result, parts, op.value)
 
         # ── Final canonical pass (single, after all ops) ──────
         # 1. Re-complete required fields
@@ -388,7 +296,7 @@ class LizyMLAdapter:
         cur_model.setdefault("name", "lgbm")
 
         # 2. Enforce auto_num_leaves exclusivity
-        result["model"] = self._enforce_auto_num_leaves(cur_model)
+        result["model"] = enforce_auto_num_leaves(cur_model)
 
         # 3. Normalize inner_valid
         result = normalize_inner_valid(result)
@@ -465,17 +373,6 @@ class LizyMLAdapter:
             return copy.deepcopy(config)
         return self.apply_config_patch(config, ops, task=task)
 
-    @staticmethod
-    def _enforce_auto_num_leaves(model: dict[str, Any]) -> dict[str, Any]:
-        """Return a new model dict with auto_num_leaves exclusivity enforced."""
-        auto_nl = model.get("auto_num_leaves", True)
-        params = dict(model.get("params", {}))
-        if auto_nl:
-            params.pop("num_leaves", None)
-        elif "num_leaves" not in params:
-            params["num_leaves"] = 256
-        return {**model, "params": params}
-
     # ── Canonicalize config ───────────────────────────────────
 
     # Keys managed by Service (df_info / build_config), not the widget config traitlet
@@ -486,27 +383,16 @@ class LizyMLAdapter:
     ) -> dict[str, Any]:
         """Canonicalize a partial/full config by merging with backend defaults."""
         defaults = self.initialize_config(task=task)
-        result = self._deep_merge(defaults, copy.deepcopy(config))
+        result = deep_merge(defaults, copy.deepcopy(config))
 
         # Strip Service-managed keys (data/features/split/task)
         for key in self._SERVICE_MANAGED_KEYS:
             result.pop(key, None)
 
         # Enforce auto_num_leaves exclusivity
-        result["model"] = self._enforce_auto_num_leaves(result.get("model", {}))
+        result["model"] = enforce_auto_num_leaves(result.get("model", {}))
 
         result = normalize_inner_valid(result)
-        return result
-
-    @staticmethod
-    def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-        """Recursively merge override into base. Override values take precedence."""
-        result = dict(base)
-        for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = LizyMLAdapter._deep_merge(result[key], value)
-            else:
-                result[key] = value
         return result
 
     def prepare_run_config(
@@ -525,117 +411,15 @@ class LizyMLAdapter:
             model = {**model, "name": "lgbm"}
 
         # Enforce auto_num_leaves exclusivity
-        result = {**result, "model": self._enforce_auto_num_leaves(model)}
+        result = {**result, "model": enforce_auto_num_leaves(model)}
 
         if job_type == "tune":
             result = prepare_tune_overrides(result)
 
         result = normalize_inner_valid(result)
         result = enforce_iv_exclusivity(result)
-        result = self._convert_metric_entries(result)
+        result = convert_metric_entries(result)
         return strip_for_backend(result)
-
-    @staticmethod
-    def _convert_metric_entries(config: dict[str, Any]) -> dict[str, Any]:
-        """Convert widget-only _precision_at_k_k to MetricEntry dict form.
-
-        Transforms ``model.params.metric`` entries:
-        - ``"precision_at_k"`` + ``_precision_at_k_k=20``
-          → ``{"precision_at_k": {"k": 20}}``
-        - Strips ``_precision_at_k_k`` from params regardless.
-        """
-        model = config.get("model")
-        if not isinstance(model, dict):
-            return config
-        params = model.get("params")
-        if not isinstance(params, dict):
-            return config
-
-        metric = params.get("metric")
-        pak_k = params.get("_precision_at_k_k")
-
-        new_params = {k: v for k, v in params.items() if k != "_precision_at_k_k"}
-
-        if isinstance(metric, list) and "precision_at_k" in metric and pak_k is not None:
-            new_metric = [
-                {"precision_at_k": {"k": int(pak_k)}} if m == "precision_at_k" else m
-                for m in metric
-            ]
-            new_params = {**new_params, "metric": new_metric}
-
-        return {**config, "model": {**model, "params": new_params}}
-
-    # ── Config patch helpers ──────────────────────────────────
-
-    @staticmethod
-    def _get_nested(obj: dict[str, Any], parts: list[str]) -> Any:
-        """Get a value at a dot-path inside a nested dict."""
-        current: Any = obj
-        for part in parts:
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
-        return current
-
-    @staticmethod
-    def _set_nested(obj: dict[str, Any], parts: list[str], value: Any) -> None:
-        """Set a value at a dot-path inside a nested dict, creating intermediates."""
-        current = obj
-        for part in parts[:-1]:
-            if part not in current or not isinstance(current[part], dict):
-                current[part] = {}
-            current = current[part]
-        current[parts[-1]] = value
-
-    @staticmethod
-    def _unset_nested(obj: dict[str, Any], parts: list[str]) -> None:
-        """Remove a key at a dot-path inside a nested dict."""
-        current = obj
-        for part in parts[:-1]:
-            if part not in current or not isinstance(current[part], dict):
-                return
-            current = current[part]
-        current.pop(parts[-1], None)
-
-    @staticmethod
-    def _extract_defaults(schema: dict[str, Any]) -> dict[str, Any]:
-        """Walk a JSON Schema and extract default values into a config dict."""
-
-        def _resolve(node: dict[str, Any], root: dict[str, Any]) -> dict[str, Any]:
-            if "$ref" in node:
-                parts = node["$ref"].lstrip("#/").split("/")
-                ref_node: Any = root
-                for part in parts:
-                    ref_node = ref_node.get(part, {})
-                merged = dict(ref_node)
-                merged.update({k: v for k, v in node.items() if k != "$ref"})
-                return merged
-            if "allOf" in node and len(node["allOf"]) == 1 and "$ref" in node["allOf"][0]:
-                resolved = _resolve(node["allOf"][0], root)
-                resolved.update({k: v for k, v in node.items() if k != "allOf"})
-                return resolved
-            return node
-
-        def _walk(node: dict[str, Any], root: dict[str, Any]) -> Any:
-            node = _resolve(node, root)
-            if node.get("type") == "object" and "properties" in node:
-                obj: dict[str, Any] = {}
-                for key, prop in node["properties"].items():
-                    prop = _resolve(prop, root)
-                    if "default" in prop:
-                        obj[key] = prop["default"]
-                    elif prop.get("type") == "object" and "properties" in prop:
-                        child = _walk(prop, root)
-                        if child:
-                            obj[key] = child
-                return obj
-            if "default" in node:
-                return node["default"]
-            return {}
-
-        result = _walk(schema, schema)
-        return result if isinstance(result, dict) else {}
 
     # ── Config validation ─────────────────────────────────────
 
@@ -716,26 +500,8 @@ class LizyMLAdapter:
         return model
 
     def _task_for_model(self, model: Any) -> str:
-        """Return the task ('binary'/'multiclass'/'regression') for *model*.
-
-        #116: centralises the legacy ``_cfg.task`` private read with a
-        graceful fallback to the adapter-side config registry. Returns ""
-        if no source can be resolved (caller treats this as "unknown task").
-        """
-        # 1. Try lizyml's internal _cfg.task (the public path on supported
-        #    minors). Suppressed because mocked / loaded models may not
-        #    expose _cfg.
-        try:
-            return str(model._cfg.task)  # noqa: SLF001
-        except AttributeError:
-            pass
-        # 2. Fallback: adapter-side registry populated by create_model.
-        cfg = self._model_configs.get(id(model))
-        if cfg is not None:
-            task = cfg.get("task", "")
-            if isinstance(task, str):
-                return task
-        return ""
+        """Return the task for *model* (delegates to ``adapter_results``)."""
+        return task_for_model(model, self._model_configs)
 
     def _run_with_cancel_polling(
         self,
@@ -948,131 +714,17 @@ class LizyMLAdapter:
         return model.importance(kind=kind)  # type: ignore[no-any-return]
 
     def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData:
-        plot_methods: dict[str, Callable[..., Any]] = {
-            "learning-curve": model.plot_learning_curve,
-            "oof-distribution": model.plot_oof_distribution,
-            "residuals": model.residuals_plot,
-            "roc-curve": model.roc_curve_plot,
-            "calibration": model.calibration_plot,
-            "probability-histogram": model.probability_histogram_plot,
-            "feature-importance-split": lambda: model.importance_plot(kind="split"),
-            "feature-importance-gain": lambda: model.importance_plot(kind="gain"),
-            "feature-importance-shap": lambda: model.importance_plot(kind="shap"),
-            "optimization-history": model.tuning_plot,
-        }
-        method = plot_methods.get(plot_type)
-        if method is None:
-            msg = f"Unknown plot type: {plot_type}"
-            raise ValueError(msg)
-        # Forward metrics filter to learning-curve only (P-026)
-        if plot_type == "learning-curve":
-            lc_kwargs: dict[str, Any] = {}
-            metrics = kwargs.get("metrics")
-            if metrics:  # skip None and empty list → fall back to all metrics
-                lc_kwargs["metrics"] = metrics
-            fig = method(**lc_kwargs) if lc_kwargs else method()
-        else:
-            fig = method()
-        return PlotData(plotly_json=fig.to_json())
+        return render_plot(model, plot_type, **kwargs)
 
     def available_plots(self, model: Any) -> list[str]:
         # #116: task lookup centralised in _task_for_model (registry-backed
         # fallback replaces the legacy ``_widget_config`` private read).
         task = self._task_for_model(model)
-
-        # Check if model has been fitted (not just tuned) — P-004 R4
-        is_fitted = False
-        with contextlib.suppress(Exception):
-            is_fitted = model.fit_result is not None
-
-        has_calibration = False
-        with contextlib.suppress(Exception):
-            has_calibration = is_fitted and model.fit_result.calibrator is not None
-
-        # Feature-detection probe — model._tuning_result is a private slot
-        # lizyml exposes for tuning state. The presence check is intentional
-        # and does not read data off the value, so it is allowed by #116.
-        has_tuning = (
-            hasattr(model, "_tuning_result") and model._tuning_result is not None  # noqa: SLF001
-        )
-
-        plots: list[str] = []
-
-        # Fit-dependent plots only when model is fitted
-        if is_fitted:
-            plots.extend(["learning-curve", "oof-distribution"])
-            if task == "regression":
-                plots.append("residuals")
-            if task == "binary":
-                plots.append("roc-curve")
-                if has_calibration:
-                    plots.append("calibration")
-                    plots.append("probability-histogram")
-            if task == "multiclass":
-                plots.append("roc-curve")
-            plots.extend(
-                [
-                    "feature-importance-split",
-                    "feature-importance-gain",
-                    "feature-importance-shap",
-                ]
-            )
-
-        # Tune-dependent plots
-        if has_tuning:
-            plots.append("optimization-history")
-        return plots
+        return list_available_plots(model, task)
 
     def plot_inference(self, predictions: pd.DataFrame, plot_type: str) -> PlotData:
         """Generate Plotly plots from inference results (not part of Protocol)."""
-        try:
-            import plotly.graph_objects as go  # type: ignore[import-untyped]
-        except ImportError as e:
-            msg = "plotly is required for inference plots"
-            raise ImportError(msg) from e
-
-        if plot_type == "prediction-distribution":
-            # Find prediction column: prefer columns starting with "pred", fallback to last column
-            pred_col = next(
-                (c for c in predictions.columns if c.startswith("pred")),
-                predictions.columns[-1],
-            )
-            fig = go.Figure()
-            fig.add_trace(go.Histogram(x=predictions[pred_col], name="Predictions"))
-            fig.update_layout(
-                title="Prediction Distribution",
-                xaxis_title="Predicted Value",
-                yaxis_title="Count",
-            )
-            return PlotData(plotly_json=fig.to_json())
-
-        if plot_type == "shap-summary":
-            # SHAP columns are prefixed with "shap_"
-            shap_cols = [c for c in predictions.columns if c.startswith("shap_")]
-            if not shap_cols:
-                msg = "No SHAP values available. Run inference with return_shap=True."
-                raise ValueError(msg)
-            mean_abs_shap = predictions[shap_cols].abs().mean().sort_values(ascending=True)
-            feature_names = [c.replace("shap_", "", 1) for c in mean_abs_shap.index]
-            fig = go.Figure()
-            fig.add_trace(
-                go.Bar(
-                    x=mean_abs_shap.values,
-                    y=feature_names,
-                    orientation="h",
-                    name="Mean |SHAP|",
-                )
-            )
-            fig.update_layout(
-                title="SHAP Summary",
-                xaxis_title="Mean |SHAP value|",
-                yaxis_title="Feature",
-                height=max(300, len(shap_cols) * 25),
-            )
-            return PlotData(plotly_json=fig.to_json())
-
-        msg = f"Unknown inference plot type: {plot_type}"
-        raise ValueError(msg)
+        return render_inference_plot(predictions, plot_type)
 
     def export_model(self, model: Any, path: str) -> str:
         model.export(path)
@@ -1094,6 +746,8 @@ class LizyMLAdapter:
         info: dict[str, Any] = {"loaded": True}
 
         # Extract model params if available
+        import contextlib
+
         with contextlib.suppress(Exception):
             params_df = model.params_table()
             if params_df is not None:
