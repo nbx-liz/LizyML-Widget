@@ -3,8 +3,16 @@
 ### P-030: lizyml 0.10 / 0.11 / 0.12 互換窓拡大
 
 - **日付**: 2026-05-08
-- **ステータス**: 提案
+- **ステータス**: 承認・実装
 - **関連 Issue**: [#112](https://github.com/nbx-liz/LizyML-Widget/issues/112)
+- **決定事項**:
+  - **Phase 1–3 を実装**: 互換窓拡大 (`>=0.10.0,<0.13`) + 0.10 の非数値ラベル分類の通過確認 +
+    0.11 の `smape` / `wape` 回帰メトリックの BackendContract 露出。
+  - **Phase 4 (0.12 resumable tuning) は本 Proposal では UI 露出しない**: `Tuner.tune(storage=, study_name=)`
+    の Widget 経由公開は SQLite path lifecycle / kernel 横断 study 共有 / cleanup の独立した設計を要するため、
+    将来の P-031（仮）で扱う。0.12 を compat 範囲に含めること自体の動作確認は Phase 1 + Phase 5 の smoke で
+    完了している。
+  - **Widget 0.9.0 として release**: lizyml 0.9.x は compat 範囲から外れるため、minor bump とする。
 - **背景**:
   - LizyML が 0.9.0 公開後に `0.9.1` / `0.10.0` / `0.11.0` / `0.12.0` を続けて release。
   - lizyml-widget 0.8.0 は `lizyml>=0.9.0,<0.10` に固定されており、`pyproject.toml` の extra と
