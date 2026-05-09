@@ -432,3 +432,61 @@ class TestContractNewFields:
             assert w.error == {} or w.error.get("code") != "CV_ERROR", (
                 f"Strategy {strategy!r} from contract was rejected"
             )
+
+
+class TestContractNumericDefaultsAndStepMap:
+    """P-034: ui_schema.defaults and ui_schema.step_map for numeric UI fields.
+
+    The JS UI used to fall back to ``payload ?? <literal>`` for several
+    numeric defaults (``n_splits ?? 5``, ``n_trials ?? 10``,
+    ``step={0.1}``, etc.). The backend contract now owns those values so
+    a backend change propagates without touching JS (CLAUDE.md §8).
+    """
+
+    def _ui_schema(self) -> dict:
+        from lizyml_widget.adapter_contract import build_ui_schema
+        from lizyml_widget.adapter_params import get_eval_metrics_by_task
+
+        return build_ui_schema(get_eval_metrics_by_task())
+
+    def test_defaults_cv_present(self) -> None:
+        """ui_schema.defaults.cv exposes the JS fallback numerics."""
+        defaults = self._ui_schema()["defaults"]
+        assert "cv" in defaults, "ui_schema.defaults.cv must exist"
+        cv = defaults["cv"]
+        for key, value in (
+            ("n_splits", 5),
+            ("random_state", 42),
+            ("gap", 0),
+            ("purge_gap", 0),
+            ("embargo", 0),
+        ):
+            assert cv.get(key) == value, (
+                f"defaults.cv.{key} must equal {value}, got {cv.get(key)!r}"
+            )
+
+    def test_defaults_tune_present(self) -> None:
+        """ui_schema.defaults.tune.n_trials replaces JS ``n_trials ?? 10``."""
+        defaults = self._ui_schema()["defaults"]
+        assert defaults.get("tune", {}).get("n_trials") == 10
+
+    def test_defaults_metric_params_present(self) -> None:
+        """ui_schema.defaults.metric_params.precision_at_k_k replaces ``?? 10`` in JS."""
+        defaults = self._ui_schema()["defaults"]
+        assert defaults.get("metric_params", {}).get("precision_at_k_k") == 10
+
+    def test_step_map_feature_weights_present(self) -> None:
+        """step_map.feature_weights replaces ``step={0.1}`` literal in JS."""
+        step_map = self._ui_schema()["step_map"]
+        assert step_map.get("feature_weights") == 0.1
+
+    def test_step_map_boundary_threshold_present(self) -> None:
+        """step_map.boundary_threshold replaces ``step={0.01}`` literal in JS."""
+        step_map = self._ui_schema()["step_map"]
+        assert step_map.get("boundary_threshold") == 0.01
+
+    def test_calibration_default_unchanged(self) -> None:
+        """defaults.calibration must remain in place (regression guard for new keys)."""
+        defaults = self._ui_schema()["defaults"]
+        cal = defaults.get("calibration")
+        assert cal == {"method": "isotonic", "params": {}}

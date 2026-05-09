@@ -82,6 +82,12 @@ function deriveStrategiesWithField(
 export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAction, backendContract }: DataTabProps) {
   // Read CV strategy fields from backend contract, derive Sets with fallbacks
   const capabilities: Record<string, any> = backendContract?.capabilities ?? {};
+  const uiSchema: Record<string, any> = backendContract?.ui_schema ?? {};
+  // P-034: numeric defaults from the contract; the JS fallback literals only
+  // survive when a unit-test fixture omits the contract entirely.
+  const cvDefaults: Record<string, number> = uiSchema.defaults?.cv ?? {};
+  const dN = (key: string, fallback: number): number =>
+    typeof cvDefaults[key] === "number" ? cvDefaults[key] : fallback;
   const cvStrategyFields: Record<string, string[]> = capabilities.cv_strategy_fields ?? {};
   const hasContractFields = Object.keys(cvStrategyFields).length > 0;
   const contractStrategies: string[] | undefined = capabilities.cv_strategies;
@@ -124,7 +130,7 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
     (dfInfo.task && cvDefaultByTask[dfInfo.task]) ||
     strategyList[0] ||
     FALLBACK_CV_STRATEGIES[0];
-  const cv = dfInfo.cv ?? { strategy: fallbackStrategy, n_splits: 5 };
+  const cv = dfInfo.cv ?? { strategy: fallbackStrategy, n_splits: dN("n_splits", 5) };
   const fs = dfInfo.feature_summary;
   const featureCols = columns.filter((c: any) => !c.excluded).map((c: any) => c.name);
   const hasTarget = Boolean(dfInfo.target);
@@ -229,16 +235,16 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
             min={2}
             max={50}
             step={1}
-            onChange={(v) => sendCv({ ...cv, n_splits: v ?? 5 })}
+            onChange={(v) => sendCv({ ...cv, n_splits: v ?? dN("n_splits", 5) })}
           />
         </div>
         {NEEDS_RANDOM_STATE.has(cv.strategy) && (
           <div class="lzw-form-row">
             <label class="lzw-label">Random state</label>
             <NumericStepper
-              value={cv.random_state ?? 42}
+              value={cv.random_state ?? dN("random_state", 42)}
               step={1}
-              onChange={(v) => sendCv({ ...cv, random_state: v ?? 42 })}
+              onChange={(v) => sendCv({ ...cv, random_state: v ?? dN("random_state", 42) })}
             />
           </div>
         )}
@@ -292,10 +298,10 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
           <div class="lzw-form-row">
             <label class="lzw-label">Gap</label>
             <NumericStepper
-              value={cv.gap ?? 0}
+              value={cv.gap ?? dN("gap", 0)}
               min={0}
               step={1}
-              onChange={(v) => sendCv({ ...cv, gap: v ?? 0 })}
+              onChange={(v) => sendCv({ ...cv, gap: v ?? dN("gap", 0) })}
             />
           </div>
         )}
@@ -304,19 +310,19 @@ export function DataTab({ dfInfo, allColumns, columnStats, splitPreview, sendAct
             <div class="lzw-form-row">
               <label class="lzw-label">Purge gap</label>
               <NumericStepper
-                value={cv.purge_gap ?? 0}
+                value={cv.purge_gap ?? dN("purge_gap", 0)}
                 min={0}
                 step={1}
-                onChange={(v) => sendCv({ ...cv, purge_gap: v ?? 0 })}
+                onChange={(v) => sendCv({ ...cv, purge_gap: v ?? dN("purge_gap", 0) })}
               />
             </div>
             <div class="lzw-form-row">
               <label class="lzw-label">Embargo</label>
               <NumericStepper
-                value={cv.embargo ?? 0}
+                value={cv.embargo ?? dN("embargo", 0)}
                 min={0}
                 step={1}
-                onChange={(v) => sendCv({ ...cv, embargo: v ?? 0 })}
+                onChange={(v) => sendCv({ ...cv, embargo: v ?? dN("embargo", 0) })}
               />
             </div>
           </>

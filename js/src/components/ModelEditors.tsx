@@ -50,6 +50,7 @@ function TypedParamsEditor({
   parameterHints,
   optionSets,
   stepMap,
+  metricParamDefaults,
   manualNumLeavesKey,
   manualNumLeavesDefault,
 }: {
@@ -60,11 +61,14 @@ function TypedParamsEditor({
   parameterHints: TypedParamMeta[];
   optionSets: Record<string, Record<string, string[]>>;
   stepMap: Record<string, number>;
+  /** P-034: numeric defaults for metric-related fields (precision_at_k_k etc.). */
+  metricParamDefaults?: Record<string, number>;
   /** Key for the manual leaf-count override (e.g. "num_leaves"); only rendered when defined. */
   manualNumLeavesKey?: string;
   /** Default leaf count used when toggle is off and value is unset. */
   manualNumLeavesDefault?: number;
 }) {
+  const defaultPrecisionAtK = metricParamDefaults?.precision_at_k_k ?? 10;
   const set = (k: string, v: any) => onChange({ ...value, [k]: v });
 
   return (
@@ -124,11 +128,11 @@ function TypedParamsEditor({
                 <div class="lzw-form-row">
                   <label class="lzw-label">precision_at_k: k</label>
                   <NumericStepper
-                    value={value._precision_at_k_k ?? 10}
+                    value={value._precision_at_k_k ?? defaultPrecisionAtK}
                     min={1}
                     max={100}
                     step={1}
-                    onChange={(v) => set("_precision_at_k_k", v ?? 10)}
+                    onChange={(v) => set("_precision_at_k_k", v ?? defaultPrecisionAtK)}
                   />
                 </div>
               )}
@@ -184,11 +188,14 @@ function FeatureWeightsEditor({
   value,
   onChange,
   columns,
+  stepMap,
 }: {
   value: Record<string, number> | null;
   onChange: (v: Record<string, number> | null) => void;
   columns: Array<{ name: string }>;
+  stepMap?: Record<string, number>;
 }) {
+  const featureWeightStep = stepMap?.feature_weights ?? 0.1;
   const enabled = value != null;
   const weights = value ?? {};
   const entries = Object.entries(weights);
@@ -231,7 +238,7 @@ function FeatureWeightsEditor({
               </select>
               <NumericStepper
                 value={w}
-                step={0.1}
+                step={featureWeightStep}
                 onChange={(v) => onChange({ ...weights, [col]: v ?? 1.0 })}
               />
               <button
@@ -343,6 +350,7 @@ export function ModelSection({
   parameterHints,
   optionSets,
   stepMap,
+  metricParamDefaults,
   columns,
   additionalParams,
   searchSpaceCatalog,
@@ -356,6 +364,8 @@ export function ModelSection({
   parameterHints: TypedParamMeta[];
   optionSets: Record<string, Record<string, string[]>>;
   stepMap: Record<string, number>;
+  /** P-034: metric-param numeric defaults (precision_at_k_k etc.) from contract. */
+  metricParamDefaults?: Record<string, number>;
   columns: Array<{ name: string }>;
   additionalParams: string[];
   /** search_space_catalog from backend ui_schema (optional; falls back to legacy literal set when absent). */
@@ -480,7 +490,7 @@ export function ModelSection({
         <label class="lzw-label">Min Data In Leaf Ratio</label>
         <NumericStepper
           value={value.min_data_in_leaf_ratio ?? 0.01}
-          step={0.01}
+          step={stepMap.min_data_in_leaf_ratio ?? 0.01}
           min={0}
           onChange={(v) => setField("min_data_in_leaf_ratio", v ?? 0.01)}
         />
@@ -490,7 +500,7 @@ export function ModelSection({
         <label class="lzw-label">Min Data In Bin Ratio</label>
         <NumericStepper
           value={value.min_data_in_bin_ratio ?? 0.01}
-          step={0.01}
+          step={stepMap.min_data_in_bin_ratio ?? 0.01}
           min={0}
           onChange={(v) => setField("min_data_in_bin_ratio", v ?? 0.01)}
         />
@@ -500,6 +510,7 @@ export function ModelSection({
         value={value.feature_weights ?? null}
         onChange={(v) => setField("feature_weights", v)}
         columns={columns}
+        stepMap={stepMap}
       />
 
       <div class="lzw-form-row">
@@ -536,6 +547,7 @@ export function ModelSection({
         parameterHints={parameterHints}
         optionSets={optionSets}
         stepMap={stepMap}
+        metricParamDefaults={metricParamDefaults}
         manualNumLeavesKey={manualNumLeavesKey}
         manualNumLeavesDefault={manualNumLeavesDefault}
       />

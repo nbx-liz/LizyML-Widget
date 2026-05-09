@@ -797,6 +797,19 @@ Model タブは Fit サブタブと Tune サブタブで構成する（実装コ
 | Lambda L2 | `model.params.lambda_l2` | `0.0001` |
 | Early Stopping Rounds | `training.early_stopping.rounds` | `50` |
 | Validation Ratio | `training.early_stopping.validation_ratio` | `0.05` |
+| Feature Weights | `model.feature_weights[col]` | `0.1` | P-034 — Search Space / Feature Weights エディタの数値増減幅 |
+| Boundary Threshold | `RetuneControls.boundary_threshold` | `0.01` | P-034 — Re-tune の boundary expansion 閾値 step |
+
+`backend_contract.ui_schema.defaults` には JS UI の `??` フォールバックを廃止するための数値 default を保持する（P-034）:
+
+| グループ | キー | 初期値 | 用途 |
+|---------|------|--------|------|
+| `defaults.cv` | `n_splits` | `5` | KFold 系の初期 fold 数 |
+| `defaults.cv` | `random_state` | `42` | shuffle / split の seed |
+| `defaults.cv` | `gap` / `purge_gap` / `embargo` | `0` | TimeSeries 系の初期境界 |
+| `defaults.tune` | `n_trials` | `10` | Tune の初期試行回数 |
+| `defaults.metric_params` | `precision_at_k_k` | `10` | `precision_at_k` メトリクスの k 値 |
+| `defaults.calibration` | `{method: "isotonic", params: {}}` | — | Calibration セクションの初期値 |
 
 #### Fit サブタブ要件（初期 backend contract 例: LightGBM）
 

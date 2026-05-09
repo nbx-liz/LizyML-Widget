@@ -190,7 +190,7 @@ function renderFixed(
                 <span class="lzw-label" style="min-width: 120px; font-size: 11px;">{col}</span>
                 <NumericStepper
                   value={w}
-                  step={0.1}
+                  step={sm.feature_weights ?? 0.1}
                   onChange={(v) => {
                     const next = { ...weights, [col]: v ?? 1.0 };
                     onChange({ ...config, fixed: next });
@@ -298,6 +298,13 @@ export function SearchSpace({
   const [addedParams, setAddedParams] = useState<string[]>([]);
   const optionSets: Record<string, Record<string, string[]>> = uiSchema?.option_sets ?? {};
   const stepMap: Record<string, number> = uiSchema?.step_map ?? {};
+  // P-034: numeric defaults from the contract; fallback only for fixtures
+  // that omit ui_schema.defaults.
+  const metricParamDefaults: Record<string, number> = uiSchema?.defaults?.metric_params ?? {};
+  const defaultPrecisionAtK: number =
+    typeof metricParamDefaults.precision_at_k_k === "number"
+      ? metricParamDefaults.precision_at_k_k
+      : 10;
   const searchSpaceCatalog: CatalogEntry[] = uiSchema?.search_space_catalog ?? [];
   const innerValidOpts: string[] = uiSchema?.inner_valid_options ?? [];
   const conditionalVisibility: Record<string, any> = uiSchema?.conditional_visibility ?? {};
@@ -465,14 +472,17 @@ export function SearchSpace({
                       <div role="cell" />
                       <div role="cell">
                         <NumericStepper
-                          value={fixedModelParams._precision_at_k_k ?? 10}
+                          value={fixedModelParams._precision_at_k_k ?? defaultPrecisionAtK}
                           min={1}
                           max={100}
                           step={1}
                           onChange={(v) =>
                             onChange({
                               space: spaceValue,
-                              fixedModelParams: { ...fixedModelParams, _precision_at_k_k: v ?? 10 },
+                              fixedModelParams: {
+                                ...fixedModelParams,
+                                _precision_at_k_k: v ?? defaultPrecisionAtK,
+                              },
                               fixedTraining,
                             })
                           }

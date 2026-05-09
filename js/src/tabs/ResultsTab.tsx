@@ -49,6 +49,8 @@ interface ResultsTabProps {
   exportLoading?: boolean;
   /** Callback to initiate a code export download. */
   onExportCode?: () => void;
+  /** P-034: backend contract step_map (passed through to RetuneControls etc.). */
+  stepMap?: Record<string, number>;
 }
 
 /** Format a plot type slug into a display label. */
@@ -82,6 +84,7 @@ export function ResultsTab({
   theme = "light",
   exportLoading = false,
   onExportCode,
+  stepMap,
 }: ResultsTabProps) {
   const [selectedPlot, setSelectedPlot] = useState<string | null>(null);
 
@@ -267,6 +270,7 @@ export function ResultsTab({
             <RetuneControls
               disabled={status === "running"}
               onRetune={(payload) => sendAction("retune", payload)}
+              stepMap={stepMap}
             />
             <div class="lzw-form-row" style="margin-top: 8px;">
               <span class="lzw-label">Best Score</span>
