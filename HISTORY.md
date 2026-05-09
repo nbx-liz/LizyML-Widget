@@ -1,5 +1,74 @@
 ## LizyML-Widget 仕様変更履歴
 
+### P-037: Adapter Protocol に Tune State Cross-Process Persistence を追加（subprocess tune 後の plot 復元）
+
+- **日付**: 2026-05-09（提案・決定・実装）
+- **ステータス**: 決定（実装中 — fix/issue-152-subprocess-tune-plot → fix/issue-147-openmp-default-subprocess）
+- **関連 Issue**: [#152](https://github.com/nbx-liz/LizyML-Widget/issues/152)（P-036 follow-up）
+- **背景**:
+  - P-036（PR #151）で Linux + libgomp 環境のデフォルト実行戦略を subprocess に切り替えた結果、`w.tune()`（先行 `w.fit()` なし）の直後に Tuning History（`optimization-history` plot）が "Loading plot..." で停止する回帰が発覚した。
+  - 原因トレース（[issue #152 本文](https://github.com/nbx-liz/LizyML-Widget/issues/152)抜粋）:
+    1. subprocess: `model.tune()` は auto-fit しないため、`adapter.export_model` 経由の `model.export()` が `MODEL_NOT_FIT` を投げる。
+    2. `_subprocess_entry.py` が例外を silent swallow → `model_path = None` → 親プロセス `service._model = None` のまま。
+    3. UI が `optimization-history` plot を要求 → `service.get_plot` が `ValueError("No trained model")` → `plot_error` 送信。
+  - `tuning_plot()` は `_tuning_result`（`@dataclass(frozen=True)` の `TuningResult`）のみを参照し、`_study`（Optuna handle）は不要。`TuningResult` は frozen dataclass + 入れ子 dataclass のみで構成され完全に pickleable。
+  - 同時に解決すべき UX バグ: `usePlot` の `plot_error` ハンドラは `loading[pt]` を解除するが、`PlotViewer` が独自 loading state を保持しており、エラー時にローディング表示が残り続ける。
+- **提案内容**:
+  - **(a) BackendAdapter Protocol に 2 メソッド追加**:
+    ```python
+    class BackendAdapter(Protocol[ModelT]):
+        # ... existing ...
+        def export_tune_state(self, model: ModelT, path: str) -> None: ...
+        def restore_tune_state(self, model: ModelT, path: str) -> None: ...
+    ```
+    - `export_tune_state`: subprocess 内で `_tuning_result`（必須）と `_study`（best-effort、pickle 失敗時は省略）を pickle 形式で `path` に書き出す。
+    - `restore_tune_state`: 親プロセスで `path` から読み戻し、freshly-created model に注入する。private slot への書き込みは adapter 内に閉じ込め、Widget / Service / 共通型は知らない。
+  - **(b) IPC 経路の追加**: `_subprocess_entry.py` の tune ブランチで:
+    1. tune-only では `adapter.export_model`（fit 前提）を **試行しない**。
+    2. 代わりに `adapter.export_tune_state(model, tune_state_path)` を呼ぶ。
+    3. `result_msg["tune_state_path"]` を同梱。
+  - **(c) Service 拡張**: `WidgetService.restore_tune_state_from_path(path, *, config, df)` を追加。adapter 経由で空モデル + tune state を構築し、`self._model` にセット。`is_model_fitted` は False を維持。
+  - **(d) JobRunner**: `SubprocessJobRunner` が `tune_state_path` を service に渡し、`finally` で確実に削除（`model_path` と対称）。
+  - **(e) UI 修正**: `PlotViewer` が `plot_error` を受信したらローディング表示を確実に解除し、エラーメッセージを表示する。`usePlot` の cleanup 確認用 vitest を追加。
+  - **(f) regression test**: `tests/regression/test_reg_152_subprocess_tune_plot.py` を追加（`LizyMLAdapter.tune` を mock、deterministic）。`5497eab`（PR #151 tip）で fail し、修正後に pass。
+- **Invariants**:
+  - INV-1: subprocess tune 完了時、`tune_state_path` は (a) `None` または (b) 親が読める path のいずれか。読めない/破損は `plot_error` に降格し widget 全体は壊さない。
+  - INV-2: 親プロセスで `restore_tune_state` 後、`is_model_fitted(model) == False` を維持する。
+  - INV-3: 親プロセスで `restore_tune_state` 後、`model._tuning_result is not None` であり、`available_plots(model)` が `optimization-history` を含む。
+  - INV-4: tune state の export は `adapter.export_model` 試行より前に実施。export 失敗が tune state を巻き込まない。
+  - INV-5: tune state ファイルは subprocess 終了かつ親側読込完了後に必ず削除される（`finally` cleanup）。
+- **影響範囲**:
+  - `src/lizyml_widget/adapter.py` — `BackendAdapter` Protocol に 2 メソッド宣言、`LizyMLAdapter` 実装
+  - `src/lizyml_widget/_subprocess_entry.py` — tune ブランチで `export_tune_state` を呼び、`export_model` を tune-only でスキップ
+  - `src/lizyml_widget/run_subprocess.py` — `SubprocessResult` に `tune_state_path` 追加
+  - `src/lizyml_widget/job_runner.py` — `SubprocessJobRunner` で `restore_tune_state_from_path` 呼び出し + cleanup
+  - `src/lizyml_widget/service.py` — `restore_tune_state_from_path` メソッド追加
+  - `js/src/components/PlotViewer.tsx`, `js/src/hooks/usePlot.ts` — `plot_error` 時のローディング解除を保証
+  - `tests/test_adapter_tune_state.py`, `tests/test_service_tune_state.py`, `tests/test_subprocess_integration.py`, `tests/regression/test_reg_152_subprocess_tune_plot.py` — 新規 / 拡張
+  - `js/src/__tests__/PlotViewer.test.tsx`, `js/src/__tests__/usePlot.test.ts` — 拡張
+  - `BLUEPRINT.md` §3.3 / §3.7.1 — Adapter Protocol API 追加と subprocess IPC ペイロード変更を記載
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]`
+- **互換性**:
+  - 公開 Python API（`w.fit()`, `w.tune()`, `w.retune()`, `w.apply_best_params()`）の signature / 振る舞いに変更なし。
+  - `BackendAdapter` Protocol 拡張は **追加のみ** であり既存実装（`LizyMLAdapter`）以外を破壊しないが、新規 backend 実装者は 2 メソッドを実装する必要がある。
+  - subprocess IPC `result_msg` に `tune_state_path` フィールドが追加される。古い subprocess バイナリと新しい parent の組み合わせでは `tune_state_path` が欠落するが、parent 側は missing を許容して従来挙動（plot 不可 + plot_error）にフォールバックする。
+- **代替案（却下）**:
+  - **案A: Tune を thread モードにフォールバック** — P-036 で fix した #147 の 30x 劣化を tune で再発させる。
+  - **案B: subprocess で tune 後に auto-fit** — `tune()` の意味論変更（lizyml 仕様と乖離）、wall-clock が +1 fit 分悪化。retune（#128）への影響も大きい。
+  - **案D: subprocess で plot を pre-render し plotly_json をキャッシュ** — 局所修正で短期的には簡潔だが、post-tune plot が増えるたびに同じ対応が必要。Optuna study handle が親に来ないため #128 の取り組みに使えない。
+  - 案C を選んだ理由: **長期方向（#128 retune resume）と #152 の plot 復元を同じ仕組みで満たす**。Adapter Protocol 拡張のコストを払う代わりに、tune state を first-class IPC ペイロードとして扱う。
+- **Optuna study の扱い**:
+  - `_study` は InMemoryStorage（デフォルト）の場合 pickleable、RDBStorage の場合は不可。`export_tune_state` は `pickle.dumps(model._study)` を try/except で best-effort 実行し、失敗したら `study=None` で blob を出力する（warn ログのみ）。
+  - 親側で復元された `_study` は #128 retune resume の前提となる。本 Proposal 自体は retune 対応を含まない（Issue #128 / #129 で別途）。
+- **受け入れ基準**:
+  - Linux + libgomp デフォルト環境で `w.tune()` 直後に Results → Tuning History が描画される。
+  - `tests/regression/test_reg_152_subprocess_tune_plot.py` が `5497eab` で fail し、本 PR で pass する。
+  - Adapter Protocol 拡張により新 backend 実装者は 2 メソッドの実装が必要であることを BLUEPRINT §3.3 に明記。
+  - `_subprocess_entry.py` の tune-without-fit `model.export()` silent swallow が排除される。
+  - `PlotViewer` が `plot_error` 受信時にローディング表示を解除し、明示的なエラーメッセージを出す（vitest で assert）。
+  - 既存テストスイート（`uv run pytest`、`pnpm test:coverage`）は全 green を維持。
+
 ### P-036: libgomp 環境でのデフォルト実行戦略を subprocess に切り替え（OpenMP プール親和性回帰の根本対策）
 
 - **日付**: 2026-05-09（提案・決定・実装）
