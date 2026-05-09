@@ -75,3 +75,109 @@ describe("ConfigTab — running state guard (B-5)", () => {
     expect(fitBtn.disabled).toBe(true);
   });
 });
+
+import { fireEvent } from "@testing-library/preact";
+
+describe("ConfigTab — Fit/Tune subtab switching (#134)", () => {
+  it("renders only the Fit primary button on initial mount (Fit subtab default)", () => {
+    const { container } = render(<ConfigTab {...defaultProps} status="completed" />);
+    const primaries = container.querySelectorAll(".lzw-btn--primary");
+    expect(primaries.length).toBe(1);
+    expect((primaries[0] as HTMLButtonElement).textContent).toContain("Fit");
+  });
+
+  it("clicking the Tune subtab swaps the primary button to Tune", () => {
+    const { container } = render(<ConfigTab {...defaultProps} status="completed" />);
+    const tuneSubtabBtn = Array.from(
+      container.querySelectorAll(".lzw-subtabs__btn"),
+    ).find((b) => b.textContent === "Tune") as HTMLButtonElement;
+    expect(tuneSubtabBtn).toBeDefined();
+    fireEvent.click(tuneSubtabBtn);
+    const primary = container.querySelector(".lzw-btn--primary") as HTMLButtonElement;
+    expect(primary.textContent).toContain("Tune");
+  });
+
+  it("Tune primary button is disabled while a job is running (B-5 parity)", () => {
+    const { container } = render(
+      <ConfigTab
+        {...defaultProps}
+        status="running"
+        config={{
+          model: { name: "lgbm", params: {} },
+          tuning: { optuna: { space: { learning_rate: { type: "float", low: 0.01, high: 0.1 } } } },
+        }}
+      />,
+    );
+    // Switch to Tune subtab
+    const tuneBtn = Array.from(
+      container.querySelectorAll(".lzw-subtabs__btn"),
+    ).find((b) => b.textContent === "Tune") as HTMLButtonElement;
+    fireEvent.click(tuneBtn);
+    const primary = container.querySelector(".lzw-btn--primary") as HTMLButtonElement;
+    expect(primary.disabled).toBe(true);
+    expect(primary.textContent).toContain("Running...");
+  });
+
+  it("Tune primary button is disabled when no search-space param is configured", () => {
+    const { container } = render(<ConfigTab {...defaultProps} status="completed" />);
+    const tuneBtn = Array.from(
+      container.querySelectorAll(".lzw-subtabs__btn"),
+    ).find((b) => b.textContent === "Tune") as HTMLButtonElement;
+    fireEvent.click(tuneBtn);
+    const primary = container.querySelector(".lzw-btn--primary") as HTMLButtonElement;
+    // No tuning.optuna.space populated -> Tune is disabled
+    expect(primary.disabled).toBe(true);
+  });
+
+  it("Tune primary button is enabled when both data and a search param exist", () => {
+    const { container } = render(
+      <ConfigTab
+        {...defaultProps}
+        status="completed"
+        config={{
+          model: { name: "lgbm", params: {} },
+          tuning: { optuna: { space: { learning_rate: { type: "float", low: 0.01, high: 0.1 } } } },
+        }}
+      />,
+    );
+    const tuneBtn = Array.from(
+      container.querySelectorAll(".lzw-subtabs__btn"),
+    ).find((b) => b.textContent === "Tune") as HTMLButtonElement;
+    fireEvent.click(tuneBtn);
+    const primary = container.querySelector(".lzw-btn--primary") as HTMLButtonElement;
+    expect(primary.disabled).toBe(false);
+    expect(primary.textContent).toContain("Tune");
+  });
+
+  it("clicking the Fit primary button dispatches the 'fit' action", () => {
+    const sendAction = vi.fn();
+    const { container } = render(
+      <ConfigTab {...defaultProps} status="completed" sendAction={sendAction} />,
+    );
+    const primary = container.querySelector(".lzw-btn--primary") as HTMLButtonElement;
+    fireEvent.click(primary);
+    expect(sendAction).toHaveBeenCalledWith("fit");
+  });
+
+  it("clicking the Tune primary button dispatches the 'tune' action", () => {
+    const sendAction = vi.fn();
+    const { container } = render(
+      <ConfigTab
+        {...defaultProps}
+        status="completed"
+        sendAction={sendAction}
+        config={{
+          model: { name: "lgbm", params: {} },
+          tuning: { optuna: { space: { learning_rate: { type: "float", low: 0.01, high: 0.1 } } } },
+        }}
+      />,
+    );
+    const tuneBtn = Array.from(
+      container.querySelectorAll(".lzw-subtabs__btn"),
+    ).find((b) => b.textContent === "Tune") as HTMLButtonElement;
+    fireEvent.click(tuneBtn);
+    const primary = container.querySelector(".lzw-btn--primary") as HTMLButtonElement;
+    fireEvent.click(primary);
+    expect(sendAction).toHaveBeenCalledWith("tune");
+  });
+});

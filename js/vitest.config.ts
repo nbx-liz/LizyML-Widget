@@ -17,11 +17,14 @@ export default defineConfig({
       reporter: ["text", "html"],
       // #114 Phase C: enforce 75% line/statement coverage and 70% branch
       // coverage so regressions are caught at PR time.
+      // #134 Phase 2.1 (2026-05-09): raised to 80% lines/statements and
+      // 75% branches after closing the long-tail uncovered surfaces
+      // (PlotViewer, DynForm nested, SearchSpace, ConfigTab branches).
       thresholds: {
-        statements: 75,
-        lines: 75,
-        functions: 50,
-        branches: 70,
+        statements: 80,
+        lines: 80,
+        functions: 55,
+        branches: 75,
       },
     },
   },
