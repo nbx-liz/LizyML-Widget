@@ -37,19 +37,15 @@ __all__ = [
     "JobResult",
     "JobRunner",
     "JobSpec",
-    "RetuneSubprocessUnsupportedError",
     "SubprocessJobRunner",
     "ThreadJobRunner",
 ]
 
 
-class RetuneSubprocessUnsupportedError(RuntimeError):
-    """Raised when retune is requested via the subprocess runner.
-
-    The subprocess path cannot pick up an existing Optuna study from a
-    fresh process today; supervisors translate this into a structured
-    ``RETUNE_SUBPROCESS_UNSUPPORTED`` error code on the widget.
-    """
+# P-038: ``RetuneSubprocessUnsupportedError`` removed. Subprocess retune
+# resume is the supported path now (see ``SubprocessJobRunner.run`` and
+# ``service.export_tune_state_to_path``). The historical class became dead
+# weight once the thread fallback (PR #155) was removed.
 
 
 @dataclass(frozen=True)
@@ -219,11 +215,12 @@ class SubprocessJobRunner:
     delivered as ``SIGTERM`` to the child process; the parent's
     ``on_progress`` does not need to raise ``InterruptedError`` itself.
 
-    Re-tune is not supported on this path yet — the subprocess starts
-    with a fresh interpreter and cannot resume the previous Optuna
-    study. The supervisor turns
-    :class:`RetuneSubprocessUnsupportedError` into the
-    ``RETUNE_SUBPROCESS_UNSUPPORTED`` error code.
+    P-038: re-tune is supported on this path via the tune-state IPC. The
+    parent serialises the current ``service._tune_model`` tune state into
+    a temp file, the subprocess reads it back via
+    ``adapter.restore_tune_state`` before invoking
+    ``adapter.tune(resume=True, ...)``. This decouples retune execution
+    from the parent main thread's libgomp pool affinity (#156).
     """
 
     kind: str = "subprocess"
@@ -243,14 +240,6 @@ class SubprocessJobRunner:
         on_progress: Callable[..., None],
         cancel_event: threading.Event,
     ) -> JobResult:
-        if spec.retune_kwargs:
-            msg = (
-                "Re-tune is not supported in subprocess execution mode. "
-                "Unset LZW_FORCE_SUBPROCESS=1 or use w.tune() for a "
-                "fresh study."
-            )
-            raise RetuneSubprocessUnsupportedError(msg)
-
         df = self._service.get_dataframe()
         target = self._service.get_df_info().get("target", "")
         model_out_path = tempfile.mkdtemp(prefix="lzw_model_")
@@ -267,6 +256,34 @@ class SubprocessJobRunner:
         tune_state_out_path = tune_state_fd.name
         tune_state_fd.close()
 
+        # P-038: subprocess retune resume — when ``retune_kwargs`` is set,
+        # serialise the current parent-side tune state into a temp file so
+        # the subprocess can pick up the existing Optuna study. ``service``
+        # raises ``ValueError`` if no prior tune model exists (early fail
+        # before the subprocess spawns).
+        tune_state_in_path: str | None = None
+        if spec.retune_kwargs is not None:
+            tune_state_in_fd = tempfile.NamedTemporaryFile(  # noqa: SIM115 — caller owns lifecycle
+                prefix="lzw_tune_state_in_", suffix=".pkl", delete=False
+            )
+            tune_state_in_path = tune_state_in_fd.name
+            tune_state_in_fd.close()
+            # Catch broad to cover both expected ``ValueError`` (no prior
+            # tune) and unexpected I/O errors during pickle.dump — both
+            # must abort before the subprocess spawns and clean up the
+            # three tempfiles allocated above. The ``raise`` re-throws
+            # the original so the supervisor classifies it correctly.
+            try:
+                self._service.export_tune_state_to_path(tune_state_in_path)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    Path(tune_state_in_path).unlink(missing_ok=True)
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(model_out_path, ignore_errors=True)
+                with contextlib.suppress(OSError):
+                    Path(tune_state_out_path).unlink(missing_ok=True)
+                raise
+
         try:
             sp_result = run_job_subprocess(
                 job_type=spec.job_type,
@@ -278,6 +295,8 @@ class SubprocessJobRunner:
                 cancel_flag=cancel_event,
                 model_out_path=model_out_path,
                 tune_state_out_path=tune_state_out_path,
+                retune_kwargs=spec.retune_kwargs,
+                tune_state_in_path=tune_state_in_path,
             )
             # Load model back from subprocess so the widget side can
             # serve plots / inference.
@@ -329,3 +348,8 @@ class SubprocessJobRunner:
             # finished reading it (no-op if subprocess never wrote it).
             with contextlib.suppress(OSError):
                 Path(tune_state_out_path).unlink(missing_ok=True)
+            # P-038: symmetric cleanup for the inbound retune tune-state
+            # blob; the subprocess only reads it, never writes it back.
+            if tune_state_in_path is not None:
+                with contextlib.suppress(OSError):
+                    Path(tune_state_in_path).unlink(missing_ok=True)

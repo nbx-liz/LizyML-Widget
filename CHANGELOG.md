@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-09
+
 ### Fixed
+- **Default-install ``w.retune()`` runs through subprocess and no longer surfaces ``RETUNE_SUBPROCESS_UNSUPPORTED`` (P-038, [#154](https://github.com/nbx-liz/LizyML-Widget/issues/154), [#156](https://github.com/nbx-liz/LizyML-Widget/issues/156))**.
+  After P-036 made subprocess the default on Linux + libgomp,
+  ``w.tune() → w.retune()`` failed by default because the subprocess could
+  not resume the existing Optuna study. P-038 extends the P-037 tune-state
+  IPC to the input direction so the parent serialises the current
+  ``service._tune_model`` tune state into a temp file, the subprocess
+  restores it via ``adapter.restore_tune_state``, then runs
+  ``adapter.tune(resume=True, ...)``. ``RetuneSubprocessUnsupportedError``
+  and the ``RETUNE_SUBPROCESS_UNSUPPORTED`` error code are removed, and the
+  ``widget._run_job`` thread-fallback branch is gone. Empirical perf
+  (100k × 50, 3 trials, libgomp host): clean retune is now within ~1.1x of
+  subprocess tune (was 1.43x with the thread fallback), and the
+  ``tune → main-thread booster.predict → retune`` flow stays within ~1.1x
+  instead of regressing to ~11x via the libgomp pool-affinity catastrophe.
+  Closes [#128](https://github.com/nbx-liz/LizyML-Widget/issues/128).
 - **Persist tune state across subprocess boundary so post-tune plots render on the parent (P-037, [#152](https://github.com/nbx-liz/LizyML-Widget/issues/152))**.
   After P-036 made subprocess the default on Linux + libgomp, ``w.tune()``
   followed by Results → Tuning History got stuck at "Loading plot..." because
@@ -246,8 +263,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `num_leaves ?? 256` defaults are removed; default flows from the catalog.
     The `verbose / num_threads` exclusion comes from
     `additional_params_hidden_keys`.
-
-## [0.9.0] - 2026-05-08
 
 ### Changed
 - **Required lizyml version bumped to `>=0.10.0,<0.13`** (P-030, [#112](https://github.com/nbx-liz/LizyML-Widget/issues/112))

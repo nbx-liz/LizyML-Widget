@@ -20,7 +20,6 @@ from .job_runner import (
     JobResult,
     JobRunner,
     JobSpec,
-    RetuneSubprocessUnsupportedError,
     SubprocessJobRunner,
     ThreadJobRunner,
 )
@@ -598,6 +597,12 @@ class LizyWidget(anywidget.AnyWidget):
         # P-032: pick the runner strategy and hand it the immutable JobSpec.
         # The supervisor in ``_supervise`` owns the state machine + traitlet
         # plumbing for *both* runners, so the worker logic lives once.
+        #
+        # P-038: subprocess retune resume is now supported via tune-state
+        # IPC. Runner selection is therefore strategy-only — retune routes
+        # to the same path as initial tune. The previous PR #155 thread
+        # fallback is gone; it was unsafe whenever the user entered any
+        # libgomp parallel region on the parent main thread (#156).
         runner: JobRunner
         if self._execution_strategy == "subprocess":
             runner = SubprocessJobRunner(self._service, libomp_path=self._libomp_path)
@@ -683,13 +688,6 @@ class LizyWidget(anywidget.AnyWidget):
             self._apply_job_result(result)
             self.elapsed_sec = round(time.monotonic() - start, 1)
             self.status = "completed"
-        except RetuneSubprocessUnsupportedError as exc:
-            self.elapsed_sec = round(time.monotonic() - start, 1)
-            self.error = {
-                "code": "RETUNE_SUBPROCESS_UNSUPPORTED",
-                "message": str(exc),
-            }
-            self.status = "failed"
         except InterruptedError:
             # INV-D (BLUEPRINT §6.4): cancel during running -> failed/CANCELLED.
             self.elapsed_sec = round(time.monotonic() - start, 1)

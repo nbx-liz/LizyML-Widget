@@ -791,6 +791,44 @@ class WidgetService:
         with self._model_lock:
             self._model = model
 
+    def export_tune_state_to_path(self, path: str) -> None:
+        """Serialize the current tune state to *path* for subprocess retune (P-038).
+
+        Symmetric counterpart of :meth:`restore_tune_state_from_path`. Used by
+        ``SubprocessJobRunner`` when launching a subprocess retune: the parent
+        writes ``_tune_model._tuning_result`` (and best-effort ``_study``) to
+        *path* so the subprocess can pick up the existing Optuna study before
+        calling ``adapter.tune(resume=True, ...)``.
+
+        Concurrency note
+        ----------------
+        The pickle I/O runs **outside** ``_model_lock`` for the same reason
+        :meth:`tune` does: holding the lock through a multi-MB write would
+        serialise unrelated reads (e.g., ``predict``). The lock is held only
+        long enough to take a strong reference to ``_tune_model`` so that an
+        intervening ``load_data()`` cannot null it out between the read and
+        the export. Inside :meth:`adapter.LizyMLAdapter.export_tune_state`,
+        ``_rounds`` is copied with ``list(...)`` and the study is pickled
+        (deep copy semantics), so concurrent writes to the model after the
+        reference is taken cannot corrupt the blob; the worst case is that
+        the blob reflects a slightly stale snapshot, which the supervisor
+        FSM (INV-A: at most one running job) already prevents in practice.
+
+        Raises
+        ------
+        ValueError
+            If no prior tune model exists. Subprocess retune requires the
+            in-memory state of a previous tune to be exportable; calling
+            without a prior tune is a programming error and is rejected
+            early so the subprocess never spawns.
+        """
+        with self._model_lock:
+            model = self._tune_model
+        if model is None:
+            msg = "Cannot export tune state: no prior tune exists. Run w.tune() first."
+            raise ValueError(msg)
+        self._adapter.export_tune_state(model, path)
+
     def restore_tune_state_from_path(
         self,
         path: str,
@@ -815,11 +853,9 @@ class WidgetService:
             self._model = model
             # Mirror the in-process tune path (P-028 ``_tune_model`` slot) so
             # apply_best_params → Fit → retune still has the tuned-state model
-            # available. Without this, subprocess tune leaves
-            # ``_tune_model is None`` and any future retune flow regresses.
-            # Subprocess retune itself is still rejected today (see
-            # ``RetuneSubprocessUnsupportedError``), so the parity matters
-            # only when the user opts back into thread mode for retune.
+            # available. Without this, subprocess tune would leave
+            # ``_tune_model is None`` and the next retune (P-038 subprocess
+            # retune resume) would have no tune state to export.
             self._tune_model = model
 
     def save_model(self, path: str) -> str:

@@ -86,8 +86,15 @@ def run_job_subprocess(
     cancel_flag: threading.Event,
     model_out_path: str | None = None,
     tune_state_out_path: str | None = None,
+    retune_kwargs: dict[str, Any] | None = None,
+    tune_state_in_path: str | None = None,
 ) -> SubprocessJobResult:
     """Spawn subprocess and run training job.
+
+    P-038: ``retune_kwargs`` and ``tune_state_in_path`` extend the input
+    contract to support subprocess retune resume. When ``retune_kwargs``
+    is non-None, the subprocess restores tune state from
+    ``tune_state_in_path`` and invokes ``adapter.tune(resume=True, ...)``.
 
     Raises InterruptedError on cancellation, RuntimeError on failure.
     """
@@ -100,6 +107,8 @@ def run_job_subprocess(
             "target": target,
             "model_out_path": model_out_path,
             "tune_state_out_path": tune_state_out_path,
+            "retune_kwargs": retune_kwargs,
+            "tune_state_in_path": tune_state_in_path,
         },
         protocol=pickle.HIGHEST_PROTOCOL,
     )

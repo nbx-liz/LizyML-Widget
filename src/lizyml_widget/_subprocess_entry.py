@@ -57,11 +57,19 @@ def run_job(
     model_out_path: str | None,
     output: IO[bytes],
     tune_state_out_path: str | None = None,
+    retune_kwargs: dict[str, Any] | None = None,
+    tune_state_in_path: str | None = None,
 ) -> None:
     """Execute a fit or tune job and write results to output.
 
     This function runs on the main thread of the subprocess,
     so OpenMP parallel regions use the correct thread pool.
+
+    P-038: when ``retune_kwargs`` is non-None and ``job_type == "tune"``,
+    the subprocess restores tune state from ``tune_state_in_path`` before
+    invoking ``adapter.tune(resume=True, ...)``. Updated tune state is
+    written back to ``tune_state_out_path`` so the parent can reattach it
+    to ``service._tune_model``.
     """
     cancel_flag = threading.Event()
 
@@ -105,6 +113,12 @@ def run_job(
         adapter = _create_adapter()
         model = adapter.create_model(config, df)
 
+        # P-038: subprocess retune resume — restore prior tune state into the
+        # fresh model so ``adapter.tune(resume=True, ...)`` continues the
+        # existing Optuna study instead of starting a new one.
+        if job_type == "tune" and retune_kwargs is not None and tune_state_in_path is not None:
+            adapter.restore_tune_state(model, tune_state_in_path)
+
         if job_type == "fit":
             summary = adapter.fit(model, on_progress=on_progress)
             result_msg: dict[str, Any] = {
@@ -120,7 +134,13 @@ def run_job(
                 "model_path": None,
             }
         elif job_type == "tune":
-            summary_t = adapter.tune(model, on_progress=on_progress)
+            tune_kwargs: dict[str, Any] = {"on_progress": on_progress}
+            if retune_kwargs is not None:
+                # Forward ``resume`` / ``n_trials`` / ``expand_boundary`` /
+                # ``boundary_threshold`` straight to the adapter; the
+                # signatures match by design (P-028 / adapter.tune).
+                tune_kwargs.update(retune_kwargs)
+            summary_t = adapter.tune(model, **tune_kwargs)
             # ``model.tune()`` does not auto-fit — the adapter returns
             # ``[]`` from evaluate_table/split_summary on an unfit model
             # (#147 / P-036, see :func:`adapter_results.is_model_fitted`).
@@ -194,6 +214,8 @@ def main() -> None:
         target=input_data["target"],
         model_out_path=input_data.get("model_out_path"),
         tune_state_out_path=input_data.get("tune_state_out_path"),
+        retune_kwargs=input_data.get("retune_kwargs"),
+        tune_state_in_path=input_data.get("tune_state_in_path"),
         output=sys.stdout.buffer,
     )
 
