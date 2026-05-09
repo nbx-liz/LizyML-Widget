@@ -244,10 +244,18 @@ class SubprocessJobRunner:
         cancel_event: threading.Event,
     ) -> JobResult:
         if spec.retune_kwargs:
+            # #154: under default install, ``widget._run_job`` falls back to
+            # the thread runner before reaching this branch. This rejection
+            # only fires when a caller bypasses the supervisor (tests) or
+            # the user explicitly forces subprocess via direct construction.
+            # Remediation must point to the actual opt-out env var
+            # (``LZW_FORCE_THREAD=1`` post-P-036, not the legacy
+            # ``LZW_FORCE_SUBPROCESS=1`` which is a no-op).
             msg = (
                 "Re-tune is not supported in subprocess execution mode. "
-                "Unset LZW_FORCE_SUBPROCESS=1 or use w.tune() for a "
-                "fresh study."
+                "Set LZW_FORCE_THREAD=1 to opt back into the in-process "
+                "runner, or call w.tune() for a fresh study. "
+                "(Subprocess re-tune resume is tracked by issue #128.)"
             )
             raise RetuneSubprocessUnsupportedError(msg)
 

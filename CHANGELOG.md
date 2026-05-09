@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-09
+
 ### Fixed
+- **Default-install ``w.retune()`` no longer surfaces ``RETUNE_SUBPROCESS_UNSUPPORTED`` ([#154](https://github.com/nbx-liz/LizyML-Widget/issues/154))**.
+  After P-036 made subprocess the default execution strategy on Linux +
+  libgomp, ``w.tune() → w.retune()`` failed by default because
+  ``SubprocessJobRunner`` cannot resume an Optuna study from a fresh
+  process. The widget now transparently falls back to the thread runner
+  for re-tune jobs only when subprocess is the default — initial tune
+  still uses subprocess to keep the P-036 / #147 perf win. The remediation
+  message on the (now rare) explicit-opt-in subprocess retune path was
+  updated to point users to ``LZW_FORCE_THREAD=1`` instead of the no-op
+  ``LZW_FORCE_SUBPROCESS=1``. Subprocess re-tune resume itself remains
+  tracked by [#128](https://github.com/nbx-liz/LizyML-Widget/issues/128).
 - **Persist tune state across subprocess boundary so post-tune plots render on the parent (P-037, [#152](https://github.com/nbx-liz/LizyML-Widget/issues/152))**.
   After P-036 made subprocess the default on Linux + libgomp, ``w.tune()``
   followed by Results → Tuning History got stuck at "Loading plot..." because
@@ -246,8 +259,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `num_leaves ?? 256` defaults are removed; default flows from the catalog.
     The `verbose / num_threads` exclusion comes from
     `additional_params_hidden_keys`.
-
-## [0.9.0] - 2026-05-08
 
 ### Changed
 - **Required lizyml version bumped to `>=0.10.0,<0.13`** (P-030, [#112](https://github.com/nbx-liz/LizyML-Widget/issues/112))

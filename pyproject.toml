@@ -34,6 +34,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/nbx-liz/LizyML-Widget"
 Repository = "https://github.com/nbx-liz/LizyML-Widget"
+"Bug Tracker" = "https://github.com/nbx-liz/LizyML-Widget/issues"
+Changelog = "https://github.com/nbx-liz/LizyML-Widget/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # Pin lizyml to the exact minor range this widget version understands.

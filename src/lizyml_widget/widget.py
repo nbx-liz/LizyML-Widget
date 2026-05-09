@@ -105,6 +105,13 @@ class LizyWidget(anywidget.AnyWidget):
         self._job_lock = threading.Lock()
         self._job_counter = 0
         self._inference_df: pd.DataFrame | None = None
+        # #154: warn-once flag for the retune→thread fallback notice. The
+        # check/set in ``_run_job`` runs after ``_job_lock`` is released
+        # (the lock only protects the FSM transition, not runner choice),
+        # so a race between two near-simultaneous retunes could log the
+        # notice twice. That is harmless and we accept it; the cost of
+        # adding a separate lock is not justified for an info log.
+        self._retune_fallback_warned: bool = False
         # P-035: tune snapshots now live on TuningSummary inside
         # WidgetService, not on the widget. Removed _tune_config_snapshot
         # and _tune_ui_snapshot.
@@ -598,9 +605,26 @@ class LizyWidget(anywidget.AnyWidget):
         # P-032: pick the runner strategy and hand it the immutable JobSpec.
         # The supervisor in ``_supervise`` owns the state machine + traitlet
         # plumbing for *both* runners, so the worker logic lives once.
+        #
+        # #154: ``SubprocessJobRunner`` cannot resume an Optuna study from a
+        # fresh process today (#128 tracks the long-term fix using P-037's
+        # tune-state IPC). Until that lands, transparently fall back to the
+        # thread runner for re-tune jobs when subprocess is the default —
+        # otherwise the happy-path ``w.tune() → w.retune()`` flow surfaces
+        # ``RETUNE_SUBPROCESS_UNSUPPORTED`` on every default install. Initial
+        # tune (``retune_kwargs is None``) still uses subprocess to keep the
+        # P-036 / #147 perf win.
         runner: JobRunner
-        if self._execution_strategy == "subprocess":
+        if self._execution_strategy == "subprocess" and retune_kwargs is None:
             runner = SubprocessJobRunner(self._service, libomp_path=self._libomp_path)
+        elif self._execution_strategy == "subprocess" and retune_kwargs is not None:
+            if not self._retune_fallback_warned:
+                _log.info(
+                    "re-tune temporarily falls back to thread runner; "
+                    "subprocess re-tune resume is tracked by issue #128"
+                )
+                self._retune_fallback_warned = True
+            runner = ThreadJobRunner(self._service)
         else:
             runner = ThreadJobRunner(self._service)
         spec = JobSpec(
