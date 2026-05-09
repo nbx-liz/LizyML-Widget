@@ -666,36 +666,36 @@ class TestRetuneAction:
 # ──────────────────────────────────────────────────────────────
 
 
-class TestRetuneSubprocessRejection:
-    """P-032: re-tune via SubprocessJobRunner raises RetuneSubprocessUnsupportedError.
-
-    The supervisor turns this into the ``RETUNE_SUBPROCESS_UNSUPPORTED`` error
-    code on the widget. These tests drive the runner + supervisor directly
-    rather than spawning a real subprocess.
+class TestRetuneSubprocessResume:
+    """P-038: subprocess retune resume — the previously-rejected path is now
+    the supported path. The runner serialises tune state into a temp file
+    and the subprocess restores it before invoking adapter.tune(resume=True).
     """
 
-    def test_subprocess_runner_rejects_retune_kwargs(self) -> None:
-        """SubprocessJobRunner.run raises immediately for any retune_kwargs."""
+    def test_subprocess_runner_fails_fast_when_no_prior_tune(self) -> None:
+        """``service.export_tune_state_to_path`` raises when ``_tune_model``
+        is unset; the subprocess never spawns and the temp file is cleaned up.
+        """
         import threading
 
-        from lizyml_widget.job_runner import (
-            JobSpec,
-            RetuneSubprocessUnsupportedError,
-            SubprocessJobRunner,
-        )
+        from lizyml_widget.job_runner import JobSpec, SubprocessJobRunner
 
         w = _make_widget()
+        # No prior tune happened on this widget — service._tune_model is None.
         runner = SubprocessJobRunner(w._service)
         spec = JobSpec(
             job_type="tune",
             config={"config_version": 1},
             retune_kwargs={"resume": True, "n_trials": 10},
         )
-        with pytest.raises(RetuneSubprocessUnsupportedError, match="subprocess"):
+        with pytest.raises(ValueError, match="no prior tune"):
             runner.run(spec, on_progress=lambda *a, **kw: None, cancel_event=threading.Event())
 
-    def test_supervise_translates_unsupported_error_to_traitlet(self) -> None:
-        """End-to-end: subprocess runner + retune → widget.error code is set."""
+    def test_supervise_surfaces_retune_failure_as_internal_error(self) -> None:
+        """When subprocess retune fails (e.g. no prior tune), the supervisor
+        translates the exception into the generic ``INTERNAL_ERROR`` /
+        ``BACKEND_ERROR`` paths — there is no longer a dedicated
+        ``RETUNE_SUBPROCESS_UNSUPPORTED`` code (P-038)."""
         from lizyml_widget.job_runner import JobSpec, SubprocessJobRunner
 
         w = _make_widget()
@@ -711,8 +711,10 @@ class TestRetuneSubprocessRejection:
         w._supervise(runner, spec)
 
         assert w.status == "failed"
-        assert w.error["code"] == "RETUNE_SUBPROCESS_UNSUPPORTED"
-        assert "subprocess" in w.error["message"].lower()
+        # No more dedicated RETUNE_SUBPROCESS_UNSUPPORTED code; the error
+        # bubbles up under the generic boundaries.
+        assert w.error.get("code") != "RETUNE_SUBPROCESS_UNSUPPORTED"
+        assert w.error["code"] in {"INTERNAL_ERROR", "BACKEND_ERROR", "SUBPROCESS_ERROR"}
 
     def test_subprocess_runner_accepts_normal_tune_when_retune_kwargs_is_none(
         self,

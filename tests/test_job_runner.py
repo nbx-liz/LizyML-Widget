@@ -22,7 +22,6 @@ import pytest
 from lizyml_widget.job_runner import (
     JobResult,
     JobSpec,
-    RetuneSubprocessUnsupportedError,
     SubprocessJobRunner,
     ThreadJobRunner,
 )
@@ -173,20 +172,56 @@ class TestSubprocessJobRunnerNormal:
         assert SubprocessJobRunner(mock_service).kind == "subprocess"
 
 
-class TestSubprocessJobRunnerRetuneRejection:
-    def test_retune_raises_unsupported_error(self, mock_service: Any) -> None:
+class TestSubprocessJobRunnerRetuneResume:
+    """P-038: subprocess retune resume forwards retune_kwargs and
+    tune_state_in_path to ``run_job_subprocess`` after exporting the
+    parent's current tune state.
+    """
+
+    def test_retune_forwards_kwargs_and_exports_tune_state(self, mock_service: Any) -> None:
+        from lizyml_widget.subprocess_runner import SubprocessJobResult
+
         runner = SubprocessJobRunner(mock_service)
         spec = JobSpec(
             job_type="tune",
             config={},
             retune_kwargs={"resume": True, "n_trials": 5},
         )
-        with pytest.raises(RetuneSubprocessUnsupportedError, match="subprocess"):
+        captured: dict[str, Any] = {}
+
+        def fake_run(**kwargs: Any) -> Any:
+            captured.update(kwargs)
+            return SubprocessJobResult(
+                job_type="tune",
+                fit_summary={},
+                tune_summary={
+                    "best_params": {},
+                    "best_score": 0.0,
+                    "trials": [],
+                    "metric_name": "auc",
+                    "direction": "maximize",
+                    "rounds": [],
+                    "boundary_report": None,
+                },
+                eval_table=[],
+                split_summary=[],
+                available_plots=[],
+                model_path=None,
+            )
+
+        with patch("lizyml_widget.job_runner.run_job_subprocess", side_effect=fake_run):
             runner.run(
                 spec,
                 on_progress=lambda *a, **kw: None,
                 cancel_event=threading.Event(),
             )
+
+        # The parent must call export_tune_state_to_path before spawning.
+        mock_service.export_tune_state_to_path.assert_called_once()
+        # The path written by the parent must reach the subprocess input.
+        export_path = mock_service.export_tune_state_to_path.call_args.args[0]
+        assert captured.get("tune_state_in_path") == export_path
+        assert captured.get("retune_kwargs") == {"resume": True, "n_trials": 5}
 
 
 class TestSubprocessJobRunnerCancel:

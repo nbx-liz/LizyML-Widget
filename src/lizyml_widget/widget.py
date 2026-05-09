@@ -20,7 +20,6 @@ from .job_runner import (
     JobResult,
     JobRunner,
     JobSpec,
-    RetuneSubprocessUnsupportedError,
     SubprocessJobRunner,
     ThreadJobRunner,
 )
@@ -105,13 +104,6 @@ class LizyWidget(anywidget.AnyWidget):
         self._job_lock = threading.Lock()
         self._job_counter = 0
         self._inference_df: pd.DataFrame | None = None
-        # #154: warn-once flag for the retune→thread fallback notice. The
-        # check/set in ``_run_job`` runs after ``_job_lock`` is released
-        # (the lock only protects the FSM transition, not runner choice),
-        # so a race between two near-simultaneous retunes could log the
-        # notice twice. That is harmless and we accept it; the cost of
-        # adding a separate lock is not justified for an info log.
-        self._retune_fallback_warned: bool = False
         # P-035: tune snapshots now live on TuningSummary inside
         # WidgetService, not on the widget. Removed _tune_config_snapshot
         # and _tune_ui_snapshot.
@@ -606,25 +598,14 @@ class LizyWidget(anywidget.AnyWidget):
         # The supervisor in ``_supervise`` owns the state machine + traitlet
         # plumbing for *both* runners, so the worker logic lives once.
         #
-        # #154: ``SubprocessJobRunner`` cannot resume an Optuna study from a
-        # fresh process today (#128 tracks the long-term fix using P-037's
-        # tune-state IPC). Until that lands, transparently fall back to the
-        # thread runner for re-tune jobs when subprocess is the default —
-        # otherwise the happy-path ``w.tune() → w.retune()`` flow surfaces
-        # ``RETUNE_SUBPROCESS_UNSUPPORTED`` on every default install. Initial
-        # tune (``retune_kwargs is None``) still uses subprocess to keep the
-        # P-036 / #147 perf win.
+        # P-038: subprocess retune resume is now supported via tune-state
+        # IPC. Runner selection is therefore strategy-only — retune routes
+        # to the same path as initial tune. The previous PR #155 thread
+        # fallback is gone; it was unsafe whenever the user entered any
+        # libgomp parallel region on the parent main thread (#156).
         runner: JobRunner
-        if self._execution_strategy == "subprocess" and retune_kwargs is None:
+        if self._execution_strategy == "subprocess":
             runner = SubprocessJobRunner(self._service, libomp_path=self._libomp_path)
-        elif self._execution_strategy == "subprocess" and retune_kwargs is not None:
-            if not self._retune_fallback_warned:
-                _log.info(
-                    "re-tune temporarily falls back to thread runner; "
-                    "subprocess re-tune resume is tracked by issue #128"
-                )
-                self._retune_fallback_warned = True
-            runner = ThreadJobRunner(self._service)
         else:
             runner = ThreadJobRunner(self._service)
         spec = JobSpec(
@@ -707,13 +688,6 @@ class LizyWidget(anywidget.AnyWidget):
             self._apply_job_result(result)
             self.elapsed_sec = round(time.monotonic() - start, 1)
             self.status = "completed"
-        except RetuneSubprocessUnsupportedError as exc:
-            self.elapsed_sec = round(time.monotonic() - start, 1)
-            self.error = {
-                "code": "RETUNE_SUBPROCESS_UNSUPPORTED",
-                "message": str(exc),
-            }
-            self.status = "failed"
         except InterruptedError:
             # INV-D (BLUEPRINT §6.4): cancel during running -> failed/CANCELLED.
             self.elapsed_sec = round(time.monotonic() - start, 1)

@@ -2,26 +2,28 @@
 
 After P-036 made subprocess the default execution strategy on libgomp hosts,
 ``w.tune() → w.retune()`` happy path failed by default with
-``RETUNE_SUBPROCESS_UNSUPPORTED``. The remediation message also pointed
-users to the post-P-036 no-op ``LZW_FORCE_SUBPROCESS=1`` env var.
+``RETUNE_SUBPROCESS_UNSUPPORTED``. PR #155 patched this with a thread
+fallback; #156 / P-038 then replaced the fallback with subprocess retune
+resume because the thread fallback was unsafe whenever any libgomp
+parallel region had been entered on the parent main thread.
 
-These tests pin the post-fix contract:
+These tests pin the post-P-038 contract:
 
-- INV-#154-A: under the default strategy, ``w.retune(...)`` after a successful
-  ``w.tune()`` completes via an automatic fallback to the thread runner.
-- INV-#154-B: any remaining subprocess-rejection error message must point to
-  ``LZW_FORCE_THREAD=1`` (the actual opt-out), not the no-op env var.
+- INV-#154-A: under the default strategy, ``w.retune(...)`` after a
+  successful ``w.tune()`` completes via the SAME ``SubprocessJobRunner``
+  used by initial tune (no thread fallback any more).
 - INV-#154-C: subprocess Fit overhead is bounded (slow regression — pinned
   numerically so future strategy changes that double the cost fail CI).
 
-Test failures on commit ``8d169f5`` (current ``develop`` tip), pass after the
-hotfix lands.
+INV-#154-B (rejection-message remediation) was retired alongside
+``RetuneSubprocessUnsupportedError`` itself in P-038. The full
+subprocess retune contract now lives in
+``test_reg_156_subprocess_retune.py``.
 """
 
 from __future__ import annotations
 
 import os
-import threading
 import time
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -67,25 +69,46 @@ def _make_widget_with_data() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# INV-#154-A: retune auto-fallback under default subprocess strategy
+# INV-#154-A: retune routes through the SubprocessJobRunner under default
+# (P-038 replaced PR #155's thread fallback with subprocess retune resume).
 # ---------------------------------------------------------------------------
 
 
-class TestRetuneAutoFallbackUnderDefaultStrategy:
-    """When strategy is detected as ``subprocess``, ``_run_job(retune)`` must
-    transparently fall back to ``ThreadJobRunner`` so the user-visible flow
-    succeeds without env-var fiddling."""
+class TestRetuneRoutesToSubprocessRunnerUnderDefault:
+    """Under the default subprocess strategy, ``w.retune(...)`` must use the
+    same ``SubprocessJobRunner`` as initial tune. PR #155's thread fallback
+    is gone."""
 
-    def test_retune_with_subprocess_default_uses_thread_runner(self) -> None:
-        """The supervisor must end in ``completed``, not ``failed`` with
-        ``RETUNE_SUBPROCESS_UNSUPPORTED``."""
-        with patch(
-            "lizyml_widget.widget.get_execution_strategy",
-            return_value=("subprocess", "/usr/lib/libomp5.so"),
+    def test_retune_with_subprocess_default_uses_subprocess_runner(self) -> None:
+        with (
+            patch(
+                "lizyml_widget.widget.get_execution_strategy",
+                return_value=("subprocess", "/usr/lib/libomp5.so"),
+            ),
+            patch("lizyml_widget.widget.SubprocessJobRunner") as mock_sp,
+            patch("lizyml_widget.widget.ThreadJobRunner") as mock_thread,
         ):
-            w = _make_widget_with_data()
+            mock_sp_inst = mock_sp.return_value
+            mock_sp_inst.kind = "subprocess"
+            mock_sp_inst.run.return_value = MagicMock(
+                job_type="tune",
+                fit_summary={},
+                tune_summary={
+                    "best_params": {},
+                    "best_score": 0.91,
+                    "trials": [],
+                    "metric_name": "auc",
+                    "direction": "maximize",
+                    "rounds": [],
+                    "boundary_report": None,
+                },
+                eval_table=[],
+                split_summary=[],
+                available_plots=["optimization-history"],
+                model_path=None,
+            )
 
-            # Seed prior tune so retune() passes the precondition.
+            w = _make_widget_with_data()
             w.tune_summary = {
                 "best_params": {"learning_rate": 0.05},
                 "best_score": 0.9,
@@ -95,45 +118,23 @@ class TestRetuneAutoFallbackUnderDefaultStrategy:
                 "rounds": [],
                 "boundary_report": None,
             }
-            # Replace service.tune so retune doesn't hit lightgbm.
-            captured: list[dict[str, Any]] = []
-
-            def mock_tune(config: dict[str, Any], *, on_progress: Any = None, **kwargs: Any) -> Any:
-                captured.append(kwargs)
-                from lizyml_widget.types import TuningSummary
-
-                return TuningSummary(
-                    best_params={},
-                    best_score=0.91,
-                    trials=[],
-                    metric_name="auc",
-                    direction="maximize",
-                    rounds=[],
-                    boundary_report=None,
-                )
-
-            w._service.tune = mock_tune  # type: ignore[assignment]
             w._service._tune_model = MagicMock()  # P-028 prerequisite
 
             w.retune(n_trials=5)
-
-            # Wait for the supervisor thread to complete.
             if w._job_thread:
                 w._job_thread.join(timeout=10)
 
+            mock_sp.assert_called_once()
+            mock_thread.assert_not_called()
             assert w.status == "completed", (
-                f"Expected retune to complete via thread fallback; "
+                f"Expected retune to complete via subprocess runner; "
                 f"got status={w.status!r} error={w.error!r}"
             )
             assert w.error.get("code") != "RETUNE_SUBPROCESS_UNSUPPORTED"
-            # The thread runner forwards resume kwargs via _run_tune.
-            assert captured, "service.tune was never called"
-            assert captured[0].get("resume") is True
-            assert captured[0].get("n_trials") == 5
 
     def test_initial_tune_still_uses_subprocess_under_default(self) -> None:
-        """The fallback must be retune-only — initial tune must NOT regress
-        back to thread mode (that would re-introduce the #147 30x slowdown)."""
+        """Initial tune must continue to use subprocess (the #147 perf win
+        must not regress)."""
 
         with (
             patch(
@@ -169,45 +170,6 @@ class TestRetuneAutoFallbackUnderDefaultStrategy:
             # Initial tune used subprocess runner.
             mock_sp.assert_called_once()
             mock_thread.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# INV-#154-B: error message points to the actual opt-out env var
-# ---------------------------------------------------------------------------
-
-
-class TestRejectionMessageRemediation:
-    """Even when subprocess retune is rejected (e.g. user explicitly forces
-    subprocess), the remediation guidance must reference ``LZW_FORCE_THREAD``,
-    not the no-op ``LZW_FORCE_SUBPROCESS``."""
-
-    def test_rejection_message_mentions_lzw_force_thread(self) -> None:
-        from lizyml_widget.job_runner import (
-            JobSpec,
-            RetuneSubprocessUnsupportedError,
-            SubprocessJobRunner,
-        )
-
-        w = _make_widget_with_data()
-        runner = SubprocessJobRunner(w._service)
-        spec = JobSpec(
-            job_type="tune",
-            config={"config_version": 1},
-            retune_kwargs={"resume": True, "n_trials": 10},
-        )
-        with pytest.raises(RetuneSubprocessUnsupportedError) as exc_info:
-            runner.run(spec, on_progress=lambda *a, **kw: None, cancel_event=threading.Event())
-
-        msg = str(exc_info.value)
-        # The historical wording referenced the no-op env var; the new
-        # message must point users to the actual opt-out.
-        assert "LZW_FORCE_THREAD" in msg, (
-            f"Expected remediation message to mention LZW_FORCE_THREAD; got: {msg!r}"
-        )
-        assert "LZW_FORCE_SUBPROCESS" not in msg, (
-            f"LZW_FORCE_SUBPROCESS is a no-op after P-036 and must not appear "
-            f"in the remediation message; got: {msg!r}"
-        )
 
 
 # ---------------------------------------------------------------------------

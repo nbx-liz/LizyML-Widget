@@ -10,17 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.0] - 2026-05-09
 
 ### Fixed
-- **Default-install ``w.retune()`` no longer surfaces ``RETUNE_SUBPROCESS_UNSUPPORTED`` ([#154](https://github.com/nbx-liz/LizyML-Widget/issues/154))**.
-  After P-036 made subprocess the default execution strategy on Linux +
-  libgomp, ``w.tune() → w.retune()`` failed by default because
-  ``SubprocessJobRunner`` cannot resume an Optuna study from a fresh
-  process. The widget now transparently falls back to the thread runner
-  for re-tune jobs only when subprocess is the default — initial tune
-  still uses subprocess to keep the P-036 / #147 perf win. The remediation
-  message on the (now rare) explicit-opt-in subprocess retune path was
-  updated to point users to ``LZW_FORCE_THREAD=1`` instead of the no-op
-  ``LZW_FORCE_SUBPROCESS=1``. Subprocess re-tune resume itself remains
-  tracked by [#128](https://github.com/nbx-liz/LizyML-Widget/issues/128).
+- **Default-install ``w.retune()`` runs through subprocess and no longer surfaces ``RETUNE_SUBPROCESS_UNSUPPORTED`` (P-038, [#154](https://github.com/nbx-liz/LizyML-Widget/issues/154), [#156](https://github.com/nbx-liz/LizyML-Widget/issues/156))**.
+  After P-036 made subprocess the default on Linux + libgomp,
+  ``w.tune() → w.retune()`` failed by default because the subprocess could
+  not resume the existing Optuna study. P-038 extends the P-037 tune-state
+  IPC to the input direction so the parent serialises the current
+  ``service._tune_model`` tune state into a temp file, the subprocess
+  restores it via ``adapter.restore_tune_state``, then runs
+  ``adapter.tune(resume=True, ...)``. ``RetuneSubprocessUnsupportedError``
+  and the ``RETUNE_SUBPROCESS_UNSUPPORTED`` error code are removed, and the
+  ``widget._run_job`` thread-fallback branch is gone. Empirical perf
+  (100k × 50, 3 trials, libgomp host): clean retune is now within ~1.1x of
+  subprocess tune (was 1.43x with the thread fallback), and the
+  ``tune → main-thread booster.predict → retune`` flow stays within ~1.1x
+  instead of regressing to ~11x via the libgomp pool-affinity catastrophe.
+  Closes [#128](https://github.com/nbx-liz/LizyML-Widget/issues/128).
 - **Persist tune state across subprocess boundary so post-tune plots render on the parent (P-037, [#152](https://github.com/nbx-liz/LizyML-Widget/issues/152))**.
   After P-036 made subprocess the default on Linux + libgomp, ``w.tune()``
   followed by Results → Tuning History got stuck at "Loading plot..." because
