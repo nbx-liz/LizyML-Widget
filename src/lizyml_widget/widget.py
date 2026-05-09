@@ -568,17 +568,24 @@ class LizyWidget(anywidget.AnyWidget):
             self.elapsed_sec = 0.0
             self.error = {}
 
-        # Detect execution strategy lazily (libgomp may not be loaded at
-        # __init__ time; it loads when data is first processed by sklearn/lgbm).
+        # Detect execution strategy lazily. ``get_execution_strategy`` forces
+        # a ``lightgbm`` import on first call so ``/proc/self/maps`` reflects
+        # the OpenMP runtime that the data path will actually use. On Linux
+        # with libgomp this returns ``("subprocess", libomp_path)`` — the
+        # default — because the worker-thread path hits libgomp's pool-
+        # affinity bug (#147 reproducer: Fit ~30x slower in a worker thread,
+        # multi-trial Tune compounds to 20-50x; ~30 OS threads leak per job).
+        # Set ``LZW_FORCE_THREAD=1`` to opt back into the legacy in-process
+        # path (e.g. for debugging or when subprocess startup overhead
+        # dominates a tiny Fit). The historical ``LZW_FORCE_SUBPROCESS=1``
+        # gate is retained as a no-op for backward compatibility but is no
+        # longer required to enable subprocess execution.
         if self._execution_strategy is None:
-            # Default to thread — subprocess is opt-in via LZW_FORCE_SUBPROCESS=1
-            # because real-world fit degradation from libgomp pool affinity is
-            # only 1.0-1.2x, while subprocess overhead (~500ms import) is larger.
-            if os.environ.get("LZW_FORCE_SUBPROCESS") == "1":
-                self._execution_strategy, self._libomp_path = get_execution_strategy()
-            else:
+            if os.environ.get("LZW_FORCE_THREAD") == "1":
                 self._execution_strategy = "thread"
                 self._libomp_path = None
+            else:
+                self._execution_strategy, self._libomp_path = get_execution_strategy()
 
         # Join previous worker thread to ensure its OpenMP thread pool is
         # fully cleaned up.  Without this, repeated Fit/Tune cycles accumulate

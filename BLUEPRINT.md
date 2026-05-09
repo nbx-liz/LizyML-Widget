@@ -404,6 +404,22 @@ anywidget は traitlets への書き込みをスレッドセーフに処理す�
 
 **キャンセルポーリング:** Fit・Tune の両方で `_run_with_cancel_polling` パターンを使用する。バックエンド呼び出しをデーモンスレッドで実行し、メインワーカースレッドがキャンセルフラグをポーリングする。これにより、ブロッキングなバックエンド呼び出し中でもキャンセルが即座に反映される。
 
+#### 3.7.1 実行戦略の選択（P-020 / P-036）
+
+`LizyWidget._run_job` は最初のジョブ実行時に `openmp_detect.get_execution_strategy()` を呼び出し、戦略を `("thread", None)` または `("subprocess", libomp_path)` のいずれかに固定する。判定は同一プロセス内で 1 度だけ行われ、以降のジョブは同じ戦略で実行される。
+
+| 環境 | デフォルト戦略 | 理由 |
+| --- | --- | --- |
+| Linux + libgomp | `subprocess` | GCC libgomp の OpenMP プール親和性バグ（#108494）により、worker thread 上の Fit が main thread の 30 倍遅くなり、Tune は trial 数倍に積算される（issue #147）。subprocess 経路では libgomp 状態が初期化され、`LD_PRELOAD=libomp` が利用可能なら 1.5x 程度に抑えられる。 |
+| Linux + libomp | `thread` | libomp はプール親和性バグの影響を受けない |
+| macOS / Windows | `thread` | libgomp ではないため影響なし |
+
+**Opt-out:** `LZW_FORCE_THREAD=1` 環境変数を設定すると、`get_execution_strategy()` の戻り値に依らず常に `thread` 戦略が選択される。Subprocess 起動オーバーヘッド（~500ms）が小さな Fit のレスポンスを支配するケース、または Notebook 内デバッグで in-process の状態を観察したいケースで使用する。`LZW_FORCE_SUBPROCESS=1` は P-020 当時の opt-in ゲートだったが、P-036 でデフォルトが反転したため現在は無視される（後方互換）。
+
+**`is_libgomp_affected` の検知タイミング:** `__init__` 時点では lightgbm が未 import のため `/proc/self/maps` には libgomp が存在しない。`openmp_detect.is_libgomp_affected()` は呼び出し時に `import lightgbm` を best-effort で行ってから maps を読み、結果を module-level cache に格納する。これにより最初の Fit/Tune 直前に正しい判定が出る。
+
+**Retune の例外:** `SubprocessJobRunner` は study resume を伴う retune に未対応（`RetuneSubprocessUnsupportedError`）。retune のみ thread 戦略にフォールバックする運用は issue #128 で扱う。
+
 ---
 
 ## 4. Python API

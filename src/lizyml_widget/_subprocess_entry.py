@@ -120,6 +120,9 @@ def run_job(
             }
         elif job_type == "tune":
             summary_t = adapter.tune(model, on_progress=on_progress)
+            # ``model.tune()`` does not auto-fit — the adapter returns
+            # ``[]`` from evaluate_table/split_summary on an unfit model
+            # (#147 / P-036, see :func:`adapter_results.is_model_fitted`).
             result_msg = {
                 "type": "result",
                 "tune_summary": {

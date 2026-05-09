@@ -1,5 +1,53 @@
 ## LizyML-Widget 仕様変更履歴
 
+### P-036: libgomp 環境でのデフォルト実行戦略を subprocess に切り替え（OpenMP プール親和性回帰の根本対策）
+
+- **日付**: 2026-05-09（提案・決定・実装）
+- **ステータス**: 決定（実装済み — fix/issue-147-openmp-default-subprocess → develop）
+- **関連 Issue**: [#147](https://github.com/nbx-liz/LizyML-Widget/issues/147)
+- **背景**:
+  - P-020 で導入された OpenMP プール親和性問題（GCC bug #108494, libgomp）の subprocess 回避策が、現状デフォルトで無効化されている。
+  - [widget.py:571-581](https://github.com/nbx-liz/LizyML-Widget/blob/develop/src/lizyml_widget/widget.py#L571-L581) のゲートは `LZW_FORCE_SUBPROCESS=1` env var が設定されている場合にのみ `get_execution_strategy()` の戻り値を採用し、デフォルトでは無条件に `"thread"` を選ぶ。インラインコメントは劣化幅を「1.0–1.2x」と記載しているが、issue #147 で実測 30–35x の劣化が再現された（`worker_thread_fit / main_thread_fit = 30.4x`、worker thread 起動ごとに OS スレッドが ~30 本リーク）。
+  - さらに `openmp_detect.is_libgomp_affected()` は `/proc/self/maps` を読むだけで lightgbm を import しないため、`LizyWidget.__init__` 時点では libgomp がまだロードされておらず、たとえ env var ゲートを外しても `("thread", None)` を返してしまう（検知が too lazy）。
+  - Tune は Optuna trial ごとに OpenMP parallel region に再入するため、Fit 単発の劣化（30x）が trial 数倍に積算され、50 trial で end-to-end 20–50x 劣化として観測される。
+- **検証済み再現**:
+  - reproducer (`tests/regression/test_reg_147_openmp_perf.py` のもとデータ): `main: 0.16s` → `worker: 4.77s` (`30.4x`), threads 94 → 126。
+  - learned skills `openmp-daemon-thread-degradation`, `openmp-thread-pool-accumulation` が示す挙動と一致。
+- **提案内容**:
+  - **(a) 検知の deferred 化**: `is_libgomp_affected()` を呼び出し時に lightgbm を force-import してから `/proc/self/maps` を読むよう変更し、結果を module-level cache に保存する（同一プロセス内で結果は不変）。`get_execution_strategy()` を最初に呼ぶ場面（最初の Fit/Tune 直前）で正しい判定が出るようになる。
+  - **(b) ゲートの極性反転**: `LZW_FORCE_SUBPROCESS=1` ゲートを廃止し、libgomp が検知されたら subprocess をデフォルト戦略にする。debug 等で in-process 実行が必要な場合は `LZW_FORCE_THREAD=1` で opt-out できるようにする。
+  - **(c) インラインコメント修正**: `widget.py` の "1.0-1.2x" の文言を実測値（fit 30x / tune 20–50x）に書き換える。
+  - **(d) regression test**: `tests/regression/test_reg_147_openmp_perf.py`（`pytest.mark.slow`）を追加し、reproducer 相当の workload で `worker / main < 2.0x` を assert する。CI は default suite に含めない（slow 系は ad-hoc / nightly）。
+- **Invariants**:
+  - INV-1: `LZW_FORCE_THREAD=1` が設定されている場合、`_execution_strategy == "thread"` （`get_execution_strategy()` の戻り値に依らず）。
+  - INV-2: `LZW_FORCE_THREAD` 未設定かつ libgomp 検知 = True なら `_execution_strategy == "subprocess"`。libgomp 未検知（macOS / Windows / libomp 環境）なら `"thread"`。
+  - INV-3: `is_libgomp_affected()` の結果は同一プロセス内で冪等（cache 後に変化しない）。
+- **影響範囲**:
+  - `src/lizyml_widget/openmp_detect.py` — `is_libgomp_affected()` に lightgbm force-import + cache 追加
+  - `src/lizyml_widget/widget.py` §`_run_job` — env var ゲートを反転、コメント更新
+  - `tests/test_openmp_detect.py` — 新規（detection lifecycle / cache テスト）
+  - `tests/regression/test_reg_147_openmp_perf.py` — 新規（`pytest.mark.slow`、wall-clock regression）
+  - `BLUEPRINT.md` §3.7 — 新デフォルト戦略と opt-out env var を文書化
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]`
+- **互換性**:
+  - 公開 Python API（`w.fit()`, `w.tune()`, `w.retune()`）の signature / behaviour は変わらない。subprocess 経路は P-020 で既に実装済みで、retune 以外のすべての job type をサポートする。
+  - **挙動変更**: Linux + libgomp 環境では Fit/Tune がデフォルトで subprocess 実行となるため、Python ログの一部が parent-process 側で捕捉されない可能性がある（既存の subprocess runner は stdout/stderr を pipe して進捗イベントを抽出する設計）。
+  - **opt-out**: 旧挙動を維持したいユーザーは `LZW_FORCE_THREAD=1` を設定する。`LZW_FORCE_SUBPROCESS=1` は未指定でも subprocess になるため redundant となるが、後方互換のため warning なく無視する。
+  - **retune**: P-020 当時から subprocess runner は retune 未対応 (`RetuneSubprocessUnsupportedError`)。本 Proposal はその制約に変更を加えない。retune は依然 thread 実行となる（issue #128 で別途扱う）。
+- **代替案（却下）**:
+  - **案A: env var ゲートをそのまま残し、デフォルト thread を維持** — 30x の劣化を放置することになり、issue #147 の根治にならない。learned skill に「numeric claim を test で pin する」原則を加えた直後に再発させた経緯（PR #117/#144 で gate を維持した）も踏まえ、デフォルト挙動の修正が妥当。
+  - **案B: lightgbm 自体を libomp build に置き換える** — ユーザー環境のビルドに侵入しなければならず、apt 配布の lightgbm では非現実的。LD_PRELOAD は subprocess 経路で既に提供済みで、デフォルト subprocess 化のほうが副作用が小さい。
+  - **案C: thread 実行のままで `omp_set_num_threads()` / `threadpoolctl` を強制** — P-020 の検証済みアプローチで効果なしと判明済み（プール親和性は ICV では解消できない）。
+- **受け入れ基準**:
+  - Linux + libgomp 環境のデフォルト `w.tune()` が subprocess で実行され、`htop` で main thread と同程度のコア使用率を観測できる。
+  - `LZW_FORCE_THREAD=1` で旧 thread 経路に切り替え可能。
+  - `tests/regression/test_reg_147_openmp_perf.py` (`pytest.mark.slow`) が `worker/main < 2.0x` を assert し、ローカルで pass する。
+  - `tests/test_openmp_detect.py` で (i) `lightgbm` 未 import 状態と import 後で結果が変化すること、(ii) cache が安定していることを assert する。
+  - `widget.py` のインラインコメントが実測値（30x / 50 trial で 20–50x）に更新される。
+  - `BLUEPRINT.md` §3.7 に新デフォルトと opt-out env var が記載される。
+  - 既存テストスイート（`uv run pytest`、`pnpm test:coverage`）は全 green を維持。
+
 ### P-035: TuningSummary に config_snapshot / ui_snapshot を追加
 
 - **日付**: 2026-05-08（提案）/ 2026-05-09（決定・実装）

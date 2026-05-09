@@ -65,11 +65,24 @@ def render_plot(model: Any, plot_type: str, **kwargs: Any) -> PlotData:
     return PlotData(plotly_json=fig.to_json())
 
 
+def is_model_fitted(model: Any) -> bool:
+    """Return ``True`` if *model* has a successful fit_result.
+
+    Centralises the lizyml-specific feature-detection probe used by
+    ``list_available_plots`` and the table helpers. ``Model.fit_result``
+    is the public read-only accessor; on an unfit instance it returns
+    ``None`` (no exception). ``contextlib.suppress`` defends against
+    backends that omit the attribute entirely (returning False is the
+    safe answer there).
+    """
+    with contextlib.suppress(Exception):
+        return model.fit_result is not None
+    return False
+
+
 def list_available_plots(model: Any, task: str) -> list[str]:
     """Return the list of plot types available for the current model + task."""
-    is_fitted = False
-    with contextlib.suppress(Exception):
-        is_fitted = model.fit_result is not None
+    is_fitted = is_model_fitted(model)
 
     has_calibration = False
     with contextlib.suppress(Exception):

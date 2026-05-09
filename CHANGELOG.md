@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Restore subprocess execution as the default on Linux + libgomp (P-036, [#147](https://github.com/nbx-liz/LizyML-Widget/issues/147))**.
+  ``w.fit()`` / ``w.tune()`` previously ran in a worker thread regardless of
+  OpenMP runtime, hitting libgomp's pool-affinity bug (~30x slowdown for Fit,
+  20-50x for multi-trial Tune; reproducer in
+  ``tests/regression/test_reg_147_openmp_perf.py``). The
+  ``LZW_FORCE_SUBPROCESS=1`` gate has been replaced: subprocess is now the
+  default whenever ``openmp_detect.is_libgomp_affected()`` returns ``True``,
+  and the new ``LZW_FORCE_THREAD=1`` env var lets users opt back into the
+  legacy in-process path. ``is_libgomp_affected()`` now force-imports
+  ``lightgbm`` before reading ``/proc/self/maps`` and caches the result, so
+  the affinity check runs against the loaded runtime instead of an empty
+  process map. Retune still runs in-thread (subprocess retune is tracked by
+  [#128](https://github.com/nbx-liz/LizyML-Widget/issues/128)).
+
 ### Tests
 - **E2E coverage for failed-status, cancel-mid-tune, and multiclass /
   regression assertions** ([#133](https://github.com/nbx-liz/LizyML-Widget/issues/133)).

@@ -1,4 +1,4 @@
-"""Tests for openmp_detect module (TDD — RED phase)."""
+"""Tests for openmp_detect module."""
 
 from __future__ import annotations
 
@@ -7,10 +7,20 @@ from unittest.mock import mock_open, patch
 import pytest
 
 from lizyml_widget.openmp_detect import (
+    _reset_libgomp_cache,
     find_libomp_path,
     get_execution_strategy,
     is_libgomp_affected,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_libgomp_cache() -> None:
+    """Reset module-level cache so test order does not leak state."""
+    _reset_libgomp_cache()
+    yield
+    _reset_libgomp_cache()
+
 
 # ---------------------------------------------------------------------------
 # Sample /proc/self/maps content
@@ -191,3 +201,107 @@ class TestGetExecutionStrategy:
             assert strategy == "subprocess"
             assert path is None
             assert "libomp" in caplog.text.lower()
+
+
+# ===========================================================================
+# Issue #147: deferred lightgbm-aware detection + caching
+# ===========================================================================
+
+
+class TestLibgompDeferredDetection:
+    """Detection must force lightgbm to be importable so /proc/self/maps
+    reflects the OpenMP runtime that the data path will use, and must cache
+    the result so we don't pay the cost on every job dispatch."""
+
+    def test_force_imports_lightgbm_when_missing(self) -> None:
+        """If lightgbm is not yet in sys.modules, _ensure_lightgbm_imported
+        runs to make /proc/self/maps reflect the loaded runtime."""
+        from unittest.mock import MagicMock
+
+        with (
+            patch("lizyml_widget.openmp_detect.sys") as mock_sys,
+            patch(
+                "lizyml_widget.openmp_detect._ensure_lightgbm_imported",
+                MagicMock(),
+            ) as mock_ensure,
+            patch("builtins.open", mock_open(read_data=MAPS_LIBGOMP)),
+        ):
+            mock_sys.platform = "linux"
+            assert is_libgomp_affected() is True
+            mock_ensure.assert_called_once()
+
+    def test_skips_lightgbm_import_on_non_linux(self) -> None:
+        """Non-linux platforms short-circuit before touching lightgbm."""
+        from unittest.mock import MagicMock
+
+        with (
+            patch("lizyml_widget.openmp_detect.sys") as mock_sys,
+            patch(
+                "lizyml_widget.openmp_detect._ensure_lightgbm_imported",
+                MagicMock(),
+            ) as mock_ensure,
+        ):
+            mock_sys.platform = "darwin"
+            assert is_libgomp_affected() is False
+            mock_ensure.assert_not_called()
+
+    def test_caches_result_across_calls(self) -> None:
+        """Second call must use the cached value — /proc/self/maps is read once."""
+        from unittest.mock import MagicMock
+
+        opener = mock_open(read_data=MAPS_LIBGOMP)
+        with (
+            patch("lizyml_widget.openmp_detect.sys") as mock_sys,
+            patch(
+                "lizyml_widget.openmp_detect._ensure_lightgbm_imported",
+                MagicMock(),
+            ),
+            patch("builtins.open", opener),
+        ):
+            mock_sys.platform = "linux"
+            assert is_libgomp_affected() is True
+            assert is_libgomp_affected() is True
+            assert opener.call_count == 1
+
+    def test_ensure_lightgbm_imported_swallows_import_errors(self) -> None:
+        """The helper is contractually best-effort — it must never raise.
+
+        is_libgomp_affected delegates to this helper outside any try/except,
+        so the helper is the swallow point. We pin that contract directly.
+        """
+        import sys as real_sys
+
+        from lizyml_widget.openmp_detect import _ensure_lightgbm_imported
+
+        original = real_sys.modules.pop("lightgbm", None)
+        real_sys.modules["lightgbm"] = None  # type: ignore[assignment]
+        try:
+            # ``import lightgbm`` against a None entry raises ImportError.
+            try:
+                _ensure_lightgbm_imported()
+            except Exception as exc:  # noqa: BLE001
+                pytest.fail(f"_ensure_lightgbm_imported raised {exc!r}")
+        finally:
+            if original is None:
+                real_sys.modules.pop("lightgbm", None)
+            else:
+                real_sys.modules["lightgbm"] = original
+
+    def test_ensure_lightgbm_imported_is_no_op_when_loaded(self) -> None:
+        """If lightgbm is already in sys.modules, no re-import attempt."""
+        import sys as real_sys
+
+        from lizyml_widget.openmp_detect import _ensure_lightgbm_imported
+
+        sentinel = object()
+        original = real_sys.modules.get("lightgbm")
+        real_sys.modules["lightgbm"] = sentinel  # type: ignore[assignment]
+        try:
+            _ensure_lightgbm_imported()
+            # Still our sentinel — function did not re-import.
+            assert real_sys.modules["lightgbm"] is sentinel
+        finally:
+            if original is None:
+                real_sys.modules.pop("lightgbm", None)
+            else:
+                real_sys.modules["lightgbm"] = original

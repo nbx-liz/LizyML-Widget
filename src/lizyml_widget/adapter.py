@@ -35,6 +35,7 @@ from .adapter_params import (
 )
 from .adapter_params import classify_best_params as _classify_best_params_impl
 from .adapter_results import (
+    is_model_fitted,
     list_available_plots,
     render_inference_plot,
     render_plot,
@@ -703,10 +704,21 @@ class LizyMLAdapter:
         return PredictionSummary(predictions=df, warnings=view.warnings)
 
     def evaluate_table(self, model: Any) -> list[dict[str, Any]]:
+        # Unfit models raise ``LizyMLError(MODEL_NOT_FIT)`` from
+        # ``Model.evaluate_table`` (lizyml >= 0.10). The widget's tune
+        # path ends with an unfit model when the user did not run fit
+        # first, so callers across both ThreadJobRunner and the
+        # subprocess entry uniformly want an empty list rather than a
+        # surfaced backend error. Centralising the guard here keeps the
+        # rule in one place (#147 / P-036).
+        if not is_model_fitted(model):
+            return []
         df: pd.DataFrame = model.evaluate_table()
         return list(df.reset_index().to_dict(orient="records"))  # type: ignore[arg-type]
 
     def split_summary(self, model: Any) -> list[dict[str, Any]]:
+        if not is_model_fitted(model):
+            return []
         df: pd.DataFrame = model.split_summary()
         return list(df.to_dict(orient="records"))  # type: ignore[arg-type]
 

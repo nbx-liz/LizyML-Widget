@@ -319,6 +319,62 @@ class TestPreviewSplitsSliding:
                 assert len(fold["train_periods"]) == window
 
 
+class TestPreviewSplitsCutoffs:
+    """Pin the cutoffs grouping path of ``service_cv.preview_splits``
+    (#147 / P-036 audit). When the user sets cutoffs in the
+    BlockedGroupKFold UI, contiguous periods between cutoff boundaries
+    must be merged into a single labelled bucket and counts aggregated.
+    Previously this branch (~20 lines around the cutoffs loop) was
+    untested, even though it is the on-screen reality whenever cutoffs
+    are configured.
+    """
+
+    def test_cutoffs_group_periods_into_buckets(self) -> None:
+        """4 periods (P0..P3) with one cutoff at P2 → 2 buckets."""
+        svc = _make_service_with_data(n_periods=4)
+        # Cutoff at P2 → bucket1 = {P0, P1}, bucket2 = {P2, P3}
+        _set_blocked_cv(svc, mode="expanding", n_splits=2, cutoffs=["P2"])
+        result = svc.preview_splits()
+        # Two buckets → 1 time fold (num_periods - 1)
+        assert len(result["periods"]) == 2
+        # Range labels for multi-period buckets.
+        labels = result["periods"]
+        assert labels == ["P0..P1", "P2..P3"]
+        assert result["time_folds"] == 1
+        assert result["total_folds"] == 1 * result["group_folds"]
+
+    def test_cutoffs_aggregate_period_counts(self) -> None:
+        """Bucketed period counts must sum across the periods inside each
+        bucket and feed the per-fold train/valid sizes.
+        """
+        # 4 periods × 9 rows/period = 36 rows total (rows_per_combo = 9//3 = 3
+        # so n_groups=3 divides cleanly into rows_per_period=9).
+        svc = _make_service_with_data(n_periods=4, rows_per_period=9, n_groups=3)
+        rows_per_period = (9 // 3) * 3  # 9 rows per period after // alignment
+
+        _set_blocked_cv(svc, mode="expanding", n_splits=2, cutoffs=["P2"])
+        result = svc.preview_splits()
+
+        # 1 time fold (2 buckets - 1) × 2 group folds = 2 fold rows.
+        # Bucket "P0..P1" sums 2 × rows_per_period; same for "P2..P3".
+        expected_bucket_rows = 2 * rows_per_period
+        for fold in result["folds"]:
+            assert fold["train_periods"] == ["P0..P1"]
+            assert fold["valid_period"] == "P2..P3"
+            assert fold["train_size"] == expected_bucket_rows
+            assert fold["valid_size"] == expected_bucket_rows
+
+    def test_cutoff_not_in_data_does_not_split(self) -> None:
+        """Cutoff value beyond all periods → all periods in one bucket → 0 time folds."""
+        svc = _make_service_with_data(n_periods=3)
+        _set_blocked_cv(svc, mode="expanding", n_splits=2, cutoffs=["Z9"])
+        result = svc.preview_splits()
+        # All 3 periods aggregate into one bucket.
+        assert len(result["periods"]) == 1
+        # 1 bucket → 0 time folds.
+        assert result["time_folds"] == 0
+
+
 class TestPreviewSplitsGuards:
     def test_raises_when_not_blocked_group_kfold(self) -> None:
         """preview_splits raises ValueError if strategy != 'blocked_group_kfold'."""
