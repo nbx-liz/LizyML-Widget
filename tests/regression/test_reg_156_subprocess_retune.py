@@ -423,6 +423,91 @@ class TestRetuneSubprocessUnsupportedRemoval:
 
 
 # ---------------------------------------------------------------------------
+# INV-#156-I: tune-state IPC preserves the lizyml ``Model`` resume state
+# (regression for a P-038 implementation bug discovered via Playwright /
+# manual smoke testing — only ``_tuning_result`` and ``_study`` were being
+# round-tripped, so subprocess retune appeared to succeed but discarded
+# previous rounds).
+# ---------------------------------------------------------------------------
+
+
+class TestTuneStateRoundTripPreservesResumeState:
+    """``adapter.export_tune_state`` / ``restore_tune_state`` must capture
+    every ``Model`` private attribute that ``Model.tune(resume=True)``
+    reads. P-037 only round-tripped ``_tuning_result`` / ``_study`` (which
+    is enough for the ``optimization-history`` plot); P-038 also needs
+    ``_rounds`` / ``_round_number`` / ``_space`` / ``_used_default_space``
+    so the cumulative ``rounds`` list is preserved across subprocess
+    boundaries.
+    """
+
+    def test_export_then_restore_round_trips_all_resume_state(self, tmp_path: Path) -> None:
+        from lizyml_widget.adapter import LizyMLAdapter
+
+        adapter = LizyMLAdapter()
+
+        # Hand-build a model-shaped object — we only care that the adapter
+        # round-trips the right private attributes, not that lizyml's tune
+        # logic actually accepts them.
+        class _StubModel:
+            pass
+
+        src = _StubModel()
+        src._tuning_result = {"sentinel": "tuning_result"}  # noqa: SLF001
+        src._study = {"sentinel": "study"}  # noqa: SLF001
+        src._round_number = 7  # noqa: SLF001
+        src._rounds = [{"round": 1}, {"round": 2}, {"round": 3}]  # noqa: SLF001
+        src._space = [{"name": "lr", "low": 1e-4, "high": 1e-1}]  # noqa: SLF001
+        src._used_default_space = True  # noqa: SLF001
+
+        path = tmp_path / "blob.pkl"
+        adapter.export_tune_state(src, str(path))
+
+        dst = _StubModel()
+        adapter.restore_tune_state(dst, str(path))
+
+        assert dst._tuning_result == src._tuning_result  # noqa: SLF001
+        assert dst._study == src._study  # noqa: SLF001
+        assert dst._round_number == 7, (  # noqa: SLF001
+            "INV-#156-I: _round_number must round-trip — without it, "
+            "Model.tune(resume=True) restarts the round counter at 1"
+        )
+        assert dst._rounds == src._rounds, (  # noqa: SLF001
+            "INV-#156-I: _rounds must round-trip — without it, retune's "
+            "cumulative rounds list is overwritten by the new round only"
+        )
+        assert dst._space == src._space  # noqa: SLF001
+        assert dst._used_default_space is True  # noqa: SLF001
+
+    def test_restore_tolerates_p037_legacy_blob(self, tmp_path: Path) -> None:
+        """Backward compat: a P-037-only blob (only ``tuning_result`` / ``study``)
+        must still restore those keys without raising. Plot rendering paths
+        should not regress when reading old-format blobs."""
+        import pickle
+
+        from lizyml_widget.adapter import LizyMLAdapter
+
+        path = tmp_path / "legacy.pkl"
+        with open(path, "wb") as f:
+            pickle.dump(
+                {"tuning_result": {"sentinel": "old"}, "study": None},
+                f,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
+
+        class _StubModel:
+            pass
+
+        adapter = LizyMLAdapter()
+        m = _StubModel()
+        adapter.restore_tune_state(m, str(path))
+        assert m._tuning_result == {"sentinel": "old"}  # noqa: SLF001
+        # P-038 keys absent → adapter must not raise; downstream tune
+        # would fail with the same error a fresh model would, so no
+        # additional invariant is needed here.
+
+
+# ---------------------------------------------------------------------------
 # INV-#156-G/H: end-to-end perf bounds (slow)
 # ---------------------------------------------------------------------------
 

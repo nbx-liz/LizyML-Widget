@@ -752,11 +752,22 @@ class LizyMLAdapter:
         return path
 
     def export_tune_state(self, model: Any, path: str) -> None:
-        """Persist tune state for IPC across the subprocess boundary (P-037).
+        """Persist tune state for IPC across the subprocess boundary (P-037, P-038).
 
-        Writes a pickle blob containing ``_tuning_result`` (always) and
-        ``_study`` (best-effort — silently dropped when the study object
-        cannot be pickled, e.g., RDB-backed Optuna storage).
+        Writes a pickle blob containing the lizyml ``Model`` state required
+        to resume tuning in a different process:
+
+        - ``tuning_result``: always present. Drives ``optimization-history``
+          plot rendering on the parent (P-037).
+        - ``study``: Optuna study handle, best-effort — silently dropped
+          when not pickleable (e.g., RDB-backed storage).
+        - ``round_number`` / ``rounds`` / ``space`` / ``used_default_space``:
+          added for P-038 (subprocess retune resume). lizyml's
+          ``Model.tune(resume=True)`` reads these instance attributes to
+          build the cumulative ``rounds`` list and to reuse the original
+          search space; without them, retune appears to succeed but
+          discards previous rounds (only the new round shows up in
+          ``tune_summary.rounds``).
 
         Raises:
             ValueError: when *model* has no tune state to export. Callers
@@ -768,7 +779,17 @@ class LizyMLAdapter:
             msg = "Model has no tune state to export (run tune() first)"
             raise ValueError(msg)
 
-        blob: dict[str, Any] = {"tuning_result": tuning_result, "study": None}
+        blob: dict[str, Any] = {
+            "tuning_result": tuning_result,
+            "study": None,
+            # P-038: round bookkeeping. Pulled via getattr so older lizyml
+            # versions that lack any of these attributes still produce a
+            # blob (the corresponding restore step skips missing keys).
+            "round_number": getattr(model, "_round_number", 0),
+            "rounds": list(getattr(model, "_rounds", [])),
+            "space": getattr(model, "_space", None),
+            "used_default_space": getattr(model, "_used_default_space", False),
+        }
 
         study = getattr(model, "_study", None)
         if study is not None:
@@ -786,10 +807,16 @@ class LizyMLAdapter:
             pickle.dump(blob, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     def restore_tune_state(self, model: Any, path: str) -> None:
-        """Reattach tune state onto *model* from an IPC blob (P-037).
+        """Reattach tune state onto *model* from an IPC blob (P-037, P-038).
 
-        Reads what :meth:`export_tune_state` wrote and assigns
-        ``model._tuning_result`` (and ``model._study`` when present).
+        Reads what :meth:`export_tune_state` wrote and assigns the
+        corresponding ``Model`` private attributes. P-037 keys
+        (``tuning_result`` / ``study``) are always restored; P-038 keys
+        (``round_number`` / ``rounds`` / ``space`` / ``used_default_space``)
+        are restored when present so subprocess retune accumulates rounds
+        correctly. Backward compat: blobs written by a P-037-only export
+        still restore ``_tuning_result`` (plot rendering keeps working).
+
         The model remains unfit — INV-2 keeps ``is_model_fitted`` False so
         downstream guards (``available_plots``, ``evaluate_table``)
         continue to behave correctly.
@@ -802,6 +829,17 @@ class LizyMLAdapter:
         study = blob.get("study")
         if study is not None:
             model._study = study  # noqa: SLF001
+        # P-038: restore round bookkeeping when present. Older blobs
+        # (P-037) lack these keys; skipping them leaves lizyml's defaults
+        # intact, which is what plot-only restore needs anyway.
+        if "round_number" in blob:
+            model._round_number = blob["round_number"]  # noqa: SLF001
+        if "rounds" in blob:
+            model._rounds = list(blob["rounds"])  # noqa: SLF001
+        if "space" in blob:
+            model._space = blob["space"]  # noqa: SLF001
+        if "used_default_space" in blob:
+            model._used_default_space = blob["used_default_space"]  # noqa: SLF001
 
     def export_code(self, model: Any, path: str) -> Any:
         """Export inference code for the trained model."""

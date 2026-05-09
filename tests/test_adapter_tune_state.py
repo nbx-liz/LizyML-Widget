@@ -44,6 +44,22 @@ def _fake_tuning_result() -> Any:
     )
 
 
+def _attach_tune_state_defaults(model: Any) -> None:
+    """Set picklable values for P-038 round-bookkeeping attrs on a mock model.
+
+    ``MagicMock`` auto-creates attributes as nested mocks, which break
+    ``pickle.dumps`` inside ``export_tune_state``. The P-037-era tests in
+    this module never set these attributes; this helper makes them
+    deterministic and pickle-safe so the same fixtures keep working
+    after P-038 added ``_rounds`` / ``_round_number`` / ``_space`` /
+    ``_used_default_space`` to the export blob.
+    """
+    model._round_number = 1
+    model._rounds = []
+    model._space = None
+    model._used_default_space = False
+
+
 class TestExportTuneState:
     """``export_tune_state`` writes a pickle blob containing ``_tuning_result``."""
 
@@ -52,6 +68,7 @@ class TestExportTuneState:
         model = MagicMock()
         model._tuning_result = _fake_tuning_result()
         model._study = None  # InMemory absent
+        _attach_tune_state_defaults(model)
 
         out_path = tmp_path / "tune_state.pkl"
         adapter.export_tune_state(model, str(out_path))
@@ -79,6 +96,7 @@ class TestExportTuneState:
         model._tuning_result = _fake_tuning_result()
         # InMemoryStorage is pickleable; use a simple sentinel-pickleable object.
         model._study = {"trials": [1, 2, 3]}  # dict pickles cleanly
+        _attach_tune_state_defaults(model)
 
         out = tmp_path / "tune_state.pkl"
         adapter.export_tune_state(model, str(out))
@@ -100,6 +118,7 @@ class TestExportTuneState:
                 raise TypeError(msg)
 
         model._study = _UnpickleableStudy()
+        _attach_tune_state_defaults(model)
 
         out = tmp_path / "tune_state.pkl"
         adapter.export_tune_state(model, str(out))
@@ -207,6 +226,7 @@ class TestRoundTrip:
         producer = MagicMock()
         producer._tuning_result = original
         producer._study = None
+        _attach_tune_state_defaults(producer)
 
         path = tmp_path / "rt.pkl"
         adapter.export_tune_state(producer, str(path))
