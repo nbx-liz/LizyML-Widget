@@ -387,6 +387,9 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
             "early_stopping.rounds": 50,
             "validation_ratio": 0.05,
             "seed": 1,
+            # P-034: step values for fields whose JS used a hardcoded literal.
+            "feature_weights": 0.1,
+            "boundary_threshold": 0.01,
         },
         "conditional_visibility": {
             "calibration": {"task": ["binary"]},
@@ -398,6 +401,23 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
         },
         "defaults": {
             "calibration": {"method": "isotonic", "params": {}},
+            # P-034: numeric defaults the JS UI used to fall back to via
+            # ``payload ?? <literal>``. Centralising them here keeps the
+            # contract the single source of truth (CLAUDE.md §8) so
+            # updating a default no longer requires a JS-side change.
+            "cv": {
+                "n_splits": 5,
+                "random_state": 42,
+                "gap": 0,
+                "purge_gap": 0,
+                "embargo": 0,
+            },
+            "tune": {
+                "n_trials": 10,
+            },
+            "metric_params": {
+                "precision_at_k_k": 10,
+            },
         },
         "calibration_methods": ["platt", "isotonic", "beta"],
         "calibration_params": {

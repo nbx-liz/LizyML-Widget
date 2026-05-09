@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Backend contract owns UI numeric defaults and step values (P-034)**
+  ([#131](https://github.com/nbx-liz/LizyML-Widget/issues/131)).
+  ``ui_schema.defaults`` gains ``cv`` / ``tune`` / ``metric_params``
+  sub-dicts and ``ui_schema.step_map`` gains ``feature_weights`` /
+  ``boundary_threshold`` so the JS UI no longer falls back to hardcoded
+  literals (``n_splits ?? 5``, ``n_trials ?? 10``, ``random_state ?? 42``,
+  ``step={0.1}``, ``step={0.01}``, etc.). A backend default change now
+  propagates to the UI without a JS edit (CLAUDE.md §8). Affected JS
+  files: ``DataTab.tsx``, ``TuneSubTab.tsx``, ``SearchSpace.tsx``,
+  ``ModelEditors.tsx`` (new ``metricParamDefaults`` prop on
+  ``ModelSection`` / ``TypedParamsEditor``), ``RetuneControls.tsx``,
+  ``ResultsTab.tsx`` (forwards ``stepMap`` to ``RetuneControls``), and
+  ``App.tsx`` (passes ``stepMap`` from ``backend_contract``). New
+  ``TestContractNumericDefaultsAndStepMap`` golden test pins the new
+  contract shape.
+
+### Changed
 - **TuningSummary owns post-tune snapshots (P-035)**
   ([#132](https://github.com/nbx-liz/LizyML-Widget/issues/132)).
   ``TuningSummary`` gains two new fields — ``config_snapshot`` (canonical

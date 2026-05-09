@@ -32,6 +32,10 @@ export function TuneSubTab({
   yamlExportCount,
 }: TuneSubTabProps) {
   const optionSets: Record<string, Record<string, string[]>> = uiSchema.option_sets ?? {};
+  // P-034: read numeric defaults from the contract instead of hardcoded ?? literals.
+  const tuneDefaults: Record<string, number> = uiSchema.defaults?.tune ?? {};
+  const defaultNTrials: number =
+    typeof tuneDefaults.n_trials === "number" ? tuneDefaults.n_trials : 10;
   const tuning = localConfig.tuning ?? {};
   const tuneSpace = tuning.optuna?.space ?? {};
   const tuneModelParams = tuning.model_params ?? {};
@@ -70,10 +74,10 @@ export function TuneSubTab({
         <div class="lzw-form-row">
           <label class="lzw-label">n_trials</label>
           <NumericStepper
-            value={localConfig.tuning?.optuna?.params?.n_trials ?? 10}
+            value={localConfig.tuning?.optuna?.params?.n_trials ?? defaultNTrials}
             min={1}
             step={1}
-            onChange={(v) => handleTuneParam("n_trials", v ?? 10)}
+            onChange={(v) => handleTuneParam("n_trials", v ?? defaultNTrials)}
           />
         </div>
       </Accordion>

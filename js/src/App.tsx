@@ -184,6 +184,7 @@ export function App({ model, rootEl }: AppProps) {
               setExportLoading(true);
               sendAction("export_code", {});
             }}
+            stepMap={backendContract?.ui_schema?.step_map ?? {}}
           />
         )}
       </div>

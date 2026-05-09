@@ -83,8 +83,8 @@
 
 ### P-034: BackendContract に UI defaults / step_map を追加
 
-- **日付**: 2026-05-08
-- **ステータス**: 提案
+- **日付**: 2026-05-08（提案）/ 2026-05-09（決定・実装）
+- **ステータス**: 決定（実装済み — PR #131 → develop）
 - **関連 Issue**: [#131](https://github.com/nbx-liz/LizyML-Widget/issues/131)
 - **背景**:
   - PR #119 / #121 で JS から backend 固有 option set / parameter catalog をハードコードする
@@ -144,6 +144,16 @@
     すべてのファイルから消える（grep で残存 0）。
   - `pnpm test:coverage` の vitest threshold（statements 75% / branches 70%）を維持。
   - `js/src/__tests__/` で contract-driven レンダリング経路を最低 1 ケースずつ検証。
+- **実装ノート（2026-05-09）**:
+  - `adapter_contract.build_ui_schema` の `defaults` に `cv` / `tune` / `metric_params` を、
+    `step_map` に `feature_weights` / `boundary_threshold` を追加。`schema_version` は据え置き。
+  - JS では contract から読み出すための薄いヘルパ（`dN(key, fallback)` 等）を追加し、
+    fallback 数値は **fixture が contract を渡さないユニットテスト用のみ** 残した。
+  - 影響ファイル: `DataTab.tsx` / `TuneSubTab.tsx` / `SearchSpace.tsx` / `ModelEditors.tsx`
+    （`metricParamDefaults` prop を ModelSection→TypedParamsEditor で伝搬） /
+    `RetuneControls.tsx` / `ResultsTab.tsx` / `App.tsx`（`stepMap` を contract から RetuneControls へ伝搬）。
+  - ゴールデンテスト: `TestContractNumericDefaultsAndStepMap` を `tests/test_frontend_contract.py` に追加。
+  - 既存 vitest 274 件 / pytest 935 件すべて green、ruff + mypy strict クリーン。
 
 ---
 

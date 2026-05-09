@@ -179,6 +179,7 @@ export function FitSubTab({
                 parameterHints={parameterHints}
                 optionSets={optionSets}
                 stepMap={stepMap}
+                metricParamDefaults={defaults.metric_params ?? {}}
                 columns={dfInfo?.columns ?? []}
                 additionalParams={uiSchema.additional_params ?? []}
                 searchSpaceCatalog={searchSpaceCatalog}
