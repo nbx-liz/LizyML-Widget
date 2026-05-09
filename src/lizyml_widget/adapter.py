@@ -165,10 +165,23 @@ class BackendAdapter(Protocol):
 
     def model_info(self, model: Any) -> dict[str, Any]: ...
 
-    # P-037: tune state cross-process persistence (#152). The subprocess
-    # writes ``model._tuning_result`` (and best-effort ``_study``) to a
-    # path; the parent reads the path back onto a freshly-created model so
-    # ``optimization-history`` plot renders without re-fitting.
+    # P-037: tune state cross-process persistence (#152). P-038 (#156)
+    # extended this to support subprocess retune resume.
+    #
+    # ``export_tune_state`` writes a pickle blob containing every Model
+    # attribute the backend's resume path reads. For LizyMLAdapter the
+    # blob holds 6 keys: ``tuning_result`` (always — P-037 minimum,
+    # required for ``optimization-history`` plot rendering) plus
+    # ``study``, ``round_number``, ``rounds``, ``space``,
+    # ``used_default_space`` (P-038, required for ``Model.tune(resume=True)``
+    # to accumulate rounds correctly). Implementations may add more keys
+    # but MUST keep the existing keys forward-compatible.
+    #
+    # ``restore_tune_state`` reads the blob produced by the same adapter
+    # version (or an older one) and reattaches every present key to the
+    # model. Missing keys must NOT raise — that path supports loading
+    # P-037-format blobs onto a P-038 adapter so plot rendering keeps
+    # working without retune support.
     def export_tune_state(self, model: Any, path: str) -> None: ...
 
     def restore_tune_state(self, model: Any, path: str) -> None: ...

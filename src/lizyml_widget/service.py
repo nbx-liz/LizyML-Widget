@@ -800,6 +800,20 @@ class WidgetService:
         *path* so the subprocess can pick up the existing Optuna study before
         calling ``adapter.tune(resume=True, ...)``.
 
+        Concurrency note
+        ----------------
+        The pickle I/O runs **outside** ``_model_lock`` for the same reason
+        :meth:`tune` does: holding the lock through a multi-MB write would
+        serialise unrelated reads (e.g., ``predict``). The lock is held only
+        long enough to take a strong reference to ``_tune_model`` so that an
+        intervening ``load_data()`` cannot null it out between the read and
+        the export. Inside :meth:`adapter.LizyMLAdapter.export_tune_state`,
+        ``_rounds`` is copied with ``list(...)`` and the study is pickled
+        (deep copy semantics), so concurrent writes to the model after the
+        reference is taken cannot corrupt the blob; the worst case is that
+        the blob reflects a slightly stale snapshot, which the supervisor
+        FSM (INV-A: at most one running job) already prevents in practice.
+
         Raises
         ------
         ValueError

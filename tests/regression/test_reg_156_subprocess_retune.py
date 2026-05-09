@@ -292,6 +292,50 @@ class TestSubprocessRetuneIpcContract:
             f"INV-#156-D: tune-state input path must be cleaned up; still exists at {path!r}"
         )
 
+    def test_runner_cleans_up_all_tempfiles_when_export_fails(self) -> None:
+        """INV-#156-D extension: when ``service.export_tune_state_to_path``
+        raises (e.g. no prior tune, OSError mid-pickle), the runner must
+        clean up *all three* tempfiles allocated before the subprocess
+        spawn — ``model_out_path`` (mkdtemp), ``tune_state_out_path``,
+        AND ``tune_state_in_path`` — and re-raise the original exception.
+        Otherwise long-lived Jupyter kernels leak temp files on every
+        misuse of ``w.retune()`` without a prior tune."""
+        from lizyml_widget.job_runner import JobSpec, SubprocessJobRunner
+
+        svc = MagicMock()
+        svc.get_dataframe.return_value = pd.DataFrame({"x": [1, 2], "y": [0, 1]})
+        svc.get_df_info.return_value = {"target": "y"}
+        svc.export_tune_state_to_path = MagicMock(
+            side_effect=ValueError("no prior tune"),
+        )
+
+        runner = SubprocessJobRunner(svc)
+        spec = JobSpec(
+            job_type="tune",
+            config={"config_version": 1},
+            retune_kwargs={"resume": True, "n_trials": 5},
+        )
+
+        with (
+            patch("lizyml_widget.job_runner.run_job_subprocess") as mock_run,
+            pytest.raises(ValueError, match="no prior tune"),
+        ):
+            runner.run(
+                spec,
+                on_progress=lambda *a, **kw: None,
+                cancel_event=threading.Event(),
+            )
+
+        # The subprocess must NOT have been spawned (export failed first).
+        mock_run.assert_not_called()
+        # Tempfile paths are passed to ``export_tune_state_to_path`` only —
+        # we can recover them via the mock call args.
+        export_path = svc.export_tune_state_to_path.call_args.args[0]
+        assert not Path(export_path).exists(), (
+            f"tune_state_in_path must be cleaned up on export failure; "
+            f"still exists at {export_path!r}"
+        )
+
     def test_runner_cleans_up_tune_state_in_path_on_subprocess_error(self) -> None:
         runner, spec, _svc = self._make_runner()
         captured_path: dict[str, str] = {}
@@ -630,6 +674,24 @@ def test_clean_retune_within_subprocess_tune_perf_bound() -> None:
         f"(bound {UPPER_BOUND}x). PR #155 baseline was ~1.43x; Option A "
         f"should land within 1.2x."
     )
+
+    # INV-#156-J (functional, not just perf): rounds must accumulate.
+    # The original P-038 implementation only round-tripped
+    # ``_tuning_result`` and ``_study`` — which made retune *appear* to
+    # succeed (status=completed, badge ✓) while silently overwriting the
+    # rounds list. Slow-path perf bounds did not catch this because
+    # per-trial wall-clock is normal in either case. Adding a contents
+    # assertion here pins the rounds-accumulation contract empirically.
+    rounds = w.tune_summary.get("rounds") or []
+    assert len(rounds) == 2, (
+        f"INV-#156-J: subprocess retune must accumulate rounds; got "
+        f"{len(rounds)} round(s) — {rounds!r}. The P-038 ``adapter."
+        f"export_tune_state`` must round-trip ``_rounds`` / "
+        f"``_round_number`` / ``_space`` / ``_used_default_space`` so "
+        f"``Model.tune(resume=True)`` builds the cumulative rounds list."
+    )
+    assert rounds[0].get("round") == 1
+    assert rounds[1].get("round") == 2
 
 
 @pytest.mark.slow

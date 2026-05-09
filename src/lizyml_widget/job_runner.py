@@ -268,6 +268,11 @@ class SubprocessJobRunner:
             )
             tune_state_in_path = tune_state_in_fd.name
             tune_state_in_fd.close()
+            # Catch broad to cover both expected ``ValueError`` (no prior
+            # tune) and unexpected I/O errors during pickle.dump — both
+            # must abort before the subprocess spawns and clean up the
+            # three tempfiles allocated above. The ``raise`` re-throws
+            # the original so the supervisor classifies it correctly.
             try:
                 self._service.export_tune_state_to_path(tune_state_in_path)
             except Exception:
