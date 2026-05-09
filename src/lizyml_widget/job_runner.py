@@ -256,10 +256,16 @@ class SubprocessJobRunner:
         model_out_path = tempfile.mkdtemp(prefix="lzw_model_")
         # P-037 / #152: tune-only runs persist ``_tuning_result`` to a
         # separate temp file so the parent can render ``optimization-history``
-        # without re-fitting. Allocated unconditionally (the entry point
-        # only writes when job_type == "tune"), then cleaned up in the
-        # finally branch alongside ``model_out_path`` (INV-5).
-        tune_state_out_path = tempfile.mktemp(prefix="lzw_tune_state_", suffix=".pkl")  # noqa: S306
+        # without re-fitting. Allocated unconditionally via
+        # ``NamedTemporaryFile(delete=False)`` (race-safe vs. ``mktemp``);
+        # the entry point overwrites the placeholder when ``job_type == "tune"``,
+        # and the file is cleaned up in the finally branch alongside
+        # ``model_out_path`` (INV-5).
+        tune_state_fd = tempfile.NamedTemporaryFile(  # noqa: SIM115 — caller owns lifecycle
+            prefix="lzw_tune_state_", suffix=".pkl", delete=False
+        )
+        tune_state_out_path = tune_state_fd.name
+        tune_state_fd.close()
 
         try:
             sp_result = run_job_subprocess(

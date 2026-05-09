@@ -262,3 +262,44 @@ def test_subprocess_tune_handles_corrupt_tune_state_blob(
 
     # No exception reaches the widget; tune summary still recorded.
     assert svc._last_tune_summary is not None  # noqa: SLF001
+
+
+def test_subprocess_tune_restore_updates_tune_model_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parity with the in-process tune path: restore must populate
+    ``_tune_model`` alongside ``_model`` so a later retune resume has the
+    tuned-state model available (review HIGH fix)."""
+    svc, run_config = _make_service_with_data()
+
+    def fake_run_job_subprocess(**kwargs: Any) -> SubprocessJobResult:
+        out_path = kwargs["tune_state_out_path"]
+        _fake_subprocess_writes_blob(out_path)
+        return SubprocessJobResult(
+            job_type="tune",
+            fit_summary={},
+            tune_summary={
+                "best_params": {},
+                "best_score": 0.0,
+                "trials": [],
+                "metric_name": "auc",
+                "direction": "maximize",
+            },
+            eval_table=[],
+            split_summary=[],
+            available_plots=["optimization-history"],
+            model_path=None,
+            tune_state_path=out_path,
+        )
+
+    monkeypatch.setattr(
+        "lizyml_widget.job_runner.run_job_subprocess",
+        fake_run_job_subprocess,
+    )
+
+    runner = SubprocessJobRunner(svc)
+    spec = JobSpec(job_type="tune", config=run_config, ui_snapshot={})
+    runner.run(spec, on_progress=lambda *a, **kw: None, cancel_event=threading.Event())
+
+    assert svc._model is not None  # noqa: SLF001
+    assert svc._tune_model is svc._model  # noqa: SLF001 — same instance, P-028 parity
