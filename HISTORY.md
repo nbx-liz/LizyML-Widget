@@ -1,5 +1,91 @@
 ## LizyML-Widget 仕様変更履歴
 
+### P-038: subprocess Retune Resume を P-037 の tune state IPC を input 方向に拡張して実装（#154 thread fallback の置換）
+
+- **日付**: 2026-05-09（提案・決定・実装）
+- **ステータス**: 決定（実装中 — fix/issue-154-default-retune → develop, PR #155 を Option A に転換）
+- **関連 Issue**: [#156](https://github.com/nbx-liz/LizyML-Widget/issues/156)（PR #155 follow-up）, [#128](https://github.com/nbx-liz/LizyML-Widget/issues/128)（subprocess retune の本フィックス、本 Proposal で完了）, [#154](https://github.com/nbx-liz/LizyML-Widget/issues/154)（PR #155 の元 issue）
+- **背景**:
+  - PR #155（`e286626`）は `widget._run_job` で retune を ThreadJobRunner にフォールバックさせる **暫定 hotfix** を入れた。`w.tune() → w.retune()` の最低限の正常系は復帰したが、構造的な問題が残った。
+  - [#156 の調査](https://github.com/nbx-liz/LizyML-Widget/issues/156#issuecomment-4412462760)で empirical に確認した内容:
+    1. **Clean path のみで 1.43x 劣化**（subprocess tune 3.24 s/trial vs thread retune 4.64 s/trial）。issue#156 本文の 1.96x はこの band。
+    2. **典型的ユーザフローで 11x 劣化（30x catastrophe の再発）**。`w.tune()` の後に `w.predict(test_df)` を 1 回呼ぶだけで、retune 中の親プロセス CPU が ~29 cores（2904%）から ~2.25 cores（225%）に崩壊し per-trial wall が 36 s に達する（S5/S7 で実測：109 s vs 14 s）。原因は GCC #108494 libgomp プール親和性バグ。`booster.predict` 単独でも親 main thread を pool owner に bind するのに十分（`learned/openmp-daemon-thread-degradation`）。
+    3. **同一カーネル内累積劣化**（5.20 s → 9.04 s/trial across 4 cycles）。スレッド数は flat、CPU は full、原因不明。issue #158 で別途追跡。
+  - PR #155 の thread fallback は構造上回避不可能なリスクを抱える。`w.predict` / Inference タブ / SHAP plot のいずれかが tune と retune の間に挟まれた瞬間に catastrophe path に入るが、ユーザがそれを避ける手段はない。
+  - P-037（PR #153）で **subprocess→parent の tune state IPC**（`tune_state_out_path` + `BackendAdapter.export_tune_state` / `restore_tune_state`）を既に整備済み。本 Proposal はこれを **parent→subprocess の方向**にも拡張するだけで完結する。
+- **提案内容**:
+  - **(a) IPC 入力に `tune_state_in_path` と `retune_kwargs` を追加**:
+    - `_subprocess_entry.read_input` が受け取る dict に 2 フィールドを追加:
+      - `tune_state_in_path: str | None` — retune 時に親が事前に書き出した tune state の path（pickle blob, P-037 と同 format）
+      - `retune_kwargs: dict[str, Any] | None` — `{"resume": True, "n_trials": int|None, "expand_boundary": bool|None, "boundary_threshold": float}`
+    - `subprocess_runner.run_job_subprocess` の signature に同 2 引数を追加。
+  - **(b) subprocess エントリの retune ブランチ**:
+    - `retune_kwargs is not None` のとき、`adapter.create_model(config, df)` の直後に `adapter.restore_tune_state(model, tune_state_in_path)` を呼び、`adapter.tune(model, on_progress=on_progress, **retune_kwargs)` を実行する。
+    - retune 後の更新済み tune state は既存の `tune_state_out_path` 経路で親に返す（P-037 と対称）。
+    - subprocess 内の挙動は `service.tune(resume=True)` と論理同等（adapter.tune は既に resume kwargs を受け付ける）。
+  - **(c) Service 拡張**: `WidgetService.export_tune_state_to_path(path)` を追加。`_tune_model` が None の場合は `ValueError` を上げ、subprocess retune を防ぐ defensive guard とする。
+  - **(d) `SubprocessJobRunner.run` の retune 対応**:
+    - `RetuneSubprocessUnsupportedError` の raise を **削除**。
+    - `spec.retune_kwargs is not None` のとき:
+      1. tempfile で `tune_state_in_path` を確保。
+      2. `service.export_tune_state_to_path(tune_state_in_path)` を呼ぶ。
+      3. `run_job_subprocess(..., retune_kwargs=spec.retune_kwargs, tune_state_in_path=tune_state_in_path)` で投げる。
+      4. `finally` で `tune_state_in_path` を削除（既存の `tune_state_out_path` cleanup と対称）。
+    - retune の場合も `record_subprocess_tune_summary` および `restore_tune_state_from_path` の post-subprocess 経路を流用する（既存実装で動作する）。
+  - **(e) widget._run_job の thread fallback を撤去**:
+    - PR #155 が追加した `_retune_fallback_warned` フラグおよび `if self._execution_strategy == "subprocess" and retune_kwargs is not None:` ブランチを削除。
+    - runner 選択は execution strategy のみで決まる（retune_kwargs を見ない）。
+  - **(f) 既存テストの更新**:
+    - `tests/regression/test_reg_154_default_strategy_retune.py::INV-#154-A` の意味を **"retune は subprocess を使う"** に反転。
+    - `INV-#154-B`（`LZW_FORCE_THREAD` 指示文言）は `RetuneSubprocessUnsupportedError` 全削除のため削除。
+    - `INV-#154-C`（subprocess Fit overhead 30s bound）は無関係なので維持。
+  - **(g) 新規 regression test**:
+    - `tests/regression/test_reg_156_subprocess_retune.py`:
+      - `INV-#156-A`: `w.tune() → w.retune()` がデフォルト install で `subprocess` runner 経由で完了する（`SubprocessJobRunner.run` 呼び出しを mock で検証）。
+      - `INV-#156-B`（slow）: 100k × 50, 3 trials, `tune → main-thread booster.predict → retune` の per-trial wall-clock が clean subprocess tune の 1.5x 以内。catastrophe path を pin する（`learned/promote-learned-skill-to-regression-test` 適用）。
+      - `INV-#156-C`（slow）: clean tune→retune の per-trial wall-clock が clean subprocess tune の 1.2x 以内。
+- **Invariants**:
+  - INV-1: subprocess retune を実行する条件下では、親プロセスは lightgbm を `import` のみで `train` / `predict` を呼ばない（subprocess が全並列領域を担う）。
+  - INV-2: `service.export_tune_state_to_path` は `_tune_model is None` のとき必ず `ValueError` を上げる（subprocess retune の前提逸脱を early fail）。
+  - INV-3: `tune_state_in_path` は `SubprocessJobRunner.run` の `finally` で必ず削除される（INV-5 の対称、ファイルリーク防止）。
+  - INV-4: subprocess retune 完了後、親プロセスの `_tune_model._tuning_result.rounds` は元の rounds + retune で追加された rounds を含む（`restore_tune_state_from_path` 経由で復元）。
+  - INV-5: `RetuneSubprocessUnsupportedError` は本 Proposal で削除する。BackendAdapter Protocol が `export_tune_state` / `restore_tune_state` を required としているため、retune を支えられない adapter は型レベルで存在しない。
+- **影響範囲**:
+  - `src/lizyml_widget/_subprocess_entry.py` — input dict に 2 フィールド、retune branch 追加
+  - `src/lizyml_widget/subprocess_runner.py` — `run_job_subprocess` signature 拡張、input pickle に 2 フィールド追加
+  - `src/lizyml_widget/job_runner.py` — `SubprocessJobRunner.run` で `RetuneSubprocessUnsupportedError` 削除、retune 経路追加；`RetuneSubprocessUnsupportedError` クラス自体は削除し import を整理
+  - `src/lizyml_widget/service.py` — `export_tune_state_to_path` メソッド追加
+  - `src/lizyml_widget/widget.py` — `_retune_fallback_warned` フラグと thread fallback ブランチを削除；`RetuneSubprocessUnsupportedError` の `except` 句は削除（type 削除に伴う）
+  - `tests/regression/test_reg_154_default_strategy_retune.py` — INV-A 反転、INV-B 削除、INV-C 維持
+  - `tests/regression/test_reg_156_subprocess_retune.py` — 新規（catastrophe path pin + clean perf bound）
+  - `tests/test_subprocess_integration.py` — happy-path retune の mock テスト追加
+  - `tests/test_widget.py` / `tests/test_widget_threading.py` — `RetuneSubprocessUnsupportedError` 参照の更新（残っていれば削除）
+  - `BLUEPRINT.md` §3.7.1 — subprocess IPC ペイロードの input 方向追加を記載
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[0.9.0]` セクションの「Bug fixes」に追加（PR #155 のエントリを置換）
+- **互換性**:
+  - 公開 Python API（`w.fit/tune/retune`）の signature / 振る舞いは変更なし。`w.retune()` のユーザ可視動作は PR #155 の v0.9.0 直前状態と同一（成功する／status=`completed`）。
+  - 副次的に `RetuneSubprocessUnsupportedError` クラスを削除する。`from lizyml_widget.job_runner import RetuneSubprocessUnsupportedError` は ImportError になるが、これは internal class（BLUEPRINT で公開 API として宣言されておらず、テストのみが参照していた）。CHANGELOG で internal change として明記。
+  - subprocess IPC は input pickle に 2 フィールド追加。古い親 + 新しい subprocess の組み合わせは存在しない（subprocess は親と同じ Python 環境で起動する）ので skew リスクなし。
+- **代替案（却下）**:
+  - **案A**: PR #155 の thread fallback を維持し、`w.predict` の前後で警告を出す → ユーザ教育に頼るのは脆弱、誤って踏むと 11x 劣化、現在の v0.9.0 リリースを正当化できない。
+  - **案B**: PR #155 を revert し `RETUNE_SUBPROCESS_UNSUPPORTED` を再露出 → #154 の元症状に戻る、最悪。
+  - **案C**: lizyml 0.12 の resumable Optuna SQLite storage（issue #129）に依存 → P-030 でリリーススコープから外しており UI 露出が無い。本 Proposal で扱う in-memory tune state pickle で十分目的を達せるため不要。
+- **Optuna study の扱い**:
+  - P-037 と同じ。subprocess は受け取った `_study` を P-037 の `restore_tune_state` 経由で attach し、`adapter.tune(resume=True)` を呼ぶ。lizyml 内部で `_study` を使って resume する。
+  - InMemoryStorage（既定）は pickleable。RDB-backed storage の場合 P-037 と同様に best-effort で `study=None` に降格し、retune は新規 study として動作する（functional には正しい動作）。
+- **受け入れ基準**:
+  - [ ] Linux + libgomp デフォルト環境で `w.tune() → w.retune()` が `subprocess` runner で完了する（mock で `SubprocessJobRunner.run` 呼び出しを検証）。
+  - [ ] `tune → main-thread booster.predict → retune` の per-trial wall-clock が `tune` の per-trial wall の 1.5x 以内に収まる（issue #156 S7 の 11x catastrophe を除去）。slow regression test で pin。
+  - [ ] clean `tune → retune` の per-trial wall-clock が `tune` の 1.2x 以内（PR #155 の 1.43x も改善）。
+  - [ ] `RetuneSubprocessUnsupportedError` および `RETUNE_SUBPROCESS_UNSUPPORTED` エラーコードへの参照が widget / supervisor / tests から完全に消える。
+  - [ ] PR #155 が追加した `_retune_fallback_warned` / "re-tune temporarily falls back to thread runner" ログが消える。
+  - [ ] 既存品質ゲート: `pytest`, `pytest -m slow`, `ruff check`, `ruff format --check`, `mypy --strict`, `pnpm test:coverage`, `pnpm lint` 全 green。
+  - [ ] CHANGELOG `[0.9.0]` の retune 関連エントリが PR #155 の "thread fallback" 記述から本 Proposal の "subprocess retune resume" 記述に置換される。
+- **本 Proposal の終了条件**:
+  - 受け入れ基準を満たした PR が `develop` にマージされる。
+  - PR #155 の不採用部分（thread fallback コード）が同じ PR で回収される。
+
 ### P-037: Adapter Protocol に Tune State Cross-Process Persistence を追加（subprocess tune 後の plot 復元）
 
 - **日付**: 2026-05-09（提案・決定・実装）
