@@ -166,4 +166,213 @@ describe("FitSubTab — Evaluation metrics", () => {
     const allChips = evalAccordion.flatMap((g) => Array.from(g.children).map((c) => c.textContent));
     expect(allChips).toEqual(expect.arrayContaining(["auc", "binary_logloss", "binary_error"]));
   });
+
+  it("toggling a metric chip emits a section change with the new metrics list", () => {
+    const handleSectionChange = vi.fn();
+    const { container } = render(
+      <FitSubTab {...baseProps} handleSectionChange={handleSectionChange} />,
+    );
+    // The evaluation chip-group contains binary_error (model_metric does
+    // not). Identify it by content to avoid matching model.params.metric
+    // chip groups.
+    const allChipGroups = Array.from(
+      container.querySelectorAll(".lzw-chip-group"),
+    ) as HTMLElement[];
+    const evalGroup = allChipGroups.find((g) =>
+      Array.from(g.children).some((c) => c.textContent === "binary_error"),
+    )!;
+    const evalChips = Array.from(evalGroup.children) as HTMLElement[];
+    const loglossChip = evalChips.find((b) => b.textContent === "binary_logloss")!;
+    fireEvent.click(loglossChip);
+    expect(handleSectionChange).toHaveBeenCalledWith(
+      "evaluation",
+      expect.objectContaining({ metrics: expect.arrayContaining(["auc", "binary_logloss"]) }),
+    );
+
+    handleSectionChange.mockClear();
+    const aucChip = evalChips.find((b) => b.textContent === "auc")!;
+    fireEvent.click(aucChip);
+    const last = handleSectionChange.mock.calls.at(-1)!;
+    expect(last[0]).toBe("evaluation");
+    expect(last[1].metrics).not.toContain("auc");
+  });
+
+  it("renders the precision_at_k k stepper only when the metric is selected", () => {
+    const propsWithPrecision = {
+      ...baseProps,
+      uiSchema: {
+        ...baseUiSchema,
+        option_sets: {
+          ...baseUiSchema.option_sets,
+          metric: { binary: ["auc", "precision_at_k"] },
+        },
+      },
+      localConfig: {
+        ...baseProps.localConfig,
+        evaluation: { metrics: ["auc"], params: {} },
+      },
+    };
+    const { rerender, queryByLabelText } = render(<FitSubTab {...propsWithPrecision} />);
+    expect(queryByLabelText("precision_at_k: k")).toBeNull();
+
+    rerender(
+      <FitSubTab
+        {...propsWithPrecision}
+        localConfig={{
+          ...propsWithPrecision.localConfig,
+          evaluation: { metrics: ["auc", "precision_at_k"], params: {} },
+        }}
+      />,
+    );
+    // Stepper renders a numeric input — its label is "precision_at_k: k".
+    expect(screen.getByText("precision_at_k: k")).toBeDefined();
+  });
+});
+
+describe("FitSubTab — Calibration enabled state", () => {
+  it("changing the method emits a section change with the new method", () => {
+    const handleSectionChange = vi.fn();
+    render(
+      <FitSubTab
+        {...baseProps}
+        handleSectionChange={handleSectionChange}
+        localConfig={{
+          ...baseProps.localConfig,
+          calibration: { method: "platt", params: {} },
+        }}
+        uiSchema={{
+          ...baseUiSchema,
+          calibration_methods: ["platt", "isotonic", "beta"],
+        }}
+      />,
+    );
+    const select = screen
+      .getAllByRole("combobox")
+      .find((s) => (s as HTMLSelectElement).value === "platt")!;
+    fireEvent.change(select, { target: { value: "isotonic" } });
+    expect(handleSectionChange).toHaveBeenCalledWith(
+      "calibration",
+      expect.objectContaining({ method: "isotonic" }),
+    );
+  });
+
+  it("removing a calibration param strips it from params", () => {
+    const handleSectionChange = vi.fn();
+    render(
+      <FitSubTab
+        {...baseProps}
+        handleSectionChange={handleSectionChange}
+        localConfig={{
+          ...baseProps.localConfig,
+          calibration: { method: "platt", params: { c: 1.0 } },
+        }}
+      />,
+    );
+    const remove = screen.getByLabelText("Remove c");
+    fireEvent.click(remove);
+    const last = handleSectionChange.mock.calls.at(-1)!;
+    expect(last[0]).toBe("calibration");
+    expect(last[1].params).not.toHaveProperty("c");
+  });
+
+  it("adding an available param via + Add select writes it to params", () => {
+    const handleSectionChange = vi.fn();
+    render(
+      <FitSubTab
+        {...baseProps}
+        handleSectionChange={handleSectionChange}
+        localConfig={{
+          ...baseProps.localConfig,
+          calibration: { method: "platt", params: {} },
+        }}
+        uiSchema={{
+          ...baseUiSchema,
+          calibration_methods: ["platt"],
+          calibration_params: { platt: ["c"] },
+        }}
+      />,
+    );
+    const addSelect = screen
+      .getAllByRole("combobox")
+      .find((s) => (s as HTMLSelectElement).value === "")!;
+    fireEvent.change(addSelect, { target: { value: "c" } });
+    const last = handleSectionChange.mock.calls.at(-1)!;
+    expect(last[0]).toBe("calibration");
+    expect(last[1].params).toHaveProperty("c");
+  });
+});
+
+describe("FitSubTab — Training section", () => {
+  it("toggling early stopping emits a section change with enabled flag flipped", () => {
+    const handleSectionChange = vi.fn();
+    render(
+      <FitSubTab
+        {...baseProps}
+        handleSectionChange={handleSectionChange}
+        localConfig={{
+          ...baseProps.localConfig,
+          training: {
+            seed: 1,
+            early_stopping: { enabled: true, rounds: 150, validation_ratio: 0.1 },
+          },
+        }}
+      />,
+    );
+    const toggle = screen.getByLabelText("Enable early stopping") as HTMLInputElement;
+    fireEvent.click(toggle);
+    const last = handleSectionChange.mock.calls.at(-1)!;
+    expect(last[0]).toBe("training");
+    expect(last[1].early_stopping.enabled).toBe(false);
+  });
+
+  it("hides rounds / validation_ratio / inner_valid when early stopping is off", () => {
+    const { queryByText } = render(
+      <FitSubTab
+        {...baseProps}
+        localConfig={{
+          ...baseProps.localConfig,
+          training: { seed: 1, early_stopping: { enabled: false } },
+        }}
+      />,
+    );
+    expect(queryByText("Rounds")).toBeNull();
+    expect(queryByText("Validation Ratio")).toBeNull();
+    expect(queryByText("Inner Validation")).toBeNull();
+  });
+
+  it("changing inner_valid select sends a section change with the new method object", () => {
+    const handleSectionChange = vi.fn();
+    // Use a CV strategy that exposes group fields so group_holdout is
+    // allowed by ``filterInnerValidOptions``.
+    render(
+      <FitSubTab
+        {...baseProps}
+        handleSectionChange={handleSectionChange}
+        dfInfo={{
+          ...baseProps.dfInfo,
+          cv: { strategy: "group_kfold", n_splits: 5, group_col: "g" },
+        }}
+        localConfig={{
+          ...baseProps.localConfig,
+          training: {
+            seed: 1,
+            early_stopping: {
+              enabled: true,
+              rounds: 150,
+              validation_ratio: 0.1,
+              inner_valid: { method: "holdout" },
+            },
+          },
+        }}
+      />,
+    );
+    // The inner_valid select is the one whose options include "group_holdout".
+    const select = (screen.getAllByRole("combobox") as HTMLSelectElement[]).find((s) =>
+      Array.from(s.options).some((o) => o.value === "group_holdout"),
+    )!;
+    fireEvent.change(select, { target: { value: "group_holdout" } });
+    const last = handleSectionChange.mock.calls.at(-1)!;
+    expect(last[0]).toBe("training");
+    expect(last[1].early_stopping.inner_valid).toEqual({ method: "group_holdout" });
+  });
 });

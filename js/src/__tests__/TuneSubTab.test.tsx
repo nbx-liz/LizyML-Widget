@@ -158,3 +158,65 @@ describe("TuneSubTab — Additional Metrics chips", () => {
     expect(handleChange).toHaveBeenCalled();
   });
 });
+
+describe("TuneSubTab — precision_at_k k stepper", () => {
+  it("hides the k stepper when precision_at_k is not in the metrics list", () => {
+    const { queryByText } = render(
+      <TuneSubTab
+        {...baseProps}
+        uiSchema={{
+          ...baseUiSchema,
+          option_sets: {
+            ...baseUiSchema.option_sets,
+            metric: { binary: ["auc", "precision_at_k"] },
+          },
+        }}
+        localConfig={{
+          ...baseProps.localConfig,
+          tuning: {
+            ...baseProps.localConfig.tuning,
+            evaluation: { metrics: ["auc"], params: {} },
+          },
+        }}
+      />,
+    );
+    expect(queryByText("precision_at_k: k")).toBeNull();
+  });
+
+  it("shows the k stepper when precision_at_k is selected and updates evaluation.params on change", () => {
+    const handleChange = vi.fn();
+    const { container } = render(
+      <TuneSubTab
+        {...baseProps}
+        handleChange={handleChange}
+        uiSchema={{
+          ...baseUiSchema,
+          option_sets: {
+            ...baseUiSchema.option_sets,
+            metric: { binary: ["auc", "precision_at_k"] },
+          },
+        }}
+        localConfig={{
+          ...baseProps.localConfig,
+          tuning: {
+            ...baseProps.localConfig.tuning,
+            evaluation: {
+              metrics: ["precision_at_k"],
+              params: { precision_at_k_k: 10 },
+            },
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText("precision_at_k: k")).toBeDefined();
+    // Use the stepper's "+" button to bump k from 10 → 11.
+    const plusBtns = Array.from(container.querySelectorAll("button")).filter(
+      (b) => b.textContent === "+" || b.textContent?.trim() === "+",
+    );
+    // The precision_at_k stepper is the last one rendered (after n_trials).
+    const plus = plusBtns.at(-1)!;
+    fireEvent.click(plus);
+    const updated = handleChange.mock.calls.at(-1)![0];
+    expect(updated.tuning.evaluation.params.precision_at_k_k).toBe(11);
+  });
+});

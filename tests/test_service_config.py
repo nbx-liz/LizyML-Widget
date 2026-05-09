@@ -118,6 +118,29 @@ class TestApplyBestParams:
             # No inner_valid in base — fallback to validation_ratio
             assert es.get("validation_ratio") == 0.2
 
+    def test_validation_ratio_falls_back_when_inner_valid_missing(self) -> None:
+        """Pin the ``isinstance(existing_iv, dict) is False`` branch in
+        ``service_columns._apply_classified_to_base`` (#147 / P-036 audit).
+
+        When the user has explicitly cleared inner_valid (e.g. set to None
+        or removed via the UI), ``validation_ratio`` from a tune result
+        must still land on ``training.early_stopping.validation_ratio``
+        without raising. Previously this branch was untested — the only
+        existing case used ``initialize_config()`` which always produces
+        ``inner_valid`` as a dict.
+        """
+        svc = self._make_service()
+        config = svc.initialize_config()
+        # Force inner_valid to None to exercise the fallback branch.
+        es = config.setdefault("training", {}).setdefault("early_stopping", {})
+        es["inner_valid"] = None
+
+        result = svc.apply_best_params({"validation_ratio": 0.25}, config)
+        result_es = result.get("training", {}).get("early_stopping", {})
+        # Fallback: validation_ratio is written directly, inner_valid stays None.
+        assert result_es.get("validation_ratio") == 0.25
+        assert result_es.get("inner_valid") is None
+
     def test_mixed_categories(self) -> None:
         """All 3 categories in one call."""
         svc = self._make_service()

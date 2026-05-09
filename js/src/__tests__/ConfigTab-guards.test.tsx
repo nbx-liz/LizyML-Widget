@@ -181,3 +181,100 @@ describe("ConfigTab — Fit/Tune subtab switching (#134)", () => {
     expect(sendAction).toHaveBeenCalledWith("tune");
   });
 });
+
+describe("ConfigTab — yaml_export / raw_config custom messages", () => {
+  /**
+   * Pin the JS-side handling of yaml_export, raw_config, and
+   * raw_config_error messages from Python (#147 / P-036 audit). The
+   * Blob-URL → data-URL fallback is essential for Colab where
+   * URL.createObjectURL throws inside the iframe sandbox.
+   */
+  it("triggers a Blob URL download on yaml_export", async () => {
+    const { act } = await import("preact/test-utils");
+    const model = createMockModel();
+    const createObjectURL = vi.fn(() => "blob:fake");
+    const revokeObjectURL = vi.fn();
+    const click = vi.fn();
+    (globalThis as any).URL.createObjectURL = createObjectURL;
+    (globalThis as any).URL.revokeObjectURL = revokeObjectURL;
+    const origClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = click;
+    try {
+      render(<ConfigTab {...defaultProps} status="completed" model={model} />);
+      await act(async () => {
+        model.simulateCustomMessage({ type: "yaml_export", content: "model:\n  name: lgbm\n" });
+      });
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(click).toHaveBeenCalled();
+      expect(revokeObjectURL).toHaveBeenCalled();
+    } finally {
+      HTMLAnchorElement.prototype.click = origClick;
+    }
+  });
+
+  it("falls back to a data URL when Blob URL creation throws (Colab sandbox)", async () => {
+    const { act } = await import("preact/test-utils");
+    const model = createMockModel();
+    const createObjectURL = vi.fn(() => {
+      throw new Error("Blob URL forbidden in sandbox");
+    });
+    (globalThis as any).URL.createObjectURL = createObjectURL;
+    const click = vi.fn();
+    const origClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = click;
+    const origFR = (globalThis as any).FileReader;
+    class StubFileReader {
+      onload: (() => void) | null = null;
+      result = "data:text/yaml;base64,bW9kZWw6";
+      readAsDataURL(_blob: Blob) {
+        if (this.onload) this.onload();
+      }
+    }
+    (globalThis as any).FileReader = StubFileReader;
+    try {
+      render(<ConfigTab {...defaultProps} status="completed" model={model} />);
+      await act(async () => {
+        model.simulateCustomMessage({ type: "yaml_export", content: "x: 1" });
+      });
+      expect(createObjectURL).toHaveBeenCalled();
+      expect(click).toHaveBeenCalled();
+    } finally {
+      HTMLAnchorElement.prototype.click = origClick;
+      (globalThis as any).FileReader = origFR;
+    }
+  });
+
+  it("renders the error message in the raw-config modal when raw_config_error is received", async () => {
+    const { act } = await import("preact/test-utils");
+    const model = createMockModel();
+    const { container } = render(
+      <ConfigTab {...defaultProps} status="completed" model={model} />,
+    );
+    await act(async () => {
+      model.simulateCustomMessage({
+        type: "raw_config_error",
+        message: "Failed to render YAML",
+      });
+    });
+    const pre = container.querySelector(".lzw-pre");
+    expect(pre).not.toBeNull();
+    expect(pre!.textContent).toContain("Failed to render YAML");
+  });
+
+  it("renders the rendered YAML when raw_config (success) is received", async () => {
+    const { act } = await import("preact/test-utils");
+    const model = createMockModel();
+    const { container } = render(
+      <ConfigTab {...defaultProps} status="completed" model={model} />,
+    );
+    await act(async () => {
+      model.simulateCustomMessage({
+        type: "raw_config",
+        content: "model:\n  name: lgbm\nseed: 42\n",
+      });
+    });
+    const pre = container.querySelector(".lzw-pre");
+    expect(pre).not.toBeNull();
+    expect(pre!.textContent).toContain("seed: 42");
+  });
+});
