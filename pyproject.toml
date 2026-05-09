@@ -82,8 +82,11 @@ mypy_path = "src"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--ignore=tests/e2e"
-markers = ["e2e: end-to-end tests requiring Jupyter server and Playwright"]
+addopts = "--ignore=tests/e2e -m 'not slow'"
+markers = [
+    "e2e: end-to-end tests requiring Jupyter server and Playwright",
+    "slow: long-running perf / regression tests; opt-in via `pytest -m slow`",
+]
 
 [dependency-groups]
 dev = [

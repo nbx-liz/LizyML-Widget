@@ -123,6 +123,83 @@ class TestWidgetExecutionStrategy:
 
 
 # ===========================================================================
+# Issue #147 / P-036: env-var gate for execution strategy
+# ===========================================================================
+
+
+class TestLzwForceThreadOptOut:
+    """``LZW_FORCE_THREAD=1`` keeps the legacy in-process path even when the
+    detector says subprocess. ``LZW_FORCE_SUBPROCESS=1`` is retained as a
+    no-op for backward compatibility — subprocess is now the default whenever
+    ``get_execution_strategy()`` says so."""
+
+    def _strategy_after_first_job(
+        self,
+        env: dict[str, str],
+        detector_return: tuple[str, str | None],
+    ) -> tuple[str | None, str | None, MagicMock]:
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch(
+                "lizyml_widget.widget.get_execution_strategy",
+                return_value=detector_return,
+            ) as mock_detect,
+            patch.object(
+                __import__("lizyml_widget.widget", fromlist=["SubprocessJobRunner"]),
+                "SubprocessJobRunner",
+            ),
+            patch.object(
+                __import__("lizyml_widget.widget", fromlist=["ThreadJobRunner"]),
+                "ThreadJobRunner",
+            ),
+        ):
+            w = _make_widget()
+            w.load(df, target="y")
+            w._run_job("fit")
+            if w._job_thread:
+                w._job_thread.join(timeout=2)
+            return w._execution_strategy, w._libomp_path, mock_detect
+
+    def test_default_uses_detector_when_libgomp_present(self) -> None:
+        """Without ``LZW_FORCE_THREAD``, libgomp default = subprocess."""
+        # Drop any pre-set legacy env vars so the test is hermetic.
+        env: dict[str, str] = {}
+        for k in ("LZW_FORCE_THREAD", "LZW_FORCE_SUBPROCESS"):
+            os.environ.pop(k, None)
+        strategy, libomp, detect = self._strategy_after_first_job(
+            env=env,
+            detector_return=("subprocess", "/usr/lib/libomp5.so"),
+        )
+        assert strategy == "subprocess"
+        assert libomp == "/usr/lib/libomp5.so"
+        detect.assert_called_once()
+
+    def test_lzw_force_thread_overrides_subprocess_default(self) -> None:
+        """``LZW_FORCE_THREAD=1`` keeps thread even when detector says subprocess."""
+        os.environ.pop("LZW_FORCE_SUBPROCESS", None)
+        strategy, libomp, detect = self._strategy_after_first_job(
+            env={"LZW_FORCE_THREAD": "1"},
+            detector_return=("subprocess", "/usr/lib/libomp5.so"),
+        )
+        assert strategy == "thread"
+        assert libomp is None
+        # Detector must not be consulted when the user explicitly opts out.
+        detect.assert_not_called()
+
+    def test_lzw_force_subprocess_is_no_op(self) -> None:
+        """``LZW_FORCE_SUBPROCESS=1`` no longer gates subprocess — detector wins."""
+        os.environ.pop("LZW_FORCE_THREAD", None)
+        strategy, libomp, _ = self._strategy_after_first_job(
+            env={"LZW_FORCE_SUBPROCESS": "1"},
+            detector_return=("thread", None),
+        )
+        # Detector said thread → widget honours that even with the legacy env var.
+        assert strategy == "thread"
+        assert libomp is None
+
+
+# ===========================================================================
 # Widget: _run_job runner selection (P-032)
 # ===========================================================================
 
