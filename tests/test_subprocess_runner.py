@@ -206,14 +206,14 @@ class TestRunJob:
         result_msg = next(m for m in messages if m["type"] == "result")
         assert "tune_summary" in result_msg
 
-    def test_tune_without_prior_fit_returns_empty_eval_table(self) -> None:
-        """P-036/#147 follow-up: ``model.tune()`` does not auto-fit, so
-        ``evaluate_table`` / ``split_summary`` raise MODEL_NOT_FIT when
-        called on a fresh model. Mirror ThreadJobRunner._run_tune's guard
-        so the subprocess does not surface a BACKEND_ERROR after a
-        successful tune. Regression: the original subprocess-entry tune
-        branch called these unconditionally and the bug only surfaced
-        under default usage once subprocess became the default strategy.
+    def test_tune_without_prior_fit_propagates_empty_tables(self) -> None:
+        """#147 / P-036: ``model.tune()`` does not auto-fit. The adapter
+        layer is now responsible for returning ``[]`` from
+        ``evaluate_table`` / ``split_summary`` on an unfit model
+        (``LizyMLAdapter`` checks :func:`adapter_results.is_model_fitted`).
+        The subprocess entry simply forwards whatever the adapter returns
+        — pin that here by mocking the adapter to return ``[]`` and
+        asserting the result message ships them through cleanly.
         """
         import io
 
@@ -229,15 +229,10 @@ class TestRunJob:
         mock_summary.rounds = []
         mock_summary.boundary_report = None
 
-        # Real lizyml raises a LizyMLError(MODEL_NOT_FIT). The subprocess
-        # should swallow it and return an empty list, not propagate the
-        # error to the parent.
-        not_fit_err = RuntimeError("Model has not been fitted. Call fit() first.")
-
         mock_adapter = MagicMock()
         mock_adapter.tune.return_value = mock_summary
-        mock_adapter.evaluate_table.side_effect = not_fit_err
-        mock_adapter.split_summary.side_effect = not_fit_err
+        mock_adapter.evaluate_table.return_value = []
+        mock_adapter.split_summary.return_value = []
         mock_adapter.available_plots.return_value = ["tuning-history"]
 
         with patch(
@@ -255,17 +250,11 @@ class TestRunJob:
 
         messages = decode_messages(output.getvalue())
         types = [m["type"] for m in messages]
-        # Must NOT propagate MODEL_NOT_FIT as an error message.
-        assert "error" not in types, (
-            f"Subprocess tune-without-fit must not surface MODEL_NOT_FIT "
-            f"as an error. messages={messages}"
-        )
+        assert "error" not in types, f"Subprocess tune surfaced an error: {messages}"
         result_msg = next(m for m in messages if m["type"] == "result")
         assert result_msg["tune_summary"]["best_params"] == {"lr": 0.1}
         assert result_msg["eval_table"] == []
         assert result_msg["split_summary"] == []
-        # available_plots is fit-state-aware in the real adapter so it
-        # remains callable; preserve that contract here.
         assert result_msg["available_plots"] == ["tuning-history"]
 
     def test_error_sends_error_message(self) -> None:

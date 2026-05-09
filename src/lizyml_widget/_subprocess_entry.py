@@ -120,22 +120,9 @@ def run_job(
             }
         elif job_type == "tune":
             summary_t = adapter.tune(model, on_progress=on_progress)
-            # ``model.tune()`` does not auto-fit — ``best_params`` are stored
-            # for the next ``fit()`` call. Mirror the ThreadJobRunner guard
-            # (job_runner.py P-004 R3) so a tune-without-prior-fit user does
-            # not hit MODEL_NOT_FIT in the subprocess path.
-            eval_table: list[dict[str, Any]] = []
-            split_summary: list[dict[str, Any]] = []
-            try:
-                eval_table = adapter.evaluate_table(model)
-                split_summary = adapter.split_summary(model)
-            except Exception as tune_eval_err:  # noqa: BLE001
-                import logging
-
-                logging.getLogger(__name__).debug(
-                    "Tune-only evaluate_table/split_summary skipped: %s",
-                    tune_eval_err,
-                )
+            # ``model.tune()`` does not auto-fit — the adapter returns
+            # ``[]`` from evaluate_table/split_summary on an unfit model
+            # (#147 / P-036, see :func:`adapter_results.is_model_fitted`).
             result_msg = {
                 "type": "result",
                 "tune_summary": {
@@ -147,8 +134,8 @@ def run_job(
                     "rounds": summary_t.rounds,
                     "boundary_report": summary_t.boundary_report,
                 },
-                "eval_table": eval_table,
-                "split_summary": split_summary,
+                "eval_table": adapter.evaluate_table(model),
+                "split_summary": adapter.split_summary(model),
                 "available_plots": adapter.available_plots(model),
                 "model_path": None,
             }

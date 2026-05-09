@@ -122,11 +122,16 @@ class TestThreadJobRunnerException:
 
 
 class TestThreadJobRunnerTuneOnly:
-    """P-004 R3: tune may complete without a fitted model — eval_table missing
-    must surface as an empty list, not propagate the RuntimeError out."""
+    """P-004 R3 / #147: tune may complete without a fitted model. The
+    adapter layer (LizyMLAdapter) now returns ``[]`` from
+    evaluate_table/split_summary on an unfit model, so the runner does
+    not need exception-based control flow. Pin that the runner forwards
+    the empty list through unchanged.
+    """
 
-    def test_tune_eval_table_runtime_error_is_swallowed(self, mock_service: Any) -> None:
-        mock_service.get_evaluate_table.side_effect = RuntimeError("Model has not been fitted")
+    def test_tune_with_unfit_model_returns_empty_eval_table(self, mock_service: Any) -> None:
+        mock_service.get_evaluate_table.return_value = []
+        mock_service.get_split_summary.return_value = []
         runner = ThreadJobRunner(mock_service)
         result = runner.run(
             JobSpec(job_type="tune", config={}),
@@ -134,6 +139,7 @@ class TestThreadJobRunnerTuneOnly:
             cancel_event=threading.Event(),
         )
         assert result.eval_table == []
+        assert result.split_summary == []
         assert result.tune_summary["best_score"] == 0.92  # tune still succeeded
 
 

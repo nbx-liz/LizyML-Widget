@@ -538,6 +538,37 @@ class TestResultDelegation:
         result = adapter.split_summary(mock_model)
         assert len(result) == 2
 
+    def test_evaluate_table_returns_empty_on_unfit_model(self) -> None:
+        """#147 / P-036: ``model.tune()`` does not auto-fit. The adapter
+        must not propagate the underlying ``LizyMLError(MODEL_NOT_FIT)``
+        when the result tables are read on an unfit instance — return an
+        empty list so callers (ThreadJobRunner / subprocess entry) do not
+        need exception-based control flow.
+        """
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_model.fit_result = None  # unfit
+        # Even if model.evaluate_table is wired up to raise, the adapter
+        # must short-circuit before calling it.
+        mock_model.evaluate_table.side_effect = RuntimeError(
+            "Model has not been fitted. Call fit() first."
+        )
+        result = adapter.evaluate_table(mock_model)
+        assert result == []
+        mock_model.evaluate_table.assert_not_called()
+
+    def test_split_summary_returns_empty_on_unfit_model(self) -> None:
+        """Mirror of ``test_evaluate_table_returns_empty_on_unfit_model``."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_model.fit_result = None
+        mock_model.split_summary.side_effect = RuntimeError(
+            "Model has not been fitted. Call fit() first."
+        )
+        result = adapter.split_summary(mock_model)
+        assert result == []
+        mock_model.split_summary.assert_not_called()
+
     def test_importance(self) -> None:
         adapter = LizyMLAdapter()
         mock_model = MagicMock()

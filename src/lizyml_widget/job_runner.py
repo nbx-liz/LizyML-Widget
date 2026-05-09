@@ -194,16 +194,13 @@ class ThreadJobRunner:
             "rounds": summary_t.rounds,
             "boundary_report": summary_t.boundary_report,
         }
-        # After tune, model MAY be fitted — guard evaluate/split calls (P-004 R3).
-        eval_table: list[dict[str, Any]] = []
-        split_summary: list[dict[str, Any]] = []
-        try:
-            eval_table = self._service.get_evaluate_table()
-            split_summary = self._service.get_split_summary()
-        except (AttributeError, RuntimeError, ValueError) as exc:
-            # lizyml raises RuntimeError("Model has not been fitted") when
-            # evaluate_table is called on an unfitted model (P-004 R3).
-            _log.debug("Tune-only fit_summary skipped (model not fitted): %s", exc)
+        # ``model.tune()`` does not auto-fit the model; the adapter's
+        # ``evaluate_table`` / ``split_summary`` return ``[]`` on unfit
+        # state (centralised guard in :func:`adapter_results.is_model_fitted`,
+        # see #147 / P-036). Callers no longer need exception-based
+        # control flow here.
+        eval_table = self._service.get_evaluate_table()
+        split_summary = self._service.get_split_summary()
         return JobResult(
             job_type="tune",
             tune_summary=tune_summary,
