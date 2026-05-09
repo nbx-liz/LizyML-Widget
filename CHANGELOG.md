@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Persist tune state across subprocess boundary so post-tune plots render on the parent (P-037, [#152](https://github.com/nbx-liz/LizyML-Widget/issues/152))**.
+  After P-036 made subprocess the default on Linux + libgomp, ``w.tune()``
+  followed by Results → Tuning History got stuck at "Loading plot..." because
+  ``model.export()`` (called via the existing ``export_model`` path) raises
+  ``MODEL_NOT_FIT`` for tune-only state, the exception was silently swallowed,
+  and the parent never received a model. ``BackendAdapter`` now exposes
+  ``export_tune_state`` / ``restore_tune_state``: the subprocess pickles
+  ``_tuning_result`` (always) and ``_study`` (best-effort, omitted when not
+  pickleable) to a temp file, and the parent reattaches it onto a freshly
+  created model so ``service.get_plot("optimization-history")`` works without
+  re-fitting. ``_subprocess_entry.py`` no longer attempts ``export_model`` on a
+  tune-only run, and ``PlotViewer`` now clears its loading state on
+  ``plot_error`` instead of looping. The Optuna study handle is bundled
+  best-effort to set up follow-up work on subprocess retune resume
+  ([#128](https://github.com/nbx-liz/LizyML-Widget/issues/128)).
+
 - **Restore subprocess execution as the default on Linux + libgomp (P-036, [#147](https://github.com/nbx-liz/LizyML-Widget/issues/147))**.
   ``w.fit()`` / ``w.tune()`` previously ran in a worker thread regardless of
   OpenMP runtime, hitting libgomp's pool-affinity bug (~30x slowdown for Fit,

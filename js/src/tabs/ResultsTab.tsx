@@ -39,6 +39,8 @@ interface ResultsTabProps {
   error: Record<string, any>;
   plots: Record<string, any>;
   plotLoading: Record<string, boolean>;
+  /** P-037 / #152: per-plot error messages (set when service.get_plot raises). */
+  plotErrors?: Record<string, string>;
   onRequestPlot: (plotType: string, options?: PlotRequestOptions) => void;
   sendAction: (type: string, payload?: Record<string, any>) => void;
   onSwitchToFit?: () => void;
@@ -77,6 +79,7 @@ export function ResultsTab({
   error,
   plots,
   plotLoading,
+  plotErrors,
   onRequestPlot,
   sendAction,
   onSwitchToFit,
@@ -357,6 +360,7 @@ export function ResultsTab({
                 plotType="optimization-history"
                 plots={plots}
                 loading={plotLoading}
+                errors={plotErrors}
                 onRequest={handlePlotRequest}
                 theme={theme}
               />
@@ -413,6 +417,7 @@ export function ResultsTab({
               plotType={activePlot}
               plots={plots}
               loading={plotLoading}
+              errors={plotErrors}
               onRequest={handlePlotRequest}
               theme={theme}
             />

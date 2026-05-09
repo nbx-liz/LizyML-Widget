@@ -170,6 +170,48 @@ describe("usePlot", () => {
       expect(result.current.plots["shap-summary"]).toBeUndefined();
     });
 
+    it("exposes plot_error message via the errors map (P-037 / #152)", () => {
+      const { result } = renderHook(() => usePlot(model));
+
+      act(() => { result.current.requestPlot("optimization-history"); });
+      const rid = model.sentMessages[0].payload.request_id;
+
+      act(() => {
+        model.simulateCustomMessage({
+          type: "plot_error",
+          plot_type: "optimization-history",
+          message: "No trained model",
+          request_id: rid,
+        });
+      });
+
+      // PlotViewer needs an explicit error to render — bare loading=false
+      // turns the panel blank, which is what #152 reported as "looping".
+      expect(result.current.errors["optimization-history"]).toBe("No trained model");
+      expect(result.current.loading["optimization-history"]).toBe(false);
+    });
+
+    it("clears errors[plot_type] when the same plot is re-requested successfully", () => {
+      const { result } = renderHook(() => usePlot(model));
+
+      act(() => { result.current.requestPlot("optimization-history"); });
+      const rid1 = model.sentMessages[0].payload.request_id;
+
+      act(() => {
+        model.simulateCustomMessage({
+          type: "plot_error",
+          plot_type: "optimization-history",
+          message: "transient",
+          request_id: rid1,
+        });
+      });
+      expect(result.current.errors["optimization-history"]).toBe("transient");
+
+      // Re-request — error must clear so the user sees Loading, not the stale error.
+      act(() => { result.current.requestPlot("optimization-history"); });
+      expect(result.current.errors["optimization-history"]).toBeUndefined();
+    });
+
     it("ignores plot_error with mismatched request_id", () => {
       const { result } = renderHook(() => usePlot(model));
 

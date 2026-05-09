@@ -21,6 +21,7 @@ import shutil
 import tempfile
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .subprocess_runner import run_job_subprocess
@@ -253,6 +254,18 @@ class SubprocessJobRunner:
         df = self._service.get_dataframe()
         target = self._service.get_df_info().get("target", "")
         model_out_path = tempfile.mkdtemp(prefix="lzw_model_")
+        # P-037 / #152: tune-only runs persist ``_tuning_result`` to a
+        # separate temp file so the parent can render ``optimization-history``
+        # without re-fitting. Allocated unconditionally via
+        # ``NamedTemporaryFile(delete=False)`` (race-safe vs. ``mktemp``);
+        # the entry point overwrites the placeholder when ``job_type == "tune"``,
+        # and the file is cleaned up in the finally branch alongside
+        # ``model_out_path`` (INV-5).
+        tune_state_fd = tempfile.NamedTemporaryFile(  # noqa: SIM115 — caller owns lifecycle
+            prefix="lzw_tune_state_", suffix=".pkl", delete=False
+        )
+        tune_state_out_path = tune_state_fd.name
+        tune_state_fd.close()
 
         try:
             sp_result = run_job_subprocess(
@@ -264,6 +277,7 @@ class SubprocessJobRunner:
                 on_progress=on_progress,
                 cancel_flag=cancel_event,
                 model_out_path=model_out_path,
+                tune_state_out_path=tune_state_out_path,
             )
             # Load model back from subprocess so the widget side can
             # serve plots / inference.
@@ -272,6 +286,22 @@ class SubprocessJobRunner:
                     self._service.load_model_from_path(sp_result.model_path)
                 except Exception as load_err:  # noqa: BLE001
                     _log.warning("Model load from subprocess failed: %s", load_err)
+
+            # P-037 / #152: reattach tune state on the parent so post-tune
+            # plot requests resolve without crashing. ``restore_tune_state_from_path``
+            # never raises into the runner — corrupt/missing blobs degrade
+            # to "no plot, but tune summary still recorded" (INV-1).
+            if spec.job_type == "tune" and sp_result.tune_state_path:
+                try:
+                    self._service.restore_tune_state_from_path(
+                        sp_result.tune_state_path,
+                        config=spec.config,
+                    )
+                except Exception as restore_err:  # noqa: BLE001
+                    _log.warning(
+                        "Tune state restore from subprocess failed: %s",
+                        restore_err,
+                    )
 
             # P-035: subprocess tune does not populate parent-side
             # ``_last_tune_summary`` automatically; reconstruct it on the
@@ -295,3 +325,7 @@ class SubprocessJobRunner:
         finally:
             with contextlib.suppress(OSError):
                 shutil.rmtree(model_out_path, ignore_errors=True)
+            # INV-5: tune state file is removed after the parent has
+            # finished reading it (no-op if subprocess never wrote it).
+            with contextlib.suppress(OSError):
+                Path(tune_state_out_path).unlink(missing_ok=True)

@@ -237,6 +237,10 @@ class BackendAdapter(Protocol):
     def load_model(self, path: str) -> Any: ...
     def model_info(self, model: Any) -> dict[str, Any]: ...
 
+    # P-037: tune state cross-process persistence (subprocess → parent restore)
+    def export_tune_state(self, model: Any, path: str) -> None: ...
+    def restore_tune_state(self, model: Any, path: str) -> None: ...
+
     # P-013: best_params のカテゴリ分類
     def classify_best_params(
         self, params: dict[str, Any]
@@ -419,6 +423,31 @@ anywidget は traitlets への書き込みをスレッドセーフに処理す�
 **`is_libgomp_affected` の検知タイミング:** `__init__` 時点では lightgbm が未 import のため `/proc/self/maps` には libgomp が存在しない。`openmp_detect.is_libgomp_affected()` は呼び出し時に `import lightgbm` を best-effort で行ってから maps を読み、結果を module-level cache に格納する。これにより最初の Fit/Tune 直前に正しい判定が出る。
 
 **Retune の例外:** `SubprocessJobRunner` は study resume を伴う retune に未対応（`RetuneSubprocessUnsupportedError`）。retune のみ thread 戦略にフォールバックする運用は issue #128 で扱う。
+
+#### 3.7.2 Tune state IPC（P-037）
+
+Subprocess tune は親プロセスとモデルオブジェクトを共有できないため、tune 後に親側から `optimization-history` plot を描画するには tune state を IPC 越しに復元する必要がある（issue #152）。
+
+**ペイロード:** `BackendAdapter.export_tune_state(model, path)` が pickle 形式で `_tuning_result`（必須）と `_study`（best-effort、pickle 不可なら省略）を `path` に書き出す。`BackendAdapter.restore_tune_state(model, path)` が freshly-created model に注入する。**バックエンド固有の private slot 書き込みは adapter 内に閉じ込め**、Widget / Service / 共通型は知らない。
+
+**IPC フロー:**
+
+```
+subprocess: tune() → export_tune_state(model, tune_state_path) → result_msg["tune_state_path"]
+parent:     SubprocessJobRunner → service.restore_tune_state_from_path(path, ...)
+            → adapter.create_model(config, df) → adapter.restore_tune_state(model, path)
+            → service._model = model （is_model_fitted=False を維持）
+cleanup:    parent finally → unlink(tune_state_path)（INV-5）
+```
+
+**不変条件:**
+- INV-1: `tune_state_path` は `None` または親が読める path のいずれか。読込失敗は `plot_error` 降格、Widget は壊さない。
+- INV-2: `restore_tune_state` 後、`is_model_fitted(model) == False` を維持。
+- INV-3: `restore_tune_state` 後、`model._tuning_result is not None`、`available_plots` は `optimization-history` を含む。
+- INV-4: `export_tune_state` は `export_model` 試行より前に実施（export 失敗が tune state を巻き込まない）。
+- INV-5: tune state ファイルは subprocess 終了かつ親側読込完了後に必ず削除される。
+
+**Optuna study の扱い:** `_study` は InMemoryStorage の場合 pickleable、RDBStorage の場合は不可。`export_tune_state` は `pickle.dumps(model._study)` を try/except で best-effort 実行し、失敗時は study 抜き blob を出力する。復元された `_study` は #128 retune resume の前提となる。
 
 ---
 

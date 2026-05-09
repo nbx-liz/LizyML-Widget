@@ -56,6 +56,7 @@ def run_job(
     target: str,
     model_out_path: str | None,
     output: IO[bytes],
+    tune_state_out_path: str | None = None,
 ) -> None:
     """Execute a fit or tune job and write results to output.
 
@@ -138,23 +139,34 @@ def run_job(
                 "split_summary": adapter.split_summary(model),
                 "available_plots": adapter.available_plots(model),
                 "model_path": None,
+                "tune_state_path": None,
             }
         else:
             raise ValueError(f"Unknown job_type: {job_type}")
 
-        # Save model if path provided
-        if model_out_path:
+        # P-037 / #152: split model persistence by job type so tune-only
+        # runs no longer trigger ``model.export()`` (which raises
+        # MODEL_NOT_FIT and used to be silently swallowed).
+        import logging
+
+        _entry_log = logging.getLogger(__name__)
+
+        if job_type == "fit" and model_out_path:
             try:
                 import shutil
 
-                # Remove the temp dir so export() can create it fresh
                 shutil.rmtree(model_out_path, ignore_errors=True)
                 adapter.export_model(model, model_out_path)
                 result_msg["model_path"] = model_out_path
-            except Exception as save_err:
-                import logging
+            except Exception as save_err:  # noqa: BLE001 — best effort
+                _entry_log.warning("Model save failed in subprocess: %s", save_err)
 
-                logging.getLogger(__name__).warning("Model save failed in subprocess: %s", save_err)
+        if job_type == "tune" and tune_state_out_path:
+            try:
+                adapter.export_tune_state(model, tune_state_out_path)
+                result_msg["tune_state_path"] = tune_state_out_path
+            except Exception as save_err:  # noqa: BLE001 — best effort
+                _entry_log.warning("Tune state save failed in subprocess: %s", save_err)
 
         send_message(output, result_msg)
 
@@ -181,6 +193,7 @@ def main() -> None:
         df=df,
         target=input_data["target"],
         model_out_path=input_data.get("model_out_path"),
+        tune_state_out_path=input_data.get("tune_state_out_path"),
         output=sys.stdout.buffer,
     )
 
