@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tests
+- **E2E coverage for failed-status, cancel-mid-tune, and multiclass /
+  regression assertions** ([#133](https://github.com/nbx-liz/LizyML-Widget/issues/133)).
+  Un-skipped ``test_failed_status_shows_re_run_button`` (now backed by a
+  deterministic ``test_failed_state.ipynb`` fixture that drives the same
+  traitlet-write path the supervisor uses on real failures). Added
+  ``test_cancel_button_aborts_a_running_tune`` (200-trial tune via
+  ``test_long_tune.ipynb`` + Cancel button click; asserts the
+  CANCELLED transition and INV-F slot release). Strengthened
+  ``test_p030_compat`` assertions to pin PredTable row count, chip
+  count for smape/wape, and that at least one Plotly figure container
+  mounts on the Results tab.
+
 ### Changed
 - **Backend contract owns UI numeric defaults and step values (P-034)**
   ([#131](https://github.com/nbx-liz/LizyML-Widget/issues/131)).

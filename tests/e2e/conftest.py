@@ -178,3 +178,38 @@ def regression_smape_wape_page(jupyter_server: dict[str, str | int], page: Page)
         page,
         "test_regression_smape_wape.ipynb",
     )
+
+
+@pytest.fixture()
+def failed_state_page(jupyter_server: dict[str, str | int], page: Page) -> Page:
+    """#133 Phase 2.2: open a notebook that puts the widget into a failed state.
+
+    The notebook writes ``w.status = "failed"`` plus a synthetic ``w.error``
+    so the failed-state UI (error banner + Re-run button) renders without
+    depending on a brittle backend rejection. The supervisor takes the same
+    write path on real failures, so the surface under test is identical.
+    """
+    return _open_widget_notebook(
+        str(jupyter_server["url"]),
+        str(jupyter_server["token"]),
+        page,
+        "test_failed_state.ipynb",
+    )
+
+
+@pytest.fixture()
+def long_tune_page(jupyter_server: dict[str, str | int], page: Page) -> Page:
+    """#133 Phase 2.2: open a notebook that launches a 200-trial tune.
+
+    The first cell builds a widget and large search space. The second cell
+    calls ``w.tune()``; that call returns immediately because the widget
+    runs the tune on a background thread. The E2E test then clicks the
+    Cancel button mid-flight to exercise the running -> cancelled
+    transition (INV-D / INV-F).
+    """
+    return _open_widget_notebook(
+        str(jupyter_server["url"]),
+        str(jupyter_server["token"]),
+        page,
+        "test_long_tune.ipynb",
+    )

@@ -140,3 +140,46 @@ class TestTuneApplyRetuneFlow:
             ".lzw-boundary-expansion, .lzw-accordion__header:has-text('Boundary Expansion')"
         )
         assert boundary_panel.count() > 0, "Expected the Boundary Expansion panel after Re-tune"
+
+
+class TestCancelMidTune:
+    """#133 Phase 2.2: cancelling a tune mid-flight must transition to
+    failed (CANCELLED), release the job slot (INV-F), and re-enable the
+    Fit/Tune buttons.
+    """
+
+    def test_cancel_button_aborts_a_running_tune(self, long_tune_page: Page) -> None:
+        page = long_tune_page
+
+        # Cell #2 in the fixture notebook calls ``w.tune()`` which kicks
+        # off a 200-trial tune on a background thread. The widget should
+        # be in the running state shortly after.
+        page.locator(".lzw-tabs__btn", has_text="Results").click()
+        page.wait_for_timeout(500)
+
+        cancel_btn = page.locator("button", has_text="Cancel")
+        # Cancel button should appear within 30s of the tune kicking off.
+        cancel_btn.first.wait_for(state="visible", timeout=30_000)
+        cancel_btn.first.click()
+
+        # The status badge must transition to failed (the supervisor maps
+        # InterruptedError -> {code: CANCELLED, status: failed}).
+        page.wait_for_selector(".lzw-badge--error", timeout=30_000)
+        results_error = page.locator(".lzw-results-error")
+        expect(results_error.first).to_be_visible()
+        body = results_error.first.inner_text()
+        # CANCELLED is the explicit code the widget assigns on user cancel.
+        assert "CANCELLED" in body, f"Expected CANCELLED code; got: {body[:200]!r}"
+
+        # INV-F: slot released -> re-running Tune from the Model tab
+        # should be possible (the primary button is enabled again).
+        page.locator(".lzw-tabs__btn", has_text="Model").click()
+        page.wait_for_timeout(300)
+        # On the Model tab the Tune sub-tab carries the active spec;
+        # switch to it so the Tune primary button is rendered.
+        tune_subtab = page.locator(".lzw-subtabs__btn", has_text="Tune")
+        if tune_subtab.count() > 0:
+            tune_subtab.first.click()
+            page.wait_for_timeout(200)
+        primary = page.locator(".lzw-btn--primary").first
+        expect(primary).to_be_enabled()
