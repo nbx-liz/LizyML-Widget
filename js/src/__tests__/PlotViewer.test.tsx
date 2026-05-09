@@ -183,3 +183,34 @@ describe("PlotViewer — Plotly render paths", () => {
     expect(stub.newPlot).not.toHaveBeenCalled();
   });
 });
+
+// P-037 / #152 — error surface
+describe("PlotViewer — plot_error display (P-037)", () => {
+  it("renders the error message when errors[plotType] is set, instead of looping on 'Loading plot...'", () => {
+    render(
+      <PlotViewer
+        plotType="optimization-history"
+        plots={{}}
+        loading={{ "optimization-history": false }}
+        errors={{ "optimization-history": "No trained model" }}
+        onRequest={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Loading plot/i)).toBeNull();
+    expect(screen.getByText(/Plot unavailable|No trained model/i)).toBeDefined();
+  });
+
+  it("prefers the error message over the loading text when both are present (e.g., race during error)", () => {
+    render(
+      <PlotViewer
+        plotType="optimization-history"
+        plots={{}}
+        loading={{ "optimization-history": true }}
+        errors={{ "optimization-history": "boom" }}
+        onRequest={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Loading plot/i)).toBeNull();
+    expect(screen.getByText(/Plot unavailable|boom/i)).toBeDefined();
+  });
+});

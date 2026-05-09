@@ -411,6 +411,51 @@ class TestSubprocessJobWorker:
                     w._job_thread.join(timeout=5)
                 mock_load.assert_called_once_with("/tmp/model.txt")
 
+    def test_tune_state_path_loaded_into_service(self) -> None:
+        """P-037 / #152: when tune_state_path is returned, the runner calls
+        ``service.restore_tune_state_from_path`` so the parent owns a model
+        capable of rendering ``optimization-history``."""
+        mock_result = SubprocessJobResult(
+            job_type="tune",
+            fit_summary={},
+            tune_summary={
+                "best_params": {},
+                "best_score": 0.5,
+                "trials": [],
+                "metric_name": "auc",
+                "direction": "maximize",
+            },
+            eval_table=[],
+            split_summary=[],
+            available_plots=["optimization-history"],
+            model_path=None,
+            tune_state_path="/tmp/tune_state_xyz.pkl",
+        )
+
+        with (
+            _force_subprocess,
+            patch(
+                "lizyml_widget.widget.get_execution_strategy",
+                return_value=("subprocess", None),
+            ),
+            patch(
+                "lizyml_widget.job_runner.run_job_subprocess",
+                return_value=mock_result,
+            ),
+        ):
+            w = _make_widget()
+            df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+            w.load(df, target="y")
+
+            with patch.object(w._service, "restore_tune_state_from_path") as mock_restore:
+                w._run_job("tune")
+                if w._job_thread:
+                    w._job_thread.join(timeout=5)
+                mock_restore.assert_called_once()
+                # First positional arg is the path
+                call = mock_restore.call_args
+                assert call.args[0] == "/tmp/tune_state_xyz.pkl"
+
     def test_poll_handler_works_with_subprocess(self) -> None:
         """Colab polling handler reads traitlets updated by subprocess worker."""
         mock_result = SubprocessJobResult(
