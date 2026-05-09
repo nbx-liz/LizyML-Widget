@@ -1,17 +1,14 @@
-"""E2E tests for error UI rendering (#114 Phase B).
+"""E2E tests for error UI rendering (#114 Phase B / #133 Phase 2.2).
 
 Covers the failed-status surface that previously had no E2E coverage:
 the BACKEND_ERROR / INTERNAL_ERROR banner, traceback collapse, and
 Re-run button must render and be actionable when a job fails.
-
-We provoke a failure by setting an unsupported config (e.g. an objective
-incompatible with the data), then assert the error UI is visible.
 """
 
 from __future__ import annotations
 
 import pytest
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -80,17 +77,36 @@ class TestBackendErrorFlow:
             timeout=120_000,
         )
 
-    def test_failed_status_shows_re_run_button(self, widget_page: Page) -> None:  # noqa: ARG002
-        """If the widget enters a failed status, a Re-run button must appear."""
-        # Force a failed status via the widget Python API — set status
-        # directly via traitlet to simulate without requiring a real
-        # backend failure mode (which is brittle across lizyml versions).
-        # This validates the UI's failed-state rendering logic, which is
-        # the actual surface we want to lock in.
-        # We do this by sending a synthetic action through the JS layer
-        # is not possible — instead skip if we can't simulate cleanly.
-        pytest.skip(
-            "Failed-status simulation requires either a deterministic "
-            "backend error or a kernel-side traitlet write; tracked as a "
-            "follow-up to #114 Phase B"
+    def test_failed_status_shows_re_run_button(self, failed_state_page: Page) -> None:
+        """A failed status must render: error banner with code + message,
+        and a Re-run button that re-emits the original job action.
+
+        #133 Phase 2.2: previously skipped (required a deterministic
+        backend error). The fixture notebook ``test_failed_state.ipynb``
+        writes ``w.status = 'failed'`` directly via traitlet — this is
+        the same write path the supervisor uses on real failures, so
+        the rendered DOM under test matches production.
+        """
+        page = failed_state_page
+
+        # Switch to the Results tab where the failed-state UI renders.
+        page.locator(".lzw-tabs__btn", has_text="Results").click()
+        page.wait_for_timeout(300)
+
+        # Failed badge must be present.
+        failed_badge = page.locator(".lzw-badge--error")
+        expect(failed_badge.first).to_be_visible()
+
+        # Error code + message must be rendered.
+        results_error = page.locator(".lzw-results-error")
+        expect(results_error.first).to_be_visible()
+        body = results_error.first.inner_text()
+        assert "BACKEND_ERROR" in body, f"Expected error code in banner; got: {body[:200]!r}"
+        assert "Synthetic failure" in body, (
+            f"Expected fixture's error message in banner; got: {body[:200]!r}"
         )
+
+        # Re-run button must be rendered and enabled.
+        re_run = page.locator("button", has_text="Re-run")
+        expect(re_run.first).to_be_visible()
+        assert re_run.first.is_enabled(), "Re-run button must not be disabled in failed state"

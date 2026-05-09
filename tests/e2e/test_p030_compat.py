@@ -80,6 +80,23 @@ class TestMulticlassStringLabels:
                     label in table_text for label in ("setosa", "versicolor", "virginica")
                 ), f"Expected original string labels in PredTable; got: {table_text[:200]!r}"
 
+                # #133 Phase 2.2: pin the row count so a backend regression
+                # that drops rows fails loudly. iris has 150 rows; the
+                # widget paginates / truncates the rendered table, so we
+                # require at least 5 visible body rows.
+                body_rows = page.locator(".lzw-pred-table table tbody tr")
+                assert body_rows.count() >= 5, (
+                    f"Expected >= 5 body rows in PredTable; got {body_rows.count()}"
+                )
+
+        # #133 Phase 2.2: at least one Plotly figure container must mount
+        # on the Results tab so a regression that breaks the Plotly loader
+        # surfaces here instead of as silent missing-plot.
+        plot_container = page.locator(".lzw-plot-viewer__canvas")
+        assert plot_container.count() >= 1, (
+            "Expected at least one Plotly figure container on the Results tab"
+        )
+
 
 class TestRegressionSmapeWapeChips:
     """P-030: smape / wape regression metrics surface in the UI."""
@@ -112,6 +129,15 @@ class TestRegressionSmapeWapeChips:
         assert "smape" in body, "smape chip should be rendered for regression"
         assert "wape" in body, "wape chip should be rendered for regression"
 
+        # #133 Phase 2.2: pin the chip-group rendering surface so a
+        # SearchSpace regression that swallows the contract-driven chips
+        # fails loudly. The chip group sits inside the Search Space
+        # accordion body and must include at least the two P-030 metrics.
+        smape_chip = page.locator(".lzw-chip", has_text="smape")
+        wape_chip = page.locator(".lzw-chip", has_text="wape")
+        assert smape_chip.count() >= 1, "Expected a smape chip in Search Space"
+        assert wape_chip.count() >= 1, "Expected a wape chip in Search Space"
+
     def test_learning_curve_metric_switcher_includes_smape(
         self, regression_smape_wape_page: Page
     ) -> None:
@@ -137,3 +163,12 @@ class TestRegressionSmapeWapeChips:
         # that the textual label appears anywhere on the Results tab.
         body = page.locator(".lzw-app").inner_text()
         assert "smape" in body, "smape should appear as a learning-curve switcher chip on Results"
+
+        # #133 Phase 2.2: at least one Plotly figure container must mount
+        # on the Results tab so a regression that breaks the loader is
+        # caught here. The container is rendered by PlotViewer regardless
+        # of whether Plotly itself has finished loading the CDN bundle.
+        plot_container = page.locator(".lzw-plot-viewer__canvas")
+        assert plot_container.count() >= 1, (
+            "Expected at least one Plotly figure container on the Results tab"
+        )
