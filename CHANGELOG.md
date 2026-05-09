@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **CI: `libgomp-perf` job runs a parameterised libgomp perf regression
+  grid on every PR** (P-039 Phase 1, [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160)).
+  The libgomp pool-affinity / "CPU core usage decreases" regression has
+  reoccurred four times in this codebase
+  ([#147](https://github.com/nbx-liz/LizyML-Widget/issues/147) /
+  [#154](https://github.com/nbx-liz/LizyML-Widget/issues/154) /
+  [#156](https://github.com/nbx-liz/LizyML-Widget/issues/156) /
+  [#158](https://github.com/nbx-liz/LizyML-Widget/issues/158)). Each
+  prior fix only pinned the *specific* path observed — a future code
+  change could silently re-introduce the same class of 10-50x slowdown
+  via a new ML call site. P-039 Phase 1 closes that gap by adding a
+  dedicated CI job that runs ``tests/regression/test_reg_160_libgomp_perf_grid.py``
+  on ``ubuntu-latest`` (libgomp by default). The grid covers the
+  cross-product ``{intermediate parent-thread op ∈ noop /
+  main_thread_predict / main_thread_fit_predict}`` × ``{next ML op ∈
+  retune / fit}`` and asserts INV-#160-A: per-unit wall-clock of every
+  cell stays within 1.5x of an op-matched clean baseline. The grid uses
+  small datasets (5k × 20, 2 trials) so the job fits the CI budget;
+  catastrophe is not dataset-size dependent so the 1.5x bound retains
+  its expressiveness on small data. Phases 2-4 (runtime INV-G guard,
+  ``BackendExecutor`` funnel, change-gate codification) are tracked
+  under [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160) and
+  ship in follow-up PRs.
+
 ## [0.9.0] - 2026-05-09
 
 ### Fixed
