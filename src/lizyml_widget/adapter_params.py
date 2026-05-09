@@ -50,6 +50,9 @@ MODEL_METRIC_TO_EVAL: Mapping[str, str] = _types.MappingProxyType(
         "rmse": "rmse",
         "r2": "r2",
         "rmsle": "rmsle",
+        # P-030: zero-tolerant percentage-style metrics added in lizyml 0.11.
+        "smape": "smape",
+        "wape": "wape",
         # Regression native metrics without LizyML eval equivalent — map to
         # nearest eval metric for tune direction resolution (all minimize)
         "fair": "mae",
@@ -197,10 +200,11 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
                 task: _sort_with_preferred(list(ms), task) for task, ms in _TASK_METRICS.items()
             }
         except (ImportError, AttributeError, TypeError):
-            # Fallback for older LizyML versions without _TASK_METRICS
+            # Fallback for older LizyML versions without _TASK_METRICS.
+            # P-030: smape / wape were added in lizyml 0.11.
             metrics = {
                 "regression": _sort_with_preferred(
-                    ["mae", "mape", "rmse", "huber", "r2", "rmsle"], "regression"
+                    ["mae", "mape", "rmse", "huber", "r2", "rmsle", "smape", "wape"], "regression"
                 ),
                 "binary": _sort_with_preferred(
                     [

@@ -224,3 +224,318 @@ describe("DynForm — $ref resolution", () => {
     expect(select.value).toBe("fast");
   });
 });
+
+describe("DynForm — array with enum (checkbox group)", () => {
+  it("renders one checkbox per enum option, selected matches value", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        metrics: {
+          title: "Metrics",
+          type: "array",
+          items: { type: "string", enum: ["auc", "loss", "f1"] },
+        },
+      },
+    };
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ metrics: ["auc", "f1"] }}
+        onChange={vi.fn()}
+      />,
+    );
+    const checks = container.querySelectorAll(
+      ".lzw-checkbox-group input[type='checkbox']",
+    );
+    expect(checks.length).toBe(3);
+    expect((checks[0] as HTMLInputElement).checked).toBe(true);   // auc
+    expect((checks[1] as HTMLInputElement).checked).toBe(false);  // loss
+    expect((checks[2] as HTMLInputElement).checked).toBe(true);   // f1
+  });
+
+  it("adds an enum entry when an unchecked checkbox is clicked", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        metrics: {
+          title: "Metrics",
+          type: "array",
+          items: { type: "string", enum: ["auc", "loss"] },
+        },
+      },
+    };
+    const onChange = vi.fn();
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ metrics: ["auc"] }}
+        onChange={onChange}
+      />,
+    );
+    const checks = container.querySelectorAll(
+      ".lzw-checkbox-group input[type='checkbox']",
+    );
+    fireEvent.click(checks[1]); // loss
+    expect(onChange).toHaveBeenCalledWith({ metrics: ["auc", "loss"] });
+  });
+
+  it("removes an enum entry when a checked checkbox is clicked", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        metrics: {
+          title: "Metrics",
+          type: "array",
+          items: { type: "string", enum: ["auc", "loss"] },
+        },
+      },
+    };
+    const onChange = vi.fn();
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ metrics: ["auc", "loss"] }}
+        onChange={onChange}
+      />,
+    );
+    const checks = container.querySelectorAll(
+      ".lzw-checkbox-group input[type='checkbox']",
+    );
+    fireEvent.click(checks[0]); // uncheck auc
+    expect(onChange).toHaveBeenCalledWith({ metrics: ["loss"] });
+  });
+});
+
+describe("DynForm — array without enum (TagInput)", () => {
+  it("renders existing tags and a placeholder when empty", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        tags: { title: "Tags", type: "array", items: { type: "string" } },
+      },
+    };
+    const { container } = render(
+      <DynForm schema={schema} value={{ tags: ["a", "b"] }} onChange={vi.fn()} />,
+    );
+    const tags = container.querySelectorAll(".lzw-tag");
+    expect(tags.length).toBe(2);
+    expect((tags[0] as HTMLElement).textContent).toContain("a");
+  });
+
+  it("commits a new tag on Enter and clears the input", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        tags: { title: "Tags", type: "array", items: { type: "string" } },
+      },
+    };
+    const onChange = vi.fn();
+    const { container } = render(
+      <DynForm schema={schema} value={{ tags: ["a"] }} onChange={onChange} />,
+    );
+    const input = container.querySelector(
+      ".lzw-tag-input__field",
+    ) as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "newTag" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith({ tags: ["a", "newTag"] });
+  });
+
+  it("removes a tag when its × button is clicked", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        tags: { title: "Tags", type: "array", items: { type: "string" } },
+      },
+    };
+    const onChange = vi.fn();
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ tags: ["a", "b"] }}
+        onChange={onChange}
+      />,
+    );
+    const removes = container.querySelectorAll(".lzw-tag__remove");
+    fireEvent.click(removes[0]);
+    expect(onChange).toHaveBeenCalledWith({ tags: ["b"] });
+  });
+
+  it("removes the last tag on Backspace when input is empty", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        tags: { title: "Tags", type: "array", items: { type: "string" } },
+      },
+    };
+    const onChange = vi.fn();
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ tags: ["a", "b"] }}
+        onChange={onChange}
+      />,
+    );
+    const input = container.querySelector(
+      ".lzw-tag-input__field",
+    ) as HTMLInputElement;
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(onChange).toHaveBeenCalledWith({ tags: ["a"] });
+  });
+});
+
+describe("DynForm — additionalProperties (KVEditor)", () => {
+  it("renders one row per existing key/value pair", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        params: {
+          title: "Params",
+          type: "object",
+          additionalProperties: true,
+        },
+      },
+    };
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ params: { lr: 0.01, max_depth: 6 } }}
+        onChange={vi.fn()}
+      />,
+    );
+    const rows = container.querySelectorAll(".lzw-kv-editor__row");
+    expect(rows.length).toBe(2);
+  });
+
+  it("appends a new empty row when + Add is clicked", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        params: {
+          title: "Params",
+          type: "object",
+          additionalProperties: true,
+        },
+      },
+    };
+    const onChange = vi.fn();
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ params: { lr: 0.01 } }}
+        onChange={onChange}
+      />,
+    );
+    const addBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("+ Add"),
+    ) as HTMLButtonElement;
+    fireEvent.click(addBtn);
+    expect(onChange).toHaveBeenCalledWith({ params: { lr: 0.01, "": "" } });
+  });
+
+  it("parses numeric strings via JSON when value changes", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        params: {
+          title: "Params",
+          type: "object",
+          additionalProperties: true,
+        },
+      },
+    };
+    const onChange = vi.fn();
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ params: { lr: 0.01 } }}
+        onChange={onChange}
+      />,
+    );
+    const inputs = container.querySelectorAll(
+      ".lzw-kv-editor__row .lzw-input--sm",
+    );
+    // second input is the value field
+    fireEvent.change(inputs[1], { target: { value: "0.05" } });
+    expect(onChange).toHaveBeenCalledWith({ params: { lr: 0.05 } });
+  });
+
+  it("removes a row when × is clicked", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        params: {
+          title: "Params",
+          type: "object",
+          additionalProperties: true,
+        },
+      },
+    };
+    const onChange = vi.fn();
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ params: { a: 1, b: 2 } }}
+        onChange={onChange}
+      />,
+    );
+    const removes = container.querySelectorAll(".lzw-tag__remove");
+    fireEvent.click(removes[0]);
+    expect(onChange).toHaveBeenCalledWith({ params: { b: 2 } });
+  });
+});
+
+describe("DynForm — nested object onChange", () => {
+  it("propagates nested edits up to the top-level onChange", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        settings: {
+          title: "Settings",
+          type: "object",
+          properties: {
+            verbose: { title: "Verbose", type: "boolean" },
+            level: { title: "Level", type: "integer" },
+          },
+        },
+      },
+    };
+    const onChange = vi.fn();
+    const { container } = render(
+      <DynForm
+        schema={schema}
+        value={{ settings: { verbose: false, level: 1 } }}
+        onChange={onChange}
+      />,
+    );
+    const checkbox = container.querySelector(
+      'input[type="checkbox"]',
+    ) as HTMLInputElement;
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith({
+      settings: { verbose: true, level: 1 },
+    });
+  });
+});
+
+describe("DynForm — anyOf with null (Pydantic Optional)", () => {
+  it("unwraps anyOf:[non-null, null] and renders the non-null variant", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        seed: {
+          title: "Seed",
+          anyOf: [{ type: "integer" }, { type: "null" }],
+        },
+      },
+    };
+    const { container } = render(
+      <DynForm schema={schema} value={{ seed: 42 }} onChange={vi.fn()} />,
+    );
+    const input = container.querySelector(
+      'input[type="number"]',
+    ) as HTMLInputElement;
+    expect(input).not.toBeNull();
+    expect(input.value).toBe("42");
+  });
+});

@@ -277,11 +277,10 @@ class TestBug2DualSnapshot:
                 },
                 "training": {"seed": 42, "early_stopping": {"rounds": 100}},
             }
+            _seed_tune_summary(service, run_snapshot, ui_snapshot=ui_config)
             result = service.apply_best_params(
                 {"learning_rate": 0.05},
                 ui_config,
-                tune_snapshot=run_snapshot,
-                tune_ui_snapshot=ui_config,
             )
             model = result.get("model", {})
             assert model.get("auto_num_leaves") is True
@@ -307,11 +306,10 @@ class TestBug2DualSnapshot:
                 "model": {"name": "lgbm", "params": {"learning_rate": 0.001}},
                 "training": {"seed": 42, "early_stopping": {"rounds": 100}},
             }
+            _seed_tune_summary(service, run_snapshot, ui_snapshot=ui_config)
             result = service.apply_best_params(
                 {"learning_rate": 0.05},
                 ui_config,
-                tune_snapshot=run_snapshot,
-                tune_ui_snapshot=ui_config,
             )
             assert result.get("calibration") == {"method": "platt"}
 
@@ -410,11 +408,10 @@ class TestBug7TuneApplyFitConfigIdentity:
             }
 
             # Step 3: Apply best params (as Widget does)
+            _seed_tune_summary(service, tune_config, ui_snapshot=user_config)
             applied_config = service.apply_best_params(
                 best_params,
                 user_config,
-                tune_snapshot=tune_config,
-                tune_ui_snapshot=user_config,
             )
 
             # Step 4: Prepare fit config from applied result
@@ -532,11 +529,10 @@ class TestBug9InnerValidPathPreserved:
                     },
                 },
             }
+            _seed_tune_summary(service, tune_snapshot, ui_snapshot=user_config)
             result = service.apply_best_params(
                 {"validation_ratio": 0.25, "early_stopping_rounds": 80},
                 user_config,
-                tune_snapshot=tune_snapshot,
-                tune_ui_snapshot=user_config,
             )
             es = result.get("training", {}).get("early_stopping", {})
             iv = es.get("inner_valid")
@@ -553,3 +549,31 @@ class TestBug9InnerValidPathPreserved:
 def _make_service(adapter: LizyMLAdapter) -> WidgetService:
     """Create a WidgetService with the given adapter for testing."""
     return WidgetService(adapter=adapter)
+
+
+def _seed_tune_summary(
+    service: WidgetService,
+    config_snapshot: dict[str, Any],
+    *,
+    ui_snapshot: dict[str, Any] | None = None,
+) -> None:
+    """Inject a TuningSummary into the service to simulate a prior tune.
+
+    P-035: ``apply_best_params`` reads snapshots from
+    ``service._last_tune_summary`` instead of explicit kwargs. Tests that
+    exercise the snapshot path therefore seed the summary directly.
+    """
+    import copy as _copy
+
+    from lizyml_widget.types import TuningSummary
+
+    service._last_tune_summary = TuningSummary(
+        best_params={},
+        best_score=0.0,
+        trials=[],
+        metric_name="auc",
+        direction="maximize",
+        config_snapshot=_copy.deepcopy(config_snapshot),
+        ui_snapshot=_copy.deepcopy(ui_snapshot or {}),
+    )
+    service._tune_summary_invalidated_by_load = False

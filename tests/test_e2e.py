@@ -195,8 +195,14 @@ class TestErrorFlows:
 class TestTuneOnlyE2E:
     """P-004: Tune-only execution tests (R3/R4)."""
 
-    def test_tune_succeeds_when_evaluate_table_raises(self) -> None:
-        """R3: Tune should complete even if evaluate_table raises (MODEL_NOT_FIT)."""
+    def test_tune_succeeds_when_evaluate_table_returns_empty(self) -> None:
+        """R3 / #147 / P-036: Tune should complete when the adapter
+        returns ``[]`` from evaluate_table on an unfit model. Previously
+        the runner tolerated a propagated ``RuntimeError`` here; the
+        guard has been pushed into ``LizyMLAdapter.evaluate_table`` (uses
+        :func:`adapter_results.is_model_fitted`) so the widget tier no
+        longer needs exception-based control flow.
+        """
         w, adapter = _make_widget_with_adapter()
         df = _sample_df()
 
@@ -209,7 +215,8 @@ class TestTuneOnlyE2E:
             metric_name="auc",
             direction="maximize",
         )
-        adapter.evaluate_table.side_effect = RuntimeError("Model has not been fitted")
+        adapter.evaluate_table.return_value = []
+        adapter.split_summary.return_value = []
         adapter.available_plots.return_value = ["optimization-history"]
 
         w.load(df, target="y")
@@ -220,7 +227,7 @@ class TestTuneOnlyE2E:
 
         assert w.status == "completed"
         assert w.tune_summary["best_score"] == 0.92
-        # fit_summary should remain empty since evaluate_table failed
+        # fit_summary should remain empty since evaluate_table returned [].
         assert w.fit_summary == {} or w.fit_summary.get("metrics") is None
 
     def test_tune_with_empty_space_completes(self) -> None:

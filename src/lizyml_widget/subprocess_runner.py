@@ -35,6 +35,11 @@ class SubprocessJobResult:
     split_summary: list[dict[str, Any]]
     available_plots: list[str]
     model_path: str | None
+    # P-037 / #152: tune-only path persists ``_tuning_result`` (and best-effort
+    # ``_study``) to a pickle file. Parent reattaches it via
+    # ``service.restore_tune_state_from_path``. ``None`` when the run did not
+    # produce tune state (fit job, or pre-P-037 child binary).
+    tune_state_path: str | None = None
 
 
 def _read_exact(stream: Any, n: int) -> bytes:
@@ -80,8 +85,16 @@ def run_job_subprocess(
     on_progress: Callable[..., None] | None,
     cancel_flag: threading.Event,
     model_out_path: str | None = None,
+    tune_state_out_path: str | None = None,
+    retune_kwargs: dict[str, Any] | None = None,
+    tune_state_in_path: str | None = None,
 ) -> SubprocessJobResult:
     """Spawn subprocess and run training job.
+
+    P-038: ``retune_kwargs`` and ``tune_state_in_path`` extend the input
+    contract to support subprocess retune resume. When ``retune_kwargs``
+    is non-None, the subprocess restores tune state from
+    ``tune_state_in_path`` and invokes ``adapter.tune(resume=True, ...)``.
 
     Raises InterruptedError on cancellation, RuntimeError on failure.
     """
@@ -93,6 +106,9 @@ def run_job_subprocess(
             "df_bytes": pickle.dumps(df, protocol=pickle.HIGHEST_PROTOCOL),
             "target": target,
             "model_out_path": model_out_path,
+            "tune_state_out_path": tune_state_out_path,
+            "retune_kwargs": retune_kwargs,
+            "tune_state_in_path": tune_state_in_path,
         },
         protocol=pickle.HIGHEST_PROTOCOL,
     )
@@ -208,4 +224,5 @@ def run_job_subprocess(
         split_summary=result_data.get("split_summary", []),
         available_plots=result_data.get("available_plots", []),
         model_path=result_data.get("model_path"),
+        tune_state_path=result_data.get("tune_state_path"),
     )

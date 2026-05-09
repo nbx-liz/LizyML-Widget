@@ -95,7 +95,7 @@ Widget は LizyML の型・契約（`BackendAdapter` Protocol, `TuningResult`, `
 | レイヤー | 場所 | 責務 | 禁止事項 |
 |---------|------|------|---------|
 | **UI** | `js/src/` | `backend_contract` / `config` / `df_info` を描画し、ユーザー操作を `action` に変換する。ローカル状態は表示都合（例: Search Space の Mode）に限定する | ML ロジック・Python 直接呼び出し・backend 固有 option set / parameter catalog / step 値のハードコード・full config dict の合成 |
-| **Widget** | `src/lizyml_widget/widget.py` | traitlets 定義・Action 処理・スレッド管理・`msg:custom` 中継 | ML ロジック直接記述、Service の private 状態参照、backend 固有 config 意味論の保持 |
+| **Widget** | `src/lizyml_widget/widget.py` | traitlets 定義・Action 処理・スレッド管理・`msg:custom` 中継 | ML ロジック直接記述、Service の private 状態参照、backend 固有 config 意味論の保持、ジョブ実行時の時系列スナップショット保持（P-035 で `_tune_*_snapshot` を Service の `_last_tune_summary` へ移管済み）|
 | **Service** | `src/lizyml_widget/service.py` | Data タブ由来 state（target / task / columns / CV）の管理、実行前提判定、Adapter 呼び出し調整、canonical config と Data 系 state の結合 | バックエンド固有の default / option set / search space catalog / step 定数の保持 |
 | **Adapter** | `src/lizyml_widget/adapter.py` | Backend Contract 提供、backend 固有 config default / patch 適用 / 実行前準備、バックエンドライブラリ呼び出し、共通型への変換 | Widget / traitlets の知識 |
 
@@ -150,6 +150,9 @@ class TuningSummary:
     # ── P-027: re-tune monitoring（lizyml>=0.9.0 必須） ──
     rounds: list[dict[str, Any]]  # per-round summary (round, n_trials, best_score_before/after, expanded_dims)
     boundary_report: dict[str, Any] | None  # BoundaryReport のシリアライズ、無ければ None
+    # ── P-035: post-tune snapshots（apply_best_params の入力源） ──
+    config_snapshot: dict[str, Any]  # canonical run config（Service が prepare_run_config 後に詰める）
+    ui_snapshot: dict[str, Any]      # widget config traitlet のスナップショット（calibration 等の復元用）
 
 @dataclass
 class PredictionSummary:
@@ -233,6 +236,10 @@ class BackendAdapter(Protocol):
     def export_model(self, model: Any, path: str) -> str: ...
     def load_model(self, path: str) -> Any: ...
     def model_info(self, model: Any) -> dict[str, Any]: ...
+
+    # P-037: tune state cross-process persistence (subprocess → parent restore)
+    def export_tune_state(self, model: Any, path: str) -> None: ...
+    def restore_tune_state(self, model: Any, path: str) -> None: ...
 
     # P-013: best_params のカテゴリ分類
     def classify_best_params(
@@ -400,6 +407,77 @@ def _run_fit(self):
 anywidget は traitlets への書き込みをスレッドセーフに処理するため、バックグラウンドスレッドからの更新が安全に JS へ伝播する。
 
 **キャンセルポーリング:** Fit・Tune の両方で `_run_with_cancel_polling` パターンを使用する。バックエンド呼び出しをデーモンスレッドで実行し、メインワーカースレッドがキャンセルフラグをポーリングする。これにより、ブロッキングなバックエンド呼び出し中でもキャンセルが即座に反映される。
+
+#### 3.7.1 実行戦略の選択（P-020 / P-036）
+
+`LizyWidget._run_job` は最初のジョブ実行時に `openmp_detect.get_execution_strategy()` を呼び出し、戦略を `("thread", None)` または `("subprocess", libomp_path)` のいずれかに固定する。判定は同一プロセス内で 1 度だけ行われ、以降のジョブは同じ戦略で実行される。
+
+| 環境 | デフォルト戦略 | 理由 |
+| --- | --- | --- |
+| Linux + libgomp | `subprocess` | GCC libgomp の OpenMP プール親和性バグ（#108494）により、worker thread 上の Fit が main thread の 30 倍遅くなり、Tune は trial 数倍に積算される（issue #147）。subprocess 経路では libgomp 状態が初期化され、`LD_PRELOAD=libomp` が利用可能なら 1.5x 程度に抑えられる。 |
+| Linux + libomp | `thread` | libomp はプール親和性バグの影響を受けない |
+| macOS / Windows | `thread` | libgomp ではないため影響なし |
+
+**Opt-out:** `LZW_FORCE_THREAD=1` 環境変数を設定すると、`get_execution_strategy()` の戻り値に依らず常に `thread` 戦略が選択される。Subprocess 起動オーバーヘッド（~500ms）が小さな Fit のレスポンスを支配するケース、または Notebook 内デバッグで in-process の状態を観察したいケースで使用する。`LZW_FORCE_SUBPROCESS=1` は P-020 当時の opt-in ゲートだったが、P-036 でデフォルトが反転したため現在は無視される（後方互換）。
+
+**`is_libgomp_affected` の検知タイミング:** `__init__` 時点では lightgbm が未 import のため `/proc/self/maps` には libgomp が存在しない。`openmp_detect.is_libgomp_affected()` は呼び出し時に `import lightgbm` を best-effort で行ってから maps を読み、結果を module-level cache に格納する。これにより最初の Fit/Tune 直前に正しい判定が出る。
+
+**Retune（P-038, #156 / #128）:** `SubprocessJobRunner` は P-037 の tune state IPC を **input 方向にも拡張**することで study resume に対応した。retune は初回 tune と同じ実行戦略（subprocess）で動作し、parent main thread における libgomp parallel region の発生有無に依らず性能が安定する。`RetuneSubprocessUnsupportedError` および `widget._run_job` の thread fallback は P-038 で削除済み。詳細は §3.7.2。
+
+#### 3.7.2 Tune state IPC（P-037 + P-038）
+
+Subprocess tune / retune は親プロセスとモデルオブジェクトを共有できないため、tune state を IPC 越しに**双方向**で受け渡す必要がある（issue #152 / #156）。
+
+**ペイロード（双方向同型）:** `BackendAdapter.export_tune_state(model, path)` が pickle 形式で 6 keys を `path` に書き出し、`BackendAdapter.restore_tune_state(model, path)` が freshly-created model に注入する。**バックエンド固有の private slot 書き込みは adapter 内に閉じ込め**、Widget / Service / 共通型は知らない。
+
+| Key | 用途 | Phase | Mandatory |
+| --- | --- | --- | --- |
+| `tuning_result` | `optimization-history` plot 描画、apply_best_params | P-037 | 必須 |
+| `study` | retune resume（Optuna study 継続） | P-037 | best-effort（RDB-backed なら省略可） |
+| `round_number` | round 連番 | P-038 | 必須（retune resume） |
+| `rounds` | RoundSummary 累積（boundary expansion 履歴を含む） | P-038 | 必須（retune resume） |
+| `space` | 直前 round の search space | P-038 | 必須（retune resume） |
+| `used_default_space` | デフォルト space 使用フラグ（expand_boundary の挙動分岐） | P-038 | 必須（retune resume） |
+
+P-037-only blob（旧 2-key 形式）は P-038 adapter で**前方互換**：`restore_tune_state` は `key in blob` ガードで欠落 key を許容し、plot 描画路は引き続き機能する（retune は当然不可）。
+
+**IPC フロー（output direction — P-037, tune-only）:**
+
+```
+subprocess: tune() → export_tune_state(model, tune_state_out_path)
+            → result_msg["tune_state_path"]
+parent:     SubprocessJobRunner → service.restore_tune_state_from_path(path, ...)
+            → adapter.create_model(config, df) → adapter.restore_tune_state(model, path)
+            → service._model = service._tune_model = model （is_model_fitted=False）
+cleanup:    parent finally → unlink(tune_state_out_path)（INV-5）
+```
+
+**IPC フロー（input direction — P-038, retune-only）:**
+
+```
+parent:     SubprocessJobRunner.run（retune_kwargs is not None）
+            → tempfile.NamedTemporaryFile(prefix="lzw_tune_state_in_") → tune_state_in_path
+            → service.export_tune_state_to_path(tune_state_in_path)
+              （_tune_model is None なら ValueError、subprocess 起動前に早期失敗）
+            → run_job_subprocess(retune_kwargs=..., tune_state_in_path=...)
+subprocess: read_input → adapter.create_model(config, df)
+            → adapter.restore_tune_state(model, tune_state_in_path)
+            → adapter.tune(model, resume=True, n_trials=..., ...) （cumulative rounds 構築）
+            → adapter.export_tune_state(model, tune_state_out_path)
+            → result_msg["tune_state_path"]  ※ output 経路（上記）と合流
+cleanup:    parent finally → unlink(tune_state_in_path)（INV-3', success / error / cancel すべてで実行）
+```
+
+**不変条件:**
+- INV-1: `tune_state_path`（output）は `None` または親が読める path のいずれか。読込失敗は `plot_error` 降格、Widget は壊さない。
+- INV-2: `restore_tune_state` 後、`is_model_fitted(model) == False` を維持。
+- INV-3: `restore_tune_state` 後、`model._tuning_result is not None`、`available_plots` は `optimization-history` を含む。
+- INV-3' (P-038): `tune_state_in_path` は `SubprocessJobRunner.run` の `finally` 句で必ず削除される（success / error / cancel すべて）。
+- INV-4: `export_tune_state` は `export_model` 試行より前に実施（export 失敗が tune state を巻き込まない）。
+- INV-5: tune state ファイル（input / output 両方）は subprocess 終了かつ親側読込完了後に必ず削除される。
+- INV-6 (P-038): subprocess retune の round 累積は `service._tune_model._tuning_result.rounds` に反映され、`len(rounds) == initial_rounds + retune_calls`（slow regression test `INV-#156-J` で pin）。
+
+**Optuna study の扱い:** `_study` は InMemoryStorage の場合 pickleable、RDBStorage の場合は不可。`export_tune_state` は `pickle.dumps(model._study)` を try/except で best-effort 実行し、失敗時は study 抜き blob を出力する。study 抜き blob を P-038 retune resume に渡すと lizyml が「resume 不能（_study が None）」エラーを上げる — RDB-backed storage を使う運用は #129（P-031）で UI 露出する予定。
 
 ---
 
@@ -794,6 +872,19 @@ Model タブは Fit サブタブと Tune サブタブで構成する（実装コ
 | Lambda L2 | `model.params.lambda_l2` | `0.0001` |
 | Early Stopping Rounds | `training.early_stopping.rounds` | `50` |
 | Validation Ratio | `training.early_stopping.validation_ratio` | `0.05` |
+| Feature Weights | `model.feature_weights[col]` | `0.1` | P-034 — Search Space / Feature Weights エディタの数値増減幅 |
+| Boundary Threshold | `RetuneControls.boundary_threshold` | `0.01` | P-034 — Re-tune の boundary expansion 閾値 step |
+
+`backend_contract.ui_schema.defaults` には JS UI の `??` フォールバックを廃止するための数値 default を保持する（P-034）:
+
+| グループ | キー | 初期値 | 用途 |
+|---------|------|--------|------|
+| `defaults.cv` | `n_splits` | `5` | KFold 系の初期 fold 数 |
+| `defaults.cv` | `random_state` | `42` | shuffle / split の seed |
+| `defaults.cv` | `gap` / `purge_gap` / `embargo` | `0` | TimeSeries 系の初期境界 |
+| `defaults.tune` | `n_trials` | `10` | Tune の初期試行回数 |
+| `defaults.metric_params` | `precision_at_k_k` | `10` | `precision_at_k` メトリクスの k 値 |
+| `defaults.calibration` | `{method: "isotonic", params: {}}` | — | Calibration セクションの初期値 |
 
 #### Fit サブタブ要件（初期 backend contract 例: LightGBM）
 
@@ -1317,6 +1408,38 @@ UI は Search Space の `mode=Fixed/Range/Choice` のような表示用 state �
 | `type` が有効値以外 | `invalid_space_type` | `{"type": "range", "low": 0.01, "high": 0.1}` |
 
 有効な `type` 値: `"float"`, `"int"`, `"categorical"`
+
+---
+
+### 6.4 状態機械不変条件 (INV-A..F)
+
+並行性 / 状態機械 / リソース所有権を扱うコードに対して、`~/.claude/rules/common/invariants-first.md`
+に従い不変条件を宣言する。各 INV は `tests/test_invariants.py` に対応する RED-then-GREEN テストを持ち、
+runtime assert / breadcrumb log として `_supervise` / `_run_job` に encode される（P-033 / [#118](https://github.com/nbx-liz/LizyML-Widget/issues/118)）。
+
+| ID | 不変条件 | 違反シナリオ |
+|---|---|---|
+| **INV-A** | `status` 遷移は `idle → data_loaded → running → {completed | failed} → running → ...` の有限状態機械に従う。 | `idle → completed` 等の不正遷移が発生する。 |
+| **INV-B** | `_job_thread` は同時に最大 1 個のライブワーカーのみを保持する。 | `status == "running"` 中の `_run_job` 再呼び出しで `_job_counter` が増える、または 2 本目のスレッドが起動する。 |
+| **INV-C** | `WidgetService._tune_model` は最直近の `tune` 呼び出しが所有する。 | `tune` → `fit` → `retune` の中間 fit が `_tune_model` を破壊して resume が新規 study になる（P-028 で導入された専用スロットを失う）。 |
+| **INV-D** | `_cancel_flag` は各ジョブ開始時に `clear()` され、ジョブ終了まで Widget 側からは書き込まれない。Cancel は `failed` (`error.code == "CANCELLED"`) へ遷移する。 | 前回ジョブの cancel フラグが残ったまま新規ジョブが起動して、即座に `CANCELLED` で落ちる。 |
+| **INV-E** | `progress.round` は単一の tune 呼び出し（resume 含む）内で単調非減少。 | round が降順になる、または同一ラウンドで `round` 値が +1 ずれる（P-029 オフバイワンの再発）。 |
+| **INV-F** | `tune_summary.boundary_report.dims` は各 search space 次元を過不足なく一度ずつ列挙する。ラウンド差分ではなく累積スナップショット。 | dims が重複する、または search space に存在する次元が dims に欠ける。 |
+
+**運用ルール**: `_supervise` / `_run_job` / `_tune_model` / `_cancel_flag` / `status` / `progress` /
+`boundary_report` を変更する PR は body に以下を含める。
+
+```markdown
+## Invariants
+- INV-X: ... (touched? new?)
+- INV-Y: ...
+
+## Failure Paths Covered
+- [x] Normal completion
+- [x] Cancellation
+- [x] Exception
+- [x] Abnormal exit / crash
+```
 
 ---
 

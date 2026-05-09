@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import importlib.resources
 import logging
 import os
-import re
 import statistics
 import threading
 import time
@@ -18,10 +16,16 @@ import pandas as pd
 import traitlets
 
 from .adapter import BackendAdapter, LizyMLAdapter
+from .job_runner import (
+    JobResult,
+    JobRunner,
+    JobSpec,
+    SubprocessJobRunner,
+    ThreadJobRunner,
+)
 from .openmp_detect import get_execution_strategy
 from .service import WidgetService
-from .subprocess_runner import run_job_subprocess
-from .types import ConfigPatchOp, FitSummary, PredictionSummary, TuningSummary
+from .types import FitSummary, PredictionSummary, TuningSummary
 
 _log = logging.getLogger(__name__)
 
@@ -100,8 +104,16 @@ class LizyWidget(anywidget.AnyWidget):
         self._job_lock = threading.Lock()
         self._job_counter = 0
         self._inference_df: pd.DataFrame | None = None
-        self._tune_config_snapshot: dict[str, Any] | None = None
-        self._tune_ui_snapshot: dict[str, Any] | None = None
+        # P-035: tune snapshots now live on TuningSummary inside
+        # WidgetService, not on the widget. Removed _tune_config_snapshot
+        # and _tune_ui_snapshot.
+        # #127: action handlers extracted to widget_actions.WidgetActionDispatcher.
+        # The dispatcher holds a back-reference to this widget and reads/writes
+        # traitlets through it; widget owns the state machine, dispatcher owns
+        # the routing.
+        from .widget_actions import WidgetActionDispatcher
+
+        self._dispatcher = WidgetActionDispatcher(self)
 
         try:
             info = self._service.info
@@ -293,8 +305,9 @@ class LizyWidget(anywidget.AnyWidget):
         if model is None:
             return None
         try:
-            return self._service._adapter.model_info(model)  # noqa: SLF001
-        except Exception:
+            return self._service.model_info(model)
+        except Exception as exc:
+            _log.debug("model_info delegate failed, returning minimal info: %s", exc)
             return {"loaded": True}
 
     def load_inference(self, df: pd.DataFrame) -> LizyWidget:
@@ -421,9 +434,7 @@ class LizyWidget(anywidget.AnyWidget):
             action_type: str = content.get("action_type", "")
             raw_payload = content.get("payload", {})
             payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
-            handler = self._action_handlers.get(action_type)
-            if handler is not None:
-                handler(self, payload)
+            self._dispatcher.dispatch(action_type, payload)
             return
 
         if msg_type != "poll":
@@ -459,447 +470,34 @@ class LizyWidget(anywidget.AnyWidget):
         if not action:
             return
         action_type: str = action.get("type", "")
-        payload: dict[str, Any] = action.get("payload", {})
+        raw_payload = action.get("payload", {})
+        payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+        self._dispatcher.dispatch(action_type, payload)
 
-        handler = self._action_handlers.get(action_type)
-        if handler is not None:
-            handler(self, payload)
-
-    def _handle_set_target(self, payload: dict[str, Any]) -> None:
-        target = payload.get("target", "")
-        if not target:
-            return
-        try:
-            df_info = self._service.set_target(target)
-            self.df_info = df_info
-            self.status = "data_loaded"
-            task = df_info.get("task")
-            if task:
-                self.config = self._service.apply_task_params(dict(self.config), task)
-        except Exception as e:
-            self.error = {"code": "TARGET_ERROR", "message": str(e)}
-
-    def _handle_set_task(self, payload: dict[str, Any]) -> None:
-        task = payload.get("task", "")
-        if not task:
-            return
-        try:
-            df_info = self._service.set_task(task)
-            self.df_info = df_info
-            self.config = self._service.apply_task_params(dict(self.config), task)
-        except Exception as e:
-            self.error = {"code": "TASK_ERROR", "message": str(e)}
-
-    _VALID_COL_TYPES: frozenset[str] = frozenset({"numeric", "categorical"})
-
-    def _handle_update_column(self, payload: dict[str, Any]) -> None:
-        name = payload.get("name")
-        if not name:
-            self.error = {"code": "COLUMN_ERROR", "message": "Missing column name"}
-            return
-        col_type = payload.get("col_type", "numeric")
-        if col_type not in self._VALID_COL_TYPES:
-            self.error = {"code": "COLUMN_ERROR", "message": f"Invalid col_type: {col_type!r}"}
-            return
-        try:
-            df_info = self._service.update_column(
-                name,
-                excluded=payload.get("excluded", False),
-                col_type=col_type,
-            )
-            self.df_info = df_info
-        except Exception as e:
-            self.error = {"code": "COLUMN_ERROR", "message": str(e)}
-
-    # Fallback strategies when backend_contract is not yet loaded
-    _FALLBACK_STRATEGIES: frozenset[str] = frozenset(
-        {
-            "kfold",
-            "stratified_kfold",
-            "time_series",
-            "group_time_series",
-            "purged_time_series",
-            "group_kfold",
-            "stratified_group_kfold",
-            "blocked_group_kfold",
-        }
-    )
-
-    def _handle_update_cv(self, payload: dict[str, Any]) -> None:
-        strategy = payload.get("strategy", "kfold")
-        valid = self.backend_contract.get("capabilities", {}).get("cv_strategies")
-        valid_set = frozenset(valid) if valid else self._FALLBACK_STRATEGIES
-        if strategy not in valid_set:
-            self.error = {"code": "CV_ERROR", "message": f"Invalid strategy: {strategy!r}"}
-            return
-        try:
-            n_splits = int(payload.get("n_splits", 5))
-        except (ValueError, TypeError) as e:
-            self.error = {"code": "CV_ERROR", "message": f"Invalid n_splits: {e}"}
-            return
-        if not (2 <= n_splits <= 100):
-            self.error = {"code": "CV_ERROR", "message": f"n_splits must be 2-100, got {n_splits}"}
-            return
-        try:
-            df_info = self._service.update_cv(
-                strategy,
-                n_splits,
-                group_column=payload.get("group_column"),
-                time_column=payload.get("time_column"),
-                random_state=payload.get("random_state", 42),
-                shuffle=payload.get("shuffle", True),
-                gap=payload.get("gap", 0),
-                purge_gap=payload.get("purge_gap", 0),
-                embargo=payload.get("embargo", 0),
-                train_size_max=payload.get("train_size_max"),
-                test_size_max=payload.get("test_size_max"),
-                blocks=payload.get("blocks"),
-                groups=payload.get("groups"),
-                min_train_rows=int(payload.get("min_train_rows", 0)),
-                min_valid_rows=int(payload.get("min_valid_rows", 0)),
-            )
-            self.df_info = df_info
-        except Exception as e:
-            self.error = {"code": "CV_ERROR", "message": str(e)}
-
-    def _handle_get_column_stats(self, payload: dict[str, Any]) -> None:
-        column = payload.get("column", "")
-        if not column:
-            self.send({"type": "column_stats_error", "message": "Missing column name"})
-            return
-        try:
-            result = self._service.get_column_stats(column)
-            self.send(
-                {
-                    "type": "column_stats",
-                    "column": result["column"],
-                    "unique_count": result["unique_count"],
-                    "dtype": result["dtype"],
-                    "values": result["values"],
-                    "truncated": result.get("truncated", False),
-                }
-            )
-        except Exception as e:
-            self.send({"type": "column_stats_error", "message": str(e)})
-
-    def _handle_preview_splits(self, payload: dict[str, Any]) -> None:
-        try:
-            result = self._service.preview_splits()
-            self.send(
-                {
-                    "type": "preview_splits",
-                    **result,
-                }
-            )
-        except Exception as e:
-            self.send({"type": "preview_splits_error", "message": str(e)})
-
-    # Safe path pattern: dotted identifiers (no dunder, no special chars)
-    _SAFE_PATH_RE = re.compile(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$")
-
-    _VALID_PATCH_OPS: frozenset[str] = frozenset({"set", "unset", "merge"})
-
-    def _handle_patch_config(self, payload: dict[str, Any]) -> None:
-        raw_ops = payload.get("ops", [])
-        if not raw_ops:
-            return
-        ops: list[ConfigPatchOp] = []
-        for o in raw_ops:
-            path = o.get("path", "")
-            if not self._SAFE_PATH_RE.match(path) or "__" in path:
-                self.error = {"code": "INVALID_PATCH", "message": f"Invalid patch path: {path!r}"}
-                return
-            op_str = o.get("op", "")
-            if op_str not in self._VALID_PATCH_OPS:
-                self.error = {"code": "INVALID_PATCH", "message": f"Invalid op: {op_str!r}"}
-                return
-            ops.append(ConfigPatchOp(op=op_str, path=path, value=o.get("value")))
-        try:
-            self.config = self._service.apply_config_patch(dict(self.config), ops)
-        except Exception as e:
-            self.error = {"code": "PATCH_ERROR", "message": str(e)}
-
-    #: Upper bound on retune n_trials so a tampered UI payload cannot
-    #: overwhelm the backend.  Matches the NumericStepper ``max`` in
-    #: RetuneControls.tsx; values outside the range are silently dropped.
-    _RETUNE_MAX_N_TRIALS = 10_000
-
-    def _handle_fit(self, _payload: dict[str, Any]) -> None:
-        self._run_job("fit")
-
-    def _handle_tune(self, _payload: dict[str, Any]) -> None:
-        self._run_job("tune")
-
-    def _handle_retune(self, payload: dict[str, Any]) -> None:
-        """Dispatch a resume-style tune run (P-028).
-
-        Refuses to run when no prior tune exists (synchronous error:
-        no job thread is spawned).  Payload fields are validated here so
-        the worker thread only ever sees a trusted dict.
-        """
-        if not self.tune_summary:
-            self.error = {
-                "code": "NO_PRIOR_TUNE",
-                "message": ("Cannot retune: no prior tune result on this widget. Run Tune first."),
-            }
-            self.status = "failed"
-            return
-        # Whitelist + type-check incoming payload.  Unknown keys are dropped.
-        kwargs: dict[str, Any] = {"resume": True}
-        n_trials = payload.get("n_trials")
-        # ``bool`` is a subclass of ``int``; exclude it explicitly so that
-        # ``{"n_trials": True}`` doesn't sneak past the bounds check.
-        if (
-            isinstance(n_trials, int)
-            and not isinstance(n_trials, bool)
-            and 0 < n_trials <= self._RETUNE_MAX_N_TRIALS
-        ):
-            kwargs["n_trials"] = n_trials
-        elif n_trials is not None:
-            _log.warning(
-                "retune action: rejecting invalid n_trials=%r (expected int in 1..%d); "
-                "falling back to backend default",
-                n_trials,
-                self._RETUNE_MAX_N_TRIALS,
-            )
-        expand_boundary = payload.get("expand_boundary")
-        if isinstance(expand_boundary, bool):
-            kwargs["expand_boundary"] = expand_boundary
-        elif expand_boundary is not None:
-            _log.warning(
-                "retune action: rejecting invalid expand_boundary=%r (expected bool); "
-                "falling back to backend default",
-                expand_boundary,
-            )
-        boundary_threshold = payload.get("boundary_threshold")
-        if (
-            isinstance(boundary_threshold, (int, float))
-            and not isinstance(boundary_threshold, bool)
-            and 0.0 <= boundary_threshold <= 1.0
-        ):
-            kwargs["boundary_threshold"] = float(boundary_threshold)
-        else:
-            if boundary_threshold is not None:
-                _log.warning(
-                    "retune action: rejecting invalid boundary_threshold=%r "
-                    "(expected float in [0.0, 1.0]); using default 0.05",
-                    boundary_threshold,
-                )
-            kwargs["boundary_threshold"] = 0.05
-        self._run_job("tune", retune_kwargs=kwargs)
-
-    def _handle_cancel(self, _payload: dict[str, Any]) -> None:
-        self._cancel_flag.set()
-
-    # D-1: Binary buffer threshold for large Plotly JSON (800 KB).
-    _PLOT_BINARY_THRESHOLD = 800_000
-
+    # ── Back-compat shims (#127) ─────────────────────────────
+    # Existing tests reach into ``_handle_*`` methods directly. They now
+    # live on ``WidgetActionDispatcher`` as ``handle_*``; ``__getattr__``
+    # below proxies the legacy private names. ``_send_plot_response`` is
+    # a single explicit shim because tests call it as a positional helper.
     def _send_plot_response(
         self,
         plot_type: str,
         plotly_json: str,
         request_id: str | None,
     ) -> None:
-        """Send a plot_data response, using a binary buffer for large payloads.
+        self._dispatcher._send_plot_response(plot_type, plotly_json, request_id)
 
-        When *plotly_json* exceeds ``_PLOT_BINARY_THRESHOLD`` bytes, the JSON
-        string is sent as a binary buffer instead of inline in the message dict.
-        The JS side detects this via the ``binary`` flag and decodes the buffer.
-        """
-        msg: dict[str, Any] = {
-            "type": "plot_data",
-            "plot_type": plot_type,
-        }
-        if request_id is not None:
-            msg["request_id"] = request_id
-
-        if len(plotly_json) > self._PLOT_BINARY_THRESHOLD:
-            msg["binary"] = True
-            self.send(msg, buffers=[plotly_json.encode("utf-8")])
-        else:
-            msg["plotly_json"] = plotly_json
-            self.send(msg)
-
-    def _handle_request_plot(self, payload: dict[str, Any]) -> None:
-        # TODO(C-4): Consider non-blocking plot generation for slow plots
-        # (e.g., SHAP). Deferred because self.send() from a background thread
-        # is unreliable on Colab (BG thread comm blackout), and routing the
-        # response back to the main thread adds complexity.  Re-evaluate when
-        # a main-thread callback mechanism is available.
-        plot_type = payload.get("plot_type", "")
-        if not plot_type:
-            return
-        raw_rid = payload.get("request_id")
-        request_id: str | None = raw_rid if isinstance(raw_rid, str) else None
-        # Extract options and forward as kwargs (P-026)
-        # Whitelist allowed keys and validate types to prevent untrusted input
-        options = payload.get("options")
-        kwargs: dict[str, Any] = {}
-        if isinstance(options, dict):
-            metrics = options.get("metrics")
-            if isinstance(metrics, list) and all(isinstance(m, str) for m in metrics):
-                kwargs["metrics"] = metrics
-        try:
-            plot_data = self._service.get_plot(plot_type, **kwargs)
-            self._send_plot_response(plot_type, plot_data.plotly_json, request_id)
-        except Exception as e:
-            err: dict[str, Any] = {
-                "type": "plot_error",
-                "plot_type": plot_type,
-                "message": str(e),
-            }
-            if request_id is not None:
-                err["request_id"] = request_id
-            self.send(err)
-
-    def _handle_run_inference(self, payload: dict[str, Any]) -> None:
-        if self._inference_df is None:
-            self.error = {"code": "INFERENCE_ERROR", "message": "No inference data loaded"}
-            return
-        try:
-            return_shap = payload.get("return_shap", False)
-            result = self._service.predict(self._inference_df, return_shap=return_shap)
-            records = result.predictions.to_dict(orient="records")
-            self.inference_result = {
-                "status": "completed",
-                "rows": len(records),
-                "data": records,
-                "warnings": result.warnings,
-            }
-        except Exception as e:
-            self.inference_result = {
-                "status": "failed",
-                "message": str(e),
-            }
-
-    def _handle_import_yaml(self, payload: dict[str, Any]) -> None:
-        content = payload.get("content", "")
-        if not content:
-            return
-        try:
-            import yaml
-
-            loaded: dict[str, Any] = yaml.safe_load(content)
-            if not isinstance(loaded, dict):
-                self.error = {"code": "IMPORT_ERROR", "message": "Invalid YAML content"}
-                return
-            self._apply_loaded_config(loaded)
-        except Exception as e:
-            self.error = {"code": "IMPORT_ERROR", "message": str(e)}
-
-    def _handle_export_yaml(self, _payload: dict[str, Any]) -> None:
-        try:
-            import yaml
-
-            full_config = self._service.build_config(dict(self.config))
-            content = yaml.dump(full_config, default_flow_style=False)
-            self.send({"type": "yaml_export", "content": content})
-        except Exception as e:
-            self.error = {"code": "EXPORT_ERROR", "message": str(e)}
-
-    def _handle_raw_config(self, _payload: dict[str, Any]) -> None:
-        try:
-            import yaml
-
-            if self._service.has_data() and self._service.has_target():
-                full_config = self._service.build_config(dict(self.config))
-            else:
-                full_config = dict(self.config)
-            content = yaml.dump(full_config, default_flow_style=False)
-            self.send({"type": "raw_config", "content": content})
-        except Exception as e:
-            with contextlib.suppress(Exception):
-                self.send({"type": "raw_config_error", "message": str(e)})
-            self.error = {"code": "EXPORT_ERROR", "message": str(e)}
-
-    def _handle_apply_best_params(self, payload: dict[str, Any]) -> None:
-        params = payload.get("params", {})
-        if not params:
-            return
-        with self._job_lock:
-            snapshot = (
-                copy.deepcopy(self._tune_config_snapshot) if self._tune_config_snapshot else None
-            )
-            ui_snapshot = copy.deepcopy(self._tune_ui_snapshot) if self._tune_ui_snapshot else None
-        try:
-            self.config = self._service.apply_best_params(
-                params,
-                dict(self.config),
-                tune_snapshot=snapshot,
-                tune_ui_snapshot=ui_snapshot,
-            )
-        except Exception as e:
-            self.error = {"code": "APPLY_ERROR", "message": str(e)}
-
-    def _handle_request_inference_plot(self, payload: dict[str, Any]) -> None:
-        plot_type = payload.get("plot_type", "")
-        if not plot_type:
-            return
-        raw_rid = payload.get("request_id")
-        request_id: str | None = raw_rid if isinstance(raw_rid, str) else None
-        # Inference plots use prediction data, not fit model
-        inference_data = self.inference_result.get("data", [])
-        if not inference_data:
-            self._handle_request_plot(payload)
-            return
-        try:
-            predictions = pd.DataFrame(inference_data)
-            plot_data = self._service.get_inference_plot(predictions, plot_type)
-            self._send_plot_response(plot_type, plot_data.plotly_json, request_id)
-        except Exception as exc:
-            _log.debug("Inference plot failed, falling back to fit plot: %s", exc)
-            self._handle_request_plot(payload)
-
-    def _handle_export_code(self, payload: dict[str, Any]) -> None:
-        try:
-            import shutil
-            import tempfile
-            from pathlib import Path
-
-            result_path = self._service.export_code(None)  # always tmpdir for UI
-            zip_dir = tempfile.mkdtemp(prefix="lzw_code_export_")
-            zip_base = str(Path(zip_dir) / "exported_code")
-            zip_path = shutil.make_archive(zip_base, "zip", str(result_path))
-
-            with open(zip_path, "rb") as f:
-                zip_bytes = f.read()
-
-            self.send(
-                {"type": "code_export_download", "filename": "exported_code.zip"},
-                buffers=[zip_bytes],
-            )
-
-            # Cleanup temp files
-            with contextlib.suppress(OSError):
-                os.unlink(zip_path)
-            with contextlib.suppress(OSError):
-                shutil.rmtree(str(result_path), ignore_errors=True)
-            with contextlib.suppress(OSError):
-                shutil.rmtree(zip_dir, ignore_errors=True)
-        except Exception as e:
-            self.error = {"code": "EXPORT_CODE_ERROR", "message": str(e)}
-
-    _action_handlers: dict[str, Any] = {
-        "set_target": _handle_set_target,
-        "set_task": _handle_set_task,
-        "update_column": _handle_update_column,
-        "update_cv": _handle_update_cv,
-        "get_column_stats": _handle_get_column_stats,
-        "preview_splits": _handle_preview_splits,
-        "patch_config": _handle_patch_config,
-        "fit": _handle_fit,
-        "tune": _handle_tune,
-        "retune": _handle_retune,
-        "cancel": _handle_cancel,
-        "request_plot": _handle_request_plot,
-        "run_inference": _handle_run_inference,
-        "apply_best_params": _handle_apply_best_params,
-        "request_inference_plot": _handle_request_inference_plot,
-        "import_yaml": _handle_import_yaml,
-        "export_yaml": _handle_export_yaml,
-        "raw_config": _handle_raw_config,
-        "export_code": _handle_export_code,
-    }
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_handle_") and name not in {"_handle_custom_msg"}:
+            try:
+                dispatcher = self.__dict__["_dispatcher"]
+            except KeyError:
+                raise AttributeError(name) from None
+            target = "handle_" + name[len("_handle_") :]
+            handler = getattr(dispatcher, target, None)
+            if handler is not None:
+                return handler
+        raise AttributeError(name)
 
     # ── Job execution ─────────────────────────────────────────
 
@@ -910,6 +508,9 @@ class LizyWidget(anywidget.AnyWidget):
         retune_kwargs: dict[str, Any] | None = None,
     ) -> None:
         with self._job_lock:
+            # INV-A / INV-B (BLUEPRINT §6.4): a job is already running,
+            # so reject this re-entry silently. Holds _job_thread to one
+            # live worker and keeps status FSM linear.
             if self.status == "running":
                 return
 
@@ -947,10 +548,16 @@ class LizyWidget(anywidget.AnyWidget):
                 self.status = "failed"
                 return
 
-            if job_type == "tune":
-                self._tune_config_snapshot = copy.deepcopy(full_config)
-                self._tune_ui_snapshot = copy.deepcopy(dict(self.config))
+            # P-035: tune snapshots are now carried inside TuningSummary
+            # via JobSpec.ui_snapshot → service.tune (or
+            # service.record_subprocess_tune_summary for the subprocess
+            # path). The widget no longer keeps private snapshot attrs.
+            tune_ui_snapshot = copy.deepcopy(dict(self.config)) if job_type == "tune" else None
 
+            # INV-D (BLUEPRINT §6.4): cancel flag is cleared exactly once
+            # per job at startup; the worker / supervisor never write it
+            # back. Reading it later is safe even if a previous job ended
+            # via cancel.
             self._cancel_flag.clear()
             self._job_counter += 1
             self.job_type = job_type
@@ -960,17 +567,24 @@ class LizyWidget(anywidget.AnyWidget):
             self.elapsed_sec = 0.0
             self.error = {}
 
-        # Detect execution strategy lazily (libgomp may not be loaded at
-        # __init__ time; it loads when data is first processed by sklearn/lgbm).
+        # Detect execution strategy lazily. ``get_execution_strategy`` forces
+        # a ``lightgbm`` import on first call so ``/proc/self/maps`` reflects
+        # the OpenMP runtime that the data path will actually use. On Linux
+        # with libgomp this returns ``("subprocess", libomp_path)`` — the
+        # default — because the worker-thread path hits libgomp's pool-
+        # affinity bug (#147 reproducer: Fit ~30x slower in a worker thread,
+        # multi-trial Tune compounds to 20-50x; ~30 OS threads leak per job).
+        # Set ``LZW_FORCE_THREAD=1`` to opt back into the legacy in-process
+        # path (e.g. for debugging or when subprocess startup overhead
+        # dominates a tiny Fit). The historical ``LZW_FORCE_SUBPROCESS=1``
+        # gate is retained as a no-op for backward compatibility but is no
+        # longer required to enable subprocess execution.
         if self._execution_strategy is None:
-            # Default to thread — subprocess is opt-in via LZW_FORCE_SUBPROCESS=1
-            # because real-world fit degradation from libgomp pool affinity is
-            # only 1.0-1.2x, while subprocess overhead (~500ms import) is larger.
-            if os.environ.get("LZW_FORCE_SUBPROCESS") == "1":
-                self._execution_strategy, self._libomp_path = get_execution_strategy()
-            else:
+            if os.environ.get("LZW_FORCE_THREAD") == "1":
                 self._execution_strategy = "thread"
                 self._libomp_path = None
+            else:
+                self._execution_strategy, self._libomp_path = get_execution_strategy()
 
         # Join previous worker thread to ensure its OpenMP thread pool is
         # fully cleaned up.  Without this, repeated Fit/Tune cycles accumulate
@@ -980,31 +594,61 @@ class LizyWidget(anywidget.AnyWidget):
         if prev is not None and prev.is_alive():
             prev.join(timeout=5.0)
 
-        worker = (
-            self._subprocess_job_worker
-            if self._execution_strategy == "subprocess"
-            else self._job_worker
+        # P-032: pick the runner strategy and hand it the immutable JobSpec.
+        # The supervisor in ``_supervise`` owns the state machine + traitlet
+        # plumbing for *both* runners, so the worker logic lives once.
+        #
+        # P-038: subprocess retune resume is now supported via tune-state
+        # IPC. Runner selection is therefore strategy-only — retune routes
+        # to the same path as initial tune. The previous PR #155 thread
+        # fallback is gone; it was unsafe whenever the user entered any
+        # libgomp parallel region on the parent main thread (#156).
+        runner: JobRunner
+        if self._execution_strategy == "subprocess":
+            runner = SubprocessJobRunner(self._service, libomp_path=self._libomp_path)
+        else:
+            runner = ThreadJobRunner(self._service)
+        spec = JobSpec(
+            job_type=job_type,
+            config=full_config,
+            retune_kwargs=retune_kwargs,
+            ui_snapshot=tune_ui_snapshot,
         )
-        # Pass retune_kwargs through the thread's ``args`` tuple so each
-        # worker receives its own snapshot.  Avoids storing transient job
-        # state on ``self`` where a subsequent main-thread call could race
-        # with a background consumer (P-028 HIGH-2 review fix).
         thread = threading.Thread(
-            target=worker,
-            args=(job_type, full_config, retune_kwargs),
+            target=self._supervise,
+            args=(runner, spec),
             daemon=False,
         )
         self._job_thread = thread
         thread.start()
 
-    def _job_worker(
-        self,
-        job_type: str,
-        config: dict[str, Any],
-        retune_kwargs: dict[str, Any] | None = None,
-    ) -> None:
+    def _supervise(self, runner: JobRunner, spec: JobSpec) -> None:
+        """Run *spec* through *runner* and own the state-machine transitions.
+
+        Single source of truth for status / traitlet updates during job
+        execution — both ``ThreadJobRunner`` and ``SubprocessJobRunner``
+        use this supervisor. Runtime invariants (BLUEPRINT §6.4 INV-A..F)
+        are encoded inline as ``assert`` guards; running under
+        ``python -O`` strips them, so production behaviour is unchanged.
+        """
+        # INV-A entry: a supervisor only runs when status was set to "running"
+        # by ``_run_job`` under the job lock. Any other status means the
+        # caller violated the FSM (e.g., a stray supervisor thread).
+        assert self.status == "running", (
+            f"INV-A violated: supervisor entered with status={self.status!r}"
+        )
+        # INV-D entry: ``_run_job`` clears the cancel flag inside the job lock
+        # immediately before spawning this thread, so it must be clear here.
+        # If it's set we'd cancel the new job before its first tick.
+        assert not self._cancel_flag.is_set(), (
+            "INV-D violated: cancel flag carried over into a new job"
+        )
+
         start = time.monotonic()
         timer_stop = threading.Event()
+        # INV-E: track the highest progress.round seen so we can assert
+        # monotonicity across ``on_progress`` callbacks within this job.
+        last_round: list[int] = [0]
 
         def tick_elapsed() -> None:
             while not timer_stop.is_set():
@@ -1014,228 +658,111 @@ class LizyWidget(anywidget.AnyWidget):
         timer = threading.Thread(target=tick_elapsed, daemon=True)
         timer.start()
 
+        is_subprocess = getattr(runner, "kind", "thread") == "subprocess"
+
         def on_progress(
             current: int,
             total: int,
             message: str,
             **extra: Any,
         ) -> None:
-            """Update the progress traitlet and honour the cancel flag.
-
-            Delegates payload construction to
-            :func:`_build_progress_payload` so the round-aware key
-            whitelist stays in one place (shared with the subprocess
-            worker below).
-            """
-            if self._cancel_flag.is_set():
+            """Forward progress to the traitlet; raise to cancel (thread runner)."""
+            # Subprocess runner cancels via SIGTERM, so the parent
+            # process does not need to raise InterruptedError here. The
+            # in-process thread runner relies on this raise to abort the
+            # adapter's polling loop.
+            if not is_subprocess and self._cancel_flag.is_set():
                 raise InterruptedError("Job cancelled by user")
+            # INV-E: round must be monotonic non-decreasing within a job.
+            round_no = extra.get("round")
+            if isinstance(round_no, int):
+                assert round_no >= last_round[0], (
+                    f"INV-E violated: round regressed {last_round[0]} -> {round_no}"
+                )
+                last_round[0] = round_no
             self.progress = _build_progress_payload(current, total, message, extra)
             self.elapsed_sec = round(time.monotonic() - start, 1)
 
         try:
-            if job_type == "fit":
-                summary = self._service.fit(config, on_progress=on_progress)
-                normalized = self._normalize_metrics(self._service.get_evaluate_table())
-                fold_details = self._service.get_split_summary()
-                self.fit_summary = {
-                    "metrics": normalized if normalized else summary.metrics,
-                    "fold_count": summary.fold_count,
-                    "fold_details": fold_details,
-                    "params": summary.params,
-                }
-            elif job_type == "tune":
-                # P-028: retune_kwargs arrives as a thread-local parameter
-                # so there is no cross-thread state handoff to worry about.
-                tune_kwargs = retune_kwargs or {}
-                is_resume = bool(tune_kwargs.get("resume"))
-
-                n_trials = tune_kwargs.get("n_trials") or config.get("tuning", {}).get(
-                    "optuna", {}
-                ).get("params", {}).get("n_trials", 10)
-                # Show round 2+ badge eagerly when resuming so the user
-                # sees immediate feedback before the first trial fires.
-                initial_round = 2 if is_resume else 1
-                msg = (
-                    f"Resuming tune with {n_trials} more trials..."
-                    if is_resume
-                    else f"Tuning {n_trials} trials..."
-                )
-                on_progress(0, n_trials, msg, round=initial_round)
-                summary_t = self._service.tune(config, on_progress=on_progress, **tune_kwargs)
-                self.tune_summary = {
-                    "best_params": summary_t.best_params,
-                    "best_score": summary_t.best_score,
-                    "trials": summary_t.trials,
-                    "metric_name": summary_t.metric_name,
-                    "direction": summary_t.direction,
-                    "rounds": summary_t.rounds,
-                    "boundary_report": summary_t.boundary_report,
-                }
-                # After tune, model MAY be fitted — guard evaluate/split calls (P-004 R3)
-                try:
-                    normalized = self._normalize_metrics(self._service.get_evaluate_table())
-                    fold_details = self._service.get_split_summary()
-                    if normalized:
-                        self.fit_summary = {
-                            "metrics": normalized,
-                            "fold_count": len(fold_details),
-                            "fold_details": fold_details,
-                            "params": [],
-                        }
-                except Exception:
-                    pass  # Tune-only: no fit results available
-
-            self.available_plots = self._service.get_available_plots()
+            result: JobResult = runner.run(spec, on_progress, self._cancel_flag)
+            self._apply_job_result(result)
             self.elapsed_sec = round(time.monotonic() - start, 1)
             self.status = "completed"
-
         except InterruptedError:
+            # INV-D (BLUEPRINT §6.4): cancel during running -> failed/CANCELLED.
             self.elapsed_sec = round(time.monotonic() - start, 1)
             self.error = {"code": "CANCELLED", "message": "Job cancelled by user"}
             self.status = "failed"
-
-        except Exception as e:
+        except Exception as exc:  # noqa: BLE001 — outer-most boundary
             self.elapsed_sec = round(time.monotonic() - start, 1)
-            # Distinguish adapter/backend errors from internal widget errors
-            try:
-                mod = getattr(type(e), "__module__", "") or ""
-                code = "BACKEND_ERROR" if "lizyml" in mod.lower() else "INTERNAL_ERROR"
-            except Exception:
-                code = "INTERNAL_ERROR"
-            _log.error("Job %s failed (%s): %s", job_type, code, e, exc_info=True)
-            self.error = {
-                "code": code,
-                "message": str(e),
-            }
+            code = self._classify_job_error(exc, subprocess=is_subprocess)
+            _log.error("Job %s failed (%s): %s", spec.job_type, code, exc, exc_info=True)
+            self.error = {"code": code, "message": str(exc)}
             self.status = "failed"
-
         finally:
             timer_stop.set()
             timer.join(timeout=2.0)
-
-    def _subprocess_job_worker(
-        self,
-        job_type: str,
-        config: dict[str, Any],
-        retune_kwargs: dict[str, Any] | None = None,
-    ) -> None:
-        """Run a job via subprocess for OpenMP-safe execution.
-
-        P-028 re-tune is not supported in this path yet: the backend model's
-        Optuna study cannot be picked back up in a fresh subprocess.  Emit
-        a clear error instead of silently running a fresh study.
-        """
-        if retune_kwargs:
-            self.error = {
-                "code": "RETUNE_SUBPROCESS_UNSUPPORTED",
-                "message": (
-                    "Re-tune is not supported in subprocess execution mode. "
-                    "Unset LZW_FORCE_SUBPROCESS=1 or use w.tune() for a "
-                    "fresh study."
-                ),
-            }
-            self.status = "failed"
-            return
-        start = time.monotonic()
-        timer_stop = threading.Event()
-
-        def tick_elapsed() -> None:
-            while not timer_stop.is_set():
-                self.elapsed_sec = round(time.monotonic() - start, 1)
-                timer_stop.wait(1.0)
-
-        timer = threading.Thread(target=tick_elapsed, daemon=True)
-        timer.start()
-
-        def on_progress(
-            current: int,
-            total: int,
-            message: str,
-            **extra: Any,
-        ) -> None:
-            """Update the progress traitlet from subprocess messages.
-
-            The subprocess path does not need a direct cancel check here
-            because the child process is signalled via SIGTERM from
-            ``subprocess_runner.run_job_subprocess``; the parent just
-            mirrors whatever the child emits.
-            """
-            self.progress = _build_progress_payload(current, total, message, extra)
-            self.elapsed_sec = round(time.monotonic() - start, 1)
-
-        import tempfile
-
-        model_out_path = tempfile.mkdtemp(prefix="lzw_model_")
-
-        try:
-            df = self._service.get_dataframe()
-            target = self._service.get_df_info().get("target", "")
-
-            result = run_job_subprocess(
-                job_type=job_type,
-                config=config,
-                df=df,
-                target=target,
-                libomp_path=self._libomp_path,
-                on_progress=on_progress,
-                cancel_flag=self._cancel_flag,
-                model_out_path=model_out_path,
+            # INV-A exit: status FSM only allows terminal states once the
+            # supervisor returns. Catches any future code path that forgets
+            # to write the status.
+            assert self.status in {"completed", "failed"}, (
+                f"INV-A violated: terminal status invalid ({self.status!r})"
             )
 
-            if job_type == "fit":
+    def _apply_job_result(self, result: JobResult) -> None:
+        """Project a runner's :class:`JobResult` onto traitlets."""
+        if result.fit_summary:
+            normalized = self._normalize_metrics(result.eval_table)
+            self.fit_summary = {
+                "metrics": normalized if normalized else result.fit_summary.get("metrics", {}),
+                "fold_count": result.fit_summary.get("fold_count", 0),
+                "fold_details": result.split_summary or result.fit_summary.get("fold_details", []),
+                "params": result.fit_summary.get("params", []),
+            }
+        if result.tune_summary:
+            # INV-F (BLUEPRINT §6.4): boundary_report.dims must list each
+            # search-space dim exactly once. Check before publishing so a
+            # backend regression surfaces here instead of as silent UI weirdness.
+            br = result.tune_summary.get("boundary_report")
+            if isinstance(br, dict):
+                dims = br.get("dims") or []
+                names = [d.get("name") for d in dims if isinstance(d, dict) and d.get("name")]
+                assert len(names) == len(set(names)), (
+                    f"INV-F violated: boundary_report.dims has duplicates: {names}"
+                )
+            self.tune_summary = result.tune_summary
+            # After tune, evaluate_table may exist if the model was
+            # implicitly fitted on the best params — surface it as a
+            # fit_summary too so the Results tab can render the score
+            # table even without a separate fit run.
+            if result.eval_table:
                 normalized = self._normalize_metrics(result.eval_table)
-                self.fit_summary = {
-                    "metrics": normalized if normalized else result.fit_summary.get("metrics", {}),
-                    "fold_count": result.fit_summary.get("fold_count", 0),
-                    "fold_details": result.split_summary,
-                    "params": result.fit_summary.get("params", []),
-                }
-            elif job_type == "tune":
-                self.tune_summary = result.tune_summary
-                if result.eval_table:
-                    normalized = self._normalize_metrics(result.eval_table)
-                    if normalized:
-                        self.fit_summary = {
-                            "metrics": normalized,
-                            "fold_count": len(result.split_summary),
-                            "fold_details": result.split_summary,
-                            "params": [],
-                        }
-
-            # Load model back from subprocess
-            if result.model_path:
-                try:
-                    self._service.load_model_from_path(result.model_path)
-                except Exception as load_err:
-                    _log.warning("Model load from subprocess failed: %s", load_err)
-
+                if normalized:
+                    self.fit_summary = {
+                        "metrics": normalized,
+                        "fold_count": len(result.split_summary),
+                        "fold_details": result.split_summary,
+                        "params": [],
+                    }
+        if result.available_plots:
             self.available_plots = result.available_plots
-            self.elapsed_sec = round(time.monotonic() - start, 1)
-            self.status = "completed"
 
-        except InterruptedError:
-            self.elapsed_sec = round(time.monotonic() - start, 1)
-            self.error = {"code": "CANCELLED", "message": "Job cancelled by user"}
-            self.status = "failed"
-
-        except Exception as e:
-            self.elapsed_sec = round(time.monotonic() - start, 1)
-            try:
-                exc_msg = str(e)
-                code = "BACKEND_ERROR" if "lizyml" in exc_msg.lower() else "SUBPROCESS_ERROR"
-            except Exception:
-                code = "SUBPROCESS_ERROR"
-            _log.error("Subprocess job %s failed (%s): %s", job_type, code, e, exc_info=True)
-            self.error = {"code": code, "message": str(e)}
-            self.status = "failed"
-
-        finally:
-            timer_stop.set()
-            timer.join(timeout=2.0)
-            import shutil
-
-            with contextlib.suppress(OSError):
-                shutil.rmtree(model_out_path, ignore_errors=True)
+    @staticmethod
+    def _classify_job_error(exc: BaseException, *, subprocess: bool) -> str:
+        """Map a worker exception to an error code for the widget banner."""
+        try:
+            mod = getattr(type(exc), "__module__", "") or ""
+            if "lizyml" in mod.lower():
+                return "BACKEND_ERROR"
+            # Subprocess errors arrive wrapped as RuntimeError("[ExcType] msg")
+            # — the prefix carries the original module name so we can still
+            # detect lizyml drift inside that envelope.
+            msg = str(exc).lower()
+        except Exception:  # noqa: BLE001
+            msg = ""
+        if "lizyml" in msg:
+            return "BACKEND_ERROR"
+        return "SUBPROCESS_ERROR" if subprocess else "INTERNAL_ERROR"
 
     # ── Config helpers ─────────────────────────────────────────
 

@@ -7,7 +7,8 @@
     "build": "esbuild src/index.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=preact --outfile=../src/lizyml_widget/static/widget.js --minify && cp src/widget.css ../src/lizyml_widget/static/widget.css",
     "lint": "eslint src/",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "preact": "^10.29.1"
@@ -17,10 +18,10 @@
     "@testing-library/preact": "^3.2.4",
     "@vitest/coverage-v8": "^2.1.9",
     "esbuild": "^0.28.0",
-    "eslint": "^10.2.0",
-    "jsdom": "^29.0.2",
-    "typescript": "^6.0.2",
-    "typescript-eslint": "^8.58.1",
+    "eslint": "^10.3.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.2",
     "vitest": "^2.1.9"
   }
 }

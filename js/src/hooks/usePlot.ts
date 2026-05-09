@@ -20,6 +20,10 @@ export interface PlotRequestOptions {
 export function usePlot(model: any) {
   const [plots, setPlots] = useState<PlotCache>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
+  // P-037 / #152: explicit error surface so PlotViewer can render
+  // "Plot unavailable" instead of looping on the loading text. Cleared
+  // on the next requestPlot for the same plot_type and on clearCache.
+  const [errors, setErrors] = useState<Record<string, string>>({});
   // Track the latest request_id per plot_type for stale-response filtering
   const pendingRef = useRef<Record<string, string>>({});
   const nextRequestIdRef = useRef(1);
@@ -51,6 +55,13 @@ export function usePlot(model: any) {
         try {
           const spec = JSON.parse(jsonStr);
           setPlots((prev) => ({ ...prev, [pt]: spec }));
+          // Successful response clears any stale error from a prior attempt.
+          setErrors((prev) => {
+            if (!(pt in prev)) return prev;
+            const next = { ...prev };
+            delete next[pt];
+            return next;
+          });
         } catch {
           // ignore parse errors
         }
@@ -61,6 +72,13 @@ export function usePlot(model: any) {
         const pt = msg.plot_type;
         if (!isAcceptable(pt, msg.request_id)) return;
         setLoading((prev) => ({ ...prev, [pt]: false }));
+        // P-037: surface a non-empty message even when the backend forgets
+        // to include one, so PlotViewer never falls back to a blank panel.
+        const message =
+          typeof msg.message === "string" && msg.message.length > 0
+            ? msg.message
+            : "Plot unavailable";
+        setErrors((prev) => ({ ...prev, [pt]: message }));
         delete pendingRef.current[pt];
       }
     };
@@ -80,6 +98,14 @@ export function usePlot(model: any) {
       pendingRef.current[plotType] = rid;
       cachedOptionsRef.current[plotType] = optionsKey;
       setLoading((prev) => ({ ...prev, [plotType]: true }));
+      // P-037: a fresh request invalidates any stale error so users never
+      // see the previous failure message on top of a new loading panel.
+      setErrors((prev) => {
+        if (!(plotType in prev)) return prev;
+        const next = { ...prev };
+        delete next[plotType];
+        return next;
+      });
       const payload: Record<string, any> = { plot_type: plotType, request_id: rid };
       if (options) payload.options = options;
       model.send({
@@ -94,9 +120,10 @@ export function usePlot(model: any) {
   const clearCache = useCallback(() => {
     setPlots({});
     setLoading({});
+    setErrors({});
     pendingRef.current = {};
     cachedOptionsRef.current = {};
   }, []);
 
-  return { plots, loading, requestPlot, clearCache };
+  return { plots, loading, errors, requestPlot, clearCache };
 }

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import logging
+import pickle
 import threading
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol
@@ -12,6 +12,22 @@ from typing import Any, Literal, Protocol
 import pandas as pd
 
 from .adapter_contract import build_capabilities, build_ui_schema
+from .adapter_internals import (
+    LIZYML_MAX_VERSION,
+    LIZYML_MIN_VERSION,
+    _check_lizyml_version,
+    _parse_lizyml_version,
+    _serialize_boundary_report,
+    _serialize_rounds,
+    _serialize_trials,
+    convert_metric_entries,
+    deep_merge,
+    enforce_auto_num_leaves,
+    extract_defaults,
+    get_nested,
+    set_nested,
+    unset_nested,
+)
 from .adapter_params import (
     LGBM_PARAMS_BY_TASK,
     LGBM_PARAMS_TASK_INDEPENDENT,
@@ -19,12 +35,25 @@ from .adapter_params import (
     get_eval_metrics_by_task,
 )
 from .adapter_params import classify_best_params as _classify_best_params_impl
+from .adapter_results import (
+    is_model_fitted,
+    list_available_plots,
+    render_inference_plot,
+    render_plot,
+    task_for_model,
+)
 from .adapter_schema import (
     enforce_iv_exclusivity,
     get_default_search_space,
     normalize_inner_valid,
     prepare_tune_overrides,
     strip_for_backend,
+)
+from .adapter_views import (
+    view_fit_result,
+    view_prediction_result,
+    view_tune_progress,
+    view_tuning_result,
 )
 from .types import (
     BackendContract,
@@ -35,6 +64,20 @@ from .types import (
     PredictionSummary,
     TuningSummary,
 )
+
+# Re-export for tests / external imports that historically pulled these
+# symbols from ``lizyml_widget.adapter``.
+__all__ = [
+    "LIZYML_MAX_VERSION",
+    "LIZYML_MIN_VERSION",
+    "BackendAdapter",
+    "LizyMLAdapter",
+    "_check_lizyml_version",
+    "_parse_lizyml_version",
+    "_serialize_boundary_report",
+    "_serialize_rounds",
+    "_serialize_trials",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -122,148 +165,32 @@ class BackendAdapter(Protocol):
 
     def model_info(self, model: Any) -> dict[str, Any]: ...
 
+    # P-037: tune state cross-process persistence (#152). P-038 (#156)
+    # extended this to support subprocess retune resume.
+    #
+    # ``export_tune_state`` writes a pickle blob containing every Model
+    # attribute the backend's resume path reads. For LizyMLAdapter the
+    # blob holds 6 keys: ``tuning_result`` (always — P-037 minimum,
+    # required for ``optimization-history`` plot rendering) plus
+    # ``study``, ``round_number``, ``rounds``, ``space``,
+    # ``used_default_space`` (P-038, required for ``Model.tune(resume=True)``
+    # to accumulate rounds correctly). Implementations may add more keys
+    # but MUST keep the existing keys forward-compatible.
+    #
+    # ``restore_tune_state`` reads the blob produced by the same adapter
+    # version (or an older one) and reattaches every present key to the
+    # model. Missing keys must NOT raise — that path supports loading
+    # P-037-format blobs onto a P-038 adapter so plot rendering keeps
+    # working without retune support.
+    def export_tune_state(self, model: Any, path: str) -> None: ...
+
+    def restore_tune_state(self, model: Any, path: str) -> None: ...
+
     def classify_best_params(
         self, params: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]: ...
 
     def plot_inference(self, predictions: pd.DataFrame, plot_type: str) -> PlotData: ...
-
-
-#: Minimum supported lizyml version (inclusive). P-027: re-tune monitoring.
-LIZYML_MIN_VERSION = (0, 9, 0)
-#: Maximum supported lizyml version (exclusive).
-LIZYML_MAX_VERSION = (0, 10, 0)
-
-
-def _parse_lizyml_version(raw: str) -> tuple[int, ...]:
-    """Parse a lizyml version string into a comparable tuple of ints.
-
-    Pre-release / dev suffixes ("0.9.0rc1", "0.9.0.dev3") are stripped so
-    they compare equal to their base release.  This keeps the version guard
-    permissive for local dev installs.
-    """
-    import re
-
-    core = re.split(r"[^0-9.]", raw, maxsplit=1)[0]
-    parts = core.split(".")
-    out: list[int] = []
-    for p in parts:
-        try:
-            out.append(int(p))
-        except ValueError:
-            break
-    # Pad to 3 components so comparisons work against (major, minor, patch).
-    while len(out) < 3:
-        out.append(0)
-    return tuple(out[:3])
-
-
-def _check_lizyml_version() -> None:
-    """Validate the installed lizyml version against the widget's contract.
-
-    Raises
-    ------
-    ImportError
-        When ``lizyml`` is missing or outside ``[LIZYML_MIN_VERSION,
-        LIZYML_MAX_VERSION)``.  The error message points the user at the
-        ``[lizyml]`` extras install command.
-    """
-    try:
-        import lizyml
-    except ImportError as exc:  # pragma: no cover - exercised via dedicated test
-        msg = (
-            "lizyml-widget requires the 'lizyml' backend. "
-            "Install it with:\n"
-            "    pip install 'lizyml-widget[lizyml]'\n"
-            "See docs/VERSION_COMPAT.md for details."
-        )
-        raise ImportError(msg) from exc
-
-    version_str = getattr(lizyml, "__version__", None)
-    # Unit tests often install ``lizyml`` as a ``MagicMock`` via
-    # ``sys.modules`` patching; in that case ``__version__`` is not a
-    # real string and the guard cannot reliably parse it.  Skip silently
-    # so mocked tests still exercise the adapter without being blocked
-    # by a version check that is irrelevant in that environment.
-    if not isinstance(version_str, str):
-        return
-
-    version = _parse_lizyml_version(version_str)
-    if version < LIZYML_MIN_VERSION or version >= LIZYML_MAX_VERSION:
-        min_s = ".".join(str(x) for x in LIZYML_MIN_VERSION)
-        max_s = ".".join(str(x) for x in LIZYML_MAX_VERSION)
-        msg = (
-            f"lizyml-widget requires lizyml>={min_s},<{max_s} "
-            f"(found: lizyml=={version_str}). Run:\n"
-            f"    pip install --upgrade "
-            f"'lizyml[plots,tuning,calibration,explain]>={min_s},<{max_s}'\n"
-            "See docs/VERSION_COMPAT.md for the full compatibility matrix."
-        )
-        raise ImportError(msg)
-
-
-def _serialize_trials(trials: Any) -> list[dict[str, Any]]:
-    """Convert a sequence of lizyml TrialResult into JSON-friendly dicts.
-
-    Each dict keeps ``round`` (defaulting to 1 for pre-re-tune backends)
-    so the UI can group trials by round when rendering the score history.
-    """
-    from dataclasses import asdict
-
-    out: list[dict[str, Any]] = []
-    for t in trials or ():
-        d = asdict(t)
-        d.setdefault("round", 1)
-        out.append(d)
-    return out
-
-
-def _serialize_rounds(rounds: Any) -> list[dict[str, Any]]:
-    """Convert a tuple of ``RoundSummary`` into plain dicts.
-
-    ``space_snapshot`` is stripped because each entry is a dataclass
-    (``FloatDim`` / ``IntDim`` / ``CategoricalDim``) that anywidget cannot
-    serialize directly.  The UI only needs the round-level metadata
-    (scores, expanded dim names); full space snapshots can be retrieved
-    from ``boundary_report`` if needed in a future iteration.
-    """
-    out: list[dict[str, Any]] = []
-    for r in rounds or ():
-        out.append(
-            {
-                "round": int(getattr(r, "round", 0)),
-                "n_trials": int(getattr(r, "n_trials", 0)),
-                "best_score_before": getattr(r, "best_score_before", None),
-                "best_score_after": float(getattr(r, "best_score_after", 0.0)),
-                "expanded_dims": list(getattr(r, "expanded_dims", ()) or ()),
-            }
-        )
-    return out
-
-
-def _serialize_boundary_report(report: Any) -> dict[str, Any] | None:
-    """Convert ``BoundaryReport`` into a JSON-friendly dict (or None)."""
-    if report is None:
-        return None
-    dims_out: list[dict[str, Any]] = []
-    for d in getattr(report, "dims", ()) or ():
-        dims_out.append(
-            {
-                "name": getattr(d, "name", ""),
-                "best_value": getattr(d, "best_value", None),
-                "low": getattr(d, "low", None),
-                "high": getattr(d, "high", None),
-                "position_pct": getattr(d, "position_pct", None),
-                "edge": getattr(d, "edge", ""),
-                "expanded": bool(getattr(d, "expanded", False)),
-                "new_low": getattr(d, "new_low", None),
-                "new_high": getattr(d, "new_high", None),
-            }
-        )
-    return {
-        "dims": dims_out,
-        "expanded_names": list(getattr(report, "expanded_names", ()) or ()),
-    }
 
 
 class LizyMLAdapter:
@@ -272,6 +199,11 @@ class LizyMLAdapter:
     def __init__(self) -> None:
         _check_lizyml_version()
         self._last_worker_thread: threading.Thread | None = None
+        # #116: Adapter-side config registry keyed by ``id(model)``. Replaces
+        # the previous ``model._widget_config`` private write. Used as the
+        # fallback path when reading task off lizyml's internal ``_cfg``
+        # also fails (e.g. an older / mocked model that lacks ``_cfg``).
+        self._model_configs: dict[int, dict[str, Any]] = {}
 
     @property
     def info(self) -> BackendInfo:
@@ -292,6 +224,18 @@ class LizyMLAdapter:
     _MODEL_METRIC_TO_EVAL = MODEL_METRIC_TO_EVAL
     _LGBM_PARAMS_TASK_INDEPENDENT = LGBM_PARAMS_TASK_INDEPENDENT
     _LGBM_PARAMS_BY_TASK = LGBM_PARAMS_BY_TASK
+
+    # Backward-compatible static aliases for helpers now living in
+    # ``adapter_internals`` (#137). Tests and external callers historically
+    # accessed these via ``LizyMLAdapter._<name>``; the aliases keep that
+    # interface stable.
+    _enforce_auto_num_leaves = staticmethod(enforce_auto_num_leaves)
+    _deep_merge = staticmethod(deep_merge)
+    _get_nested = staticmethod(get_nested)
+    _set_nested = staticmethod(set_nested)
+    _unset_nested = staticmethod(unset_nested)
+    _extract_defaults = staticmethod(extract_defaults)
+    _convert_metric_entries = staticmethod(convert_metric_entries)
 
     def classify_best_params(
         self,
@@ -315,7 +259,7 @@ class LizyMLAdapter:
     def initialize_config(self, *, task: str | None = None) -> dict[str, Any]:
         """Build the full initial config dict with backend-specific defaults."""
         schema = self.get_config_schema()
-        config = self._extract_defaults(schema)
+        config = extract_defaults(schema)
         config.setdefault("config_version", 1)
         if not config.get("output_dir"):
             config["output_dir"] = "outputs/"
@@ -353,15 +297,15 @@ class LizyMLAdapter:
         for op in ops:
             parts = op.path.split(".")
             if op.op == "set":
-                self._set_nested(result, parts, op.value)
+                set_nested(result, parts, op.value)
             elif op.op == "unset":
-                self._unset_nested(result, parts)
+                unset_nested(result, parts)
             elif op.op == "merge":
-                existing = self._get_nested(result, parts)
+                existing = get_nested(result, parts)
                 if isinstance(existing, dict) and isinstance(op.value, dict):
-                    self._set_nested(result, parts, {**existing, **op.value})
+                    set_nested(result, parts, {**existing, **op.value})
                 else:
-                    self._set_nested(result, parts, op.value)
+                    set_nested(result, parts, op.value)
 
         # ── Final canonical pass (single, after all ops) ──────
         # 1. Re-complete required fields
@@ -375,7 +319,7 @@ class LizyMLAdapter:
         cur_model.setdefault("name", "lgbm")
 
         # 2. Enforce auto_num_leaves exclusivity
-        result["model"] = self._enforce_auto_num_leaves(cur_model)
+        result["model"] = enforce_auto_num_leaves(cur_model)
 
         # 3. Normalize inner_valid
         result = normalize_inner_valid(result)
@@ -452,17 +396,6 @@ class LizyMLAdapter:
             return copy.deepcopy(config)
         return self.apply_config_patch(config, ops, task=task)
 
-    @staticmethod
-    def _enforce_auto_num_leaves(model: dict[str, Any]) -> dict[str, Any]:
-        """Return a new model dict with auto_num_leaves exclusivity enforced."""
-        auto_nl = model.get("auto_num_leaves", True)
-        params = dict(model.get("params", {}))
-        if auto_nl:
-            params.pop("num_leaves", None)
-        elif "num_leaves" not in params:
-            params["num_leaves"] = 256
-        return {**model, "params": params}
-
     # ── Canonicalize config ───────────────────────────────────
 
     # Keys managed by Service (df_info / build_config), not the widget config traitlet
@@ -473,27 +406,16 @@ class LizyMLAdapter:
     ) -> dict[str, Any]:
         """Canonicalize a partial/full config by merging with backend defaults."""
         defaults = self.initialize_config(task=task)
-        result = self._deep_merge(defaults, copy.deepcopy(config))
+        result = deep_merge(defaults, copy.deepcopy(config))
 
         # Strip Service-managed keys (data/features/split/task)
         for key in self._SERVICE_MANAGED_KEYS:
             result.pop(key, None)
 
         # Enforce auto_num_leaves exclusivity
-        result["model"] = self._enforce_auto_num_leaves(result.get("model", {}))
+        result["model"] = enforce_auto_num_leaves(result.get("model", {}))
 
         result = normalize_inner_valid(result)
-        return result
-
-    @staticmethod
-    def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-        """Recursively merge override into base. Override values take precedence."""
-        result = dict(base)
-        for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = LizyMLAdapter._deep_merge(result[key], value)
-            else:
-                result[key] = value
         return result
 
     def prepare_run_config(
@@ -512,117 +434,15 @@ class LizyMLAdapter:
             model = {**model, "name": "lgbm"}
 
         # Enforce auto_num_leaves exclusivity
-        result = {**result, "model": self._enforce_auto_num_leaves(model)}
+        result = {**result, "model": enforce_auto_num_leaves(model)}
 
         if job_type == "tune":
             result = prepare_tune_overrides(result)
 
         result = normalize_inner_valid(result)
         result = enforce_iv_exclusivity(result)
-        result = self._convert_metric_entries(result)
+        result = convert_metric_entries(result)
         return strip_for_backend(result)
-
-    @staticmethod
-    def _convert_metric_entries(config: dict[str, Any]) -> dict[str, Any]:
-        """Convert widget-only _precision_at_k_k to MetricEntry dict form.
-
-        Transforms ``model.params.metric`` entries:
-        - ``"precision_at_k"`` + ``_precision_at_k_k=20``
-          → ``{"precision_at_k": {"k": 20}}``
-        - Strips ``_precision_at_k_k`` from params regardless.
-        """
-        model = config.get("model")
-        if not isinstance(model, dict):
-            return config
-        params = model.get("params")
-        if not isinstance(params, dict):
-            return config
-
-        metric = params.get("metric")
-        pak_k = params.get("_precision_at_k_k")
-
-        new_params = {k: v for k, v in params.items() if k != "_precision_at_k_k"}
-
-        if isinstance(metric, list) and "precision_at_k" in metric and pak_k is not None:
-            new_metric = [
-                {"precision_at_k": {"k": int(pak_k)}} if m == "precision_at_k" else m
-                for m in metric
-            ]
-            new_params = {**new_params, "metric": new_metric}
-
-        return {**config, "model": {**model, "params": new_params}}
-
-    # ── Config patch helpers ──────────────────────────────────
-
-    @staticmethod
-    def _get_nested(obj: dict[str, Any], parts: list[str]) -> Any:
-        """Get a value at a dot-path inside a nested dict."""
-        current: Any = obj
-        for part in parts:
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
-        return current
-
-    @staticmethod
-    def _set_nested(obj: dict[str, Any], parts: list[str], value: Any) -> None:
-        """Set a value at a dot-path inside a nested dict, creating intermediates."""
-        current = obj
-        for part in parts[:-1]:
-            if part not in current or not isinstance(current[part], dict):
-                current[part] = {}
-            current = current[part]
-        current[parts[-1]] = value
-
-    @staticmethod
-    def _unset_nested(obj: dict[str, Any], parts: list[str]) -> None:
-        """Remove a key at a dot-path inside a nested dict."""
-        current = obj
-        for part in parts[:-1]:
-            if part not in current or not isinstance(current[part], dict):
-                return
-            current = current[part]
-        current.pop(parts[-1], None)
-
-    @staticmethod
-    def _extract_defaults(schema: dict[str, Any]) -> dict[str, Any]:
-        """Walk a JSON Schema and extract default values into a config dict."""
-
-        def _resolve(node: dict[str, Any], root: dict[str, Any]) -> dict[str, Any]:
-            if "$ref" in node:
-                parts = node["$ref"].lstrip("#/").split("/")
-                ref_node: Any = root
-                for part in parts:
-                    ref_node = ref_node.get(part, {})
-                merged = dict(ref_node)
-                merged.update({k: v for k, v in node.items() if k != "$ref"})
-                return merged
-            if "allOf" in node and len(node["allOf"]) == 1 and "$ref" in node["allOf"][0]:
-                resolved = _resolve(node["allOf"][0], root)
-                resolved.update({k: v for k, v in node.items() if k != "allOf"})
-                return resolved
-            return node
-
-        def _walk(node: dict[str, Any], root: dict[str, Any]) -> Any:
-            node = _resolve(node, root)
-            if node.get("type") == "object" and "properties" in node:
-                obj: dict[str, Any] = {}
-                for key, prop in node["properties"].items():
-                    prop = _resolve(prop, root)
-                    if "default" in prop:
-                        obj[key] = prop["default"]
-                    elif prop.get("type") == "object" and "properties" in prop:
-                        child = _walk(prop, root)
-                        if child:
-                            obj[key] = child
-                return obj
-            if "default" in node:
-                return node["default"]
-            return {}
-
-        result = _walk(schema, schema)
-        return result if isinstance(result, dict) else {}
 
     # ── Config validation ─────────────────────────────────────
 
@@ -695,8 +515,16 @@ class LizyMLAdapter:
         from lizyml.core.model import Model
 
         model = Model(config, data=dataframe)
-        model._widget_config = copy.deepcopy(config)  # type: ignore[attr-defined]  # noqa: SLF001
+        # #116: register the config in the adapter rather than writing a
+        # private attr onto the lizyml object. The fallback in
+        # ``_task_for_model`` reads from this registry when ``model._cfg``
+        # is unavailable.
+        self._model_configs[id(model)] = copy.deepcopy(config)
         return model
+
+    def _task_for_model(self, model: Any) -> str:
+        """Return the task for *model* (delegates to ``adapter_results``)."""
+        return task_for_model(model, self._model_configs)
 
     def _run_with_cancel_polling(
         self,
@@ -762,9 +590,10 @@ class LizyMLAdapter:
             lambda: model.fit(params=params),
             on_progress,
         )
+        view = view_fit_result(result)
         return FitSummary(
-            metrics=result.metrics,
-            fold_count=len(getattr(getattr(result, "splits", None), "outer", [])),
+            metrics=view.metrics,
+            fold_count=view.fold_count,
             params=model.params_table().reset_index().to_dict(orient="records"),
         )
 
@@ -806,27 +635,20 @@ class LizyMLAdapter:
         if on_progress is not None:
 
             def progress_cb(info: TuneProgressInfo) -> None:
-                msg = f"Trial {info.current_trial}/{info.total_trials}"
-                if info.best_score is not None:
-                    msg += f" (best: {info.best_score:.4f})"
-                # Re-tune fields (lizyml>=0.9.0 only).  Default to sane
-                # single-round values so the widget traitlet can assume the
-                # keys are always present.
-                round_no = int(getattr(info, "round", 1) or 1)
-                cumulative = int(
-                    getattr(info, "cumulative_trials", info.current_trial) or info.current_trial
-                )
-                expanded = tuple(getattr(info, "expanded_dims", ()) or ())
+                view = view_tune_progress(info)
+                msg = f"Trial {view.current_trial}/{view.total_trials}"
+                if view.best_score is not None:
+                    msg += f" (best: {view.best_score:.4f})"
                 on_progress(
-                    info.current_trial,
-                    info.total_trials,
+                    view.current_trial,
+                    view.total_trials,
                     msg,
-                    round=round_no,
-                    cumulative_trials=cumulative,
-                    expanded_dims=list(expanded),
-                    latest_score=info.latest_score,
-                    latest_state=info.latest_state,
-                    best_score=info.best_score,
+                    round=view.round,
+                    cumulative_trials=view.cumulative_trials,
+                    expanded_dims=list(view.expanded_dims),
+                    latest_score=view.latest_score,
+                    latest_state=view.latest_state,
+                    best_score=view.best_score,
                 )
 
         def _cancel_only(_c: int, _t: int, _m: str) -> None:
@@ -854,15 +676,16 @@ class LizyMLAdapter:
             lambda: model.tune(**tune_kwargs),
             _cancel_only,
         )
+        view = view_tuning_result(result)
 
         return TuningSummary(
-            best_params=result.best_params,
-            best_score=result.best_score,
-            trials=_serialize_trials(result.trials),
-            metric_name=result.metric_name,
-            direction=result.direction,
-            rounds=_serialize_rounds(getattr(result, "rounds", ())),
-            boundary_report=_serialize_boundary_report(getattr(result, "boundary_report", None)),
+            best_params=view.best_params,
+            best_score=view.best_score,
+            trials=_serialize_trials(view.raw_trials),
+            metric_name=view.metric_name,
+            direction=view.direction,
+            rounds=_serialize_rounds(view.rounds),
+            boundary_report=_serialize_boundary_report(view.boundary_report),
         )
 
     def predict(
@@ -874,12 +697,17 @@ class LizyMLAdapter:
     ) -> PredictionSummary:
         import numpy as np
 
+        # P-030: lizyml>=0.10 returns ``result.pred`` already decoded back to
+        # the original target dtype (e.g. "Adelie" rather than int code 2)
+        # via ``FitResult.target_encoder``. Pandas preserves that dtype when
+        # we wrap it directly, so no extra conversion is needed here.
         result = model.predict(data, return_shap=return_shap)
-        df = pd.DataFrame({"pred": result.pred})
+        view = view_prediction_result(result)
+        df = pd.DataFrame({"pred": view.pred})
 
         # Proba: expand 2D (multiclass) into per-class columns
-        if result.proba is not None:
-            proba = np.asarray(result.proba)
+        if view.proba is not None:
+            proba = np.asarray(view.proba)
             if proba.ndim == 2:
                 for i in range(proba.shape[1]):
                     df[f"proba_{i}"] = proba[:, i]
@@ -887,22 +715,32 @@ class LizyMLAdapter:
                 df["proba"] = proba
 
         # SHAP values: include if available
-        shap_values = getattr(result, "shap_values", None)
-        if shap_values is not None:
-            shap_arr = np.asarray(shap_values)
+        if view.shap_values is not None:
+            shap_arr = np.asarray(view.shap_values)
             if shap_arr.ndim == 2:
                 feature_names = list(data.columns)
                 for i, name in enumerate(feature_names):
                     if i < shap_arr.shape[1]:
                         df[f"shap_{name}"] = shap_arr[:, i]
 
-        return PredictionSummary(predictions=df, warnings=result.warnings)
+        return PredictionSummary(predictions=df, warnings=view.warnings)
 
     def evaluate_table(self, model: Any) -> list[dict[str, Any]]:
+        # Unfit models raise ``LizyMLError(MODEL_NOT_FIT)`` from
+        # ``Model.evaluate_table`` (lizyml >= 0.10). The widget's tune
+        # path ends with an unfit model when the user did not run fit
+        # first, so callers across both ThreadJobRunner and the
+        # subprocess entry uniformly want an empty list rather than a
+        # surfaced backend error. Centralising the guard here keeps the
+        # rule in one place (#147 / P-036).
+        if not is_model_fitted(model):
+            return []
         df: pd.DataFrame = model.evaluate_table()
         return list(df.reset_index().to_dict(orient="records"))  # type: ignore[arg-type]
 
     def split_summary(self, model: Any) -> list[dict[str, Any]]:
+        if not is_model_fitted(model):
+            return []
         df: pd.DataFrame = model.split_summary()
         return list(df.to_dict(orient="records"))  # type: ignore[arg-type]
 
@@ -910,134 +748,111 @@ class LizyMLAdapter:
         return model.importance(kind=kind)  # type: ignore[no-any-return]
 
     def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData:
-        plot_methods: dict[str, Callable[..., Any]] = {
-            "learning-curve": model.plot_learning_curve,
-            "oof-distribution": model.plot_oof_distribution,
-            "residuals": model.residuals_plot,
-            "roc-curve": model.roc_curve_plot,
-            "calibration": model.calibration_plot,
-            "probability-histogram": model.probability_histogram_plot,
-            "feature-importance-split": lambda: model.importance_plot(kind="split"),
-            "feature-importance-gain": lambda: model.importance_plot(kind="gain"),
-            "feature-importance-shap": lambda: model.importance_plot(kind="shap"),
-            "optimization-history": model.tuning_plot,
-        }
-        method = plot_methods.get(plot_type)
-        if method is None:
-            msg = f"Unknown plot type: {plot_type}"
-            raise ValueError(msg)
-        # Forward metrics filter to learning-curve only (P-026)
-        if plot_type == "learning-curve":
-            lc_kwargs: dict[str, Any] = {}
-            metrics = kwargs.get("metrics")
-            if metrics:  # skip None and empty list → fall back to all metrics
-                lc_kwargs["metrics"] = metrics
-            fig = method(**lc_kwargs) if lc_kwargs else method()
-        else:
-            fig = method()
-        return PlotData(plotly_json=fig.to_json())
+        return render_plot(model, plot_type, **kwargs)
 
     def available_plots(self, model: Any) -> list[str]:
-        # Extract task safely: try _cfg (LizyML internal), then widget fallback
-        task: str = ""
-        try:
-            task = model._cfg.task  # noqa: SLF001
-        except AttributeError:
-            cfg = getattr(model, "_widget_config", {})
-            task = cfg.get("task", "")
-
-        # Check if model has been fitted (not just tuned) — P-004 R4
-        is_fitted = False
-        with contextlib.suppress(Exception):
-            is_fitted = model.fit_result is not None
-
-        has_calibration = False
-        with contextlib.suppress(Exception):
-            has_calibration = is_fitted and model.fit_result.calibrator is not None
-
-        has_tuning = getattr(model, "_tuning_result", None) is not None
-
-        plots: list[str] = []
-
-        # Fit-dependent plots only when model is fitted
-        if is_fitted:
-            plots.extend(["learning-curve", "oof-distribution"])
-            if task == "regression":
-                plots.append("residuals")
-            if task == "binary":
-                plots.append("roc-curve")
-                if has_calibration:
-                    plots.append("calibration")
-                    plots.append("probability-histogram")
-            if task == "multiclass":
-                plots.append("roc-curve")
-            plots.extend(
-                [
-                    "feature-importance-split",
-                    "feature-importance-gain",
-                    "feature-importance-shap",
-                ]
-            )
-
-        # Tune-dependent plots
-        if has_tuning:
-            plots.append("optimization-history")
-        return plots
+        # #116: task lookup centralised in _task_for_model (registry-backed
+        # fallback replaces the legacy ``_widget_config`` private read).
+        task = self._task_for_model(model)
+        return list_available_plots(model, task)
 
     def plot_inference(self, predictions: pd.DataFrame, plot_type: str) -> PlotData:
         """Generate Plotly plots from inference results (not part of Protocol)."""
-        try:
-            import plotly.graph_objects as go  # type: ignore[import-untyped]
-        except ImportError as e:
-            msg = "plotly is required for inference plots"
-            raise ImportError(msg) from e
-
-        if plot_type == "prediction-distribution":
-            # Find prediction column: prefer columns starting with "pred", fallback to last column
-            pred_col = next(
-                (c for c in predictions.columns if c.startswith("pred")),
-                predictions.columns[-1],
-            )
-            fig = go.Figure()
-            fig.add_trace(go.Histogram(x=predictions[pred_col], name="Predictions"))
-            fig.update_layout(
-                title="Prediction Distribution",
-                xaxis_title="Predicted Value",
-                yaxis_title="Count",
-            )
-            return PlotData(plotly_json=fig.to_json())
-
-        if plot_type == "shap-summary":
-            # SHAP columns are prefixed with "shap_"
-            shap_cols = [c for c in predictions.columns if c.startswith("shap_")]
-            if not shap_cols:
-                msg = "No SHAP values available. Run inference with return_shap=True."
-                raise ValueError(msg)
-            mean_abs_shap = predictions[shap_cols].abs().mean().sort_values(ascending=True)
-            feature_names = [c.replace("shap_", "", 1) for c in mean_abs_shap.index]
-            fig = go.Figure()
-            fig.add_trace(
-                go.Bar(
-                    x=mean_abs_shap.values,
-                    y=feature_names,
-                    orientation="h",
-                    name="Mean |SHAP|",
-                )
-            )
-            fig.update_layout(
-                title="SHAP Summary",
-                xaxis_title="Mean |SHAP value|",
-                yaxis_title="Feature",
-                height=max(300, len(shap_cols) * 25),
-            )
-            return PlotData(plotly_json=fig.to_json())
-
-        msg = f"Unknown inference plot type: {plot_type}"
-        raise ValueError(msg)
+        return render_inference_plot(predictions, plot_type)
 
     def export_model(self, model: Any, path: str) -> str:
         model.export(path)
         return path
+
+    def export_tune_state(self, model: Any, path: str) -> None:
+        """Persist tune state for IPC across the subprocess boundary (P-037, P-038).
+
+        Writes a pickle blob containing the lizyml ``Model`` state required
+        to resume tuning in a different process:
+
+        - ``tuning_result``: always present. Drives ``optimization-history``
+          plot rendering on the parent (P-037).
+        - ``study``: Optuna study handle, best-effort — silently dropped
+          when not pickleable (e.g., RDB-backed storage).
+        - ``round_number`` / ``rounds`` / ``space`` / ``used_default_space``:
+          added for P-038 (subprocess retune resume). lizyml's
+          ``Model.tune(resume=True)`` reads these instance attributes to
+          build the cumulative ``rounds`` list and to reuse the original
+          search space; without them, retune appears to succeed but
+          discards previous rounds (only the new round shows up in
+          ``tune_summary.rounds``).
+
+        Raises:
+            ValueError: when *model* has no tune state to export. Callers
+                MUST gate this on tune completion; calling on a fresh
+                model is a programming error.
+        """
+        tuning_result = getattr(model, "_tuning_result", None)
+        if tuning_result is None:
+            msg = "Model has no tune state to export (run tune() first)"
+            raise ValueError(msg)
+
+        blob: dict[str, Any] = {
+            "tuning_result": tuning_result,
+            "study": None,
+            # P-038: round bookkeeping. Pulled via getattr so older lizyml
+            # versions that lack any of these attributes still produce a
+            # blob (the corresponding restore step skips missing keys).
+            "round_number": getattr(model, "_round_number", 0),
+            "rounds": list(getattr(model, "_rounds", [])),
+            "space": getattr(model, "_space", None),
+            "used_default_space": getattr(model, "_used_default_space", False),
+        }
+
+        study = getattr(model, "_study", None)
+        if study is not None:
+            try:
+                pickle.dumps(study)
+            except Exception as study_err:  # noqa: BLE001 — study is opaque
+                _log.warning(
+                    "tune-state export: dropping non-pickleable study (%s)",
+                    study_err,
+                )
+            else:
+                blob["study"] = study
+
+        with open(path, "wb") as f:  # noqa: PTH123
+            pickle.dump(blob, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def restore_tune_state(self, model: Any, path: str) -> None:
+        """Reattach tune state onto *model* from an IPC blob (P-037, P-038).
+
+        Reads what :meth:`export_tune_state` wrote and assigns the
+        corresponding ``Model`` private attributes. P-037 keys
+        (``tuning_result`` / ``study``) are always restored; P-038 keys
+        (``round_number`` / ``rounds`` / ``space`` / ``used_default_space``)
+        are restored when present so subprocess retune accumulates rounds
+        correctly. Backward compat: blobs written by a P-037-only export
+        still restore ``_tuning_result`` (plot rendering keeps working).
+
+        The model remains unfit — INV-2 keeps ``is_model_fitted`` False so
+        downstream guards (``available_plots``, ``evaluate_table``)
+        continue to behave correctly.
+        """
+        with open(path, "rb") as f:  # noqa: PTH123
+            blob = pickle.load(f)  # noqa: S301 — trusted, written by us
+
+        # Private slot writes are allowed inside the adapter only.
+        model._tuning_result = blob.get("tuning_result")  # noqa: SLF001
+        study = blob.get("study")
+        if study is not None:
+            model._study = study  # noqa: SLF001
+        # P-038: restore round bookkeeping when present. Older blobs
+        # (P-037) lack these keys; skipping them leaves lizyml's defaults
+        # intact, which is what plot-only restore needs anyway.
+        if "round_number" in blob:
+            model._round_number = blob["round_number"]  # noqa: SLF001
+        if "rounds" in blob:
+            model._rounds = list(blob["rounds"])  # noqa: SLF001
+        if "space" in blob:
+            model._space = blob["space"]  # noqa: SLF001
+        if "used_default_space" in blob:
+            model._used_default_space = blob["used_default_space"]  # noqa: SLF001
 
     def export_code(self, model: Any, path: str) -> Any:
         """Export inference code for the trained model."""
@@ -1055,13 +870,16 @@ class LizyMLAdapter:
         info: dict[str, Any] = {"loaded": True}
 
         # Extract model params if available
+        import contextlib
+
         with contextlib.suppress(Exception):
             params_df = model.params_table()
             if params_df is not None:
                 info["params"] = params_df.reset_index().to_dict(orient="records")
 
-        # Extract task from config
-        with contextlib.suppress(Exception):
-            info["task"] = model._cfg.task  # noqa: SLF001
+        # #116: task lookup centralised in _task_for_model.
+        task = self._task_for_model(model)
+        if task:
+            info["task"] = task
 
         return info

@@ -88,12 +88,13 @@ def _capture_log(logger: logging.Logger, level: int = logging.WARNING):
 class TestInfo:
     # P-027: adapter.__init__ now asserts lizyml is in the supported range,
     # so the sentinel version must fall within LIZYML_MIN/MAX.
-    @patch.dict("sys.modules", {"lizyml": MagicMock(__version__="0.9.1")})
+    # P-030: window bumped to >=0.10.0,<0.13.0.
+    @patch.dict("sys.modules", {"lizyml": MagicMock(__version__="0.12.0")})
     def test_info(self) -> None:
         adapter = LizyMLAdapter()
         info = adapter.info
         assert info.name == "lizyml"
-        assert info.version == "0.9.1"
+        assert info.version == "0.12.0"
 
 
 class TestConfigContractValidation:
@@ -468,11 +469,17 @@ class TestAvailablePlots:
         assert "optimization-history" in plots
 
     def test_available_plots_fallback_when_no_cfg(self) -> None:
+        """#116: when model lacks `_cfg`, the adapter falls back to its own
+        config registry (no longer to a `_widget_config` attribute on the model).
+        """
         adapter = LizyMLAdapter()
-        mock_model = MagicMock(spec=[])
-        mock_model._widget_config = {"task": "binary"}
+        mock_model = MagicMock(spec=["fit_result"])
         mock_model.fit_result = MagicMock()
         mock_model.fit_result.calibrator = None
+        # Seed the adapter-side config registry directly to simulate the
+        # path where `create_model` ran but `model._cfg` is absent (e.g. a
+        # mocked or a partially-loaded model).
+        adapter._model_configs[id(mock_model)] = {"task": "binary"}
 
         plots = adapter.available_plots(mock_model)
         assert "roc-curve" in plots
@@ -530,6 +537,37 @@ class TestResultDelegation:
         )
         result = adapter.split_summary(mock_model)
         assert len(result) == 2
+
+    def test_evaluate_table_returns_empty_on_unfit_model(self) -> None:
+        """#147 / P-036: ``model.tune()`` does not auto-fit. The adapter
+        must not propagate the underlying ``LizyMLError(MODEL_NOT_FIT)``
+        when the result tables are read on an unfit instance — return an
+        empty list so callers (ThreadJobRunner / subprocess entry) do not
+        need exception-based control flow.
+        """
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_model.fit_result = None  # unfit
+        # Even if model.evaluate_table is wired up to raise, the adapter
+        # must short-circuit before calling it.
+        mock_model.evaluate_table.side_effect = RuntimeError(
+            "Model has not been fitted. Call fit() first."
+        )
+        result = adapter.evaluate_table(mock_model)
+        assert result == []
+        mock_model.evaluate_table.assert_not_called()
+
+    def test_split_summary_returns_empty_on_unfit_model(self) -> None:
+        """Mirror of ``test_evaluate_table_returns_empty_on_unfit_model``."""
+        adapter = LizyMLAdapter()
+        mock_model = MagicMock()
+        mock_model.fit_result = None
+        mock_model.split_summary.side_effect = RuntimeError(
+            "Model has not been fitted. Call fit() first."
+        )
+        result = adapter.split_summary(mock_model)
+        assert result == []
+        mock_model.split_summary.assert_not_called()
 
     def test_importance(self) -> None:
         adapter = LizyMLAdapter()
@@ -742,10 +780,10 @@ class TestShapOutput:
         assert shap_cols == []
 
 
-class TestCreateModelWidgetConfig:
-    """create_model should attach _widget_config to the model."""
+class TestCreateModelConfigRegistry:
+    """#116: create_model registers the config in the adapter (no private write to model)."""
 
-    def test_widget_config_attached(self) -> None:
+    def test_config_registered_in_adapter(self) -> None:
         adapter = LizyMLAdapter()
         config = adapter.initialize_config(task="binary")
         config.update(
@@ -758,10 +796,32 @@ class TestCreateModelWidgetConfig:
         )
         df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
         model = adapter.create_model(config, df)
-        assert hasattr(model, "_widget_config")
-        assert model._widget_config["task"] == "binary"
-        # Should be a deep copy, not the same object
-        assert model._widget_config is not config
+
+        # The config must be retrievable from the adapter via id(model).
+        registered = adapter._model_configs[id(model)]
+        assert registered["task"] == "binary"
+        # Deep copy invariant: mutating the registry copy must not touch
+        # the caller's config dict.
+        registered["task"] = "regression"
+        assert config["task"] == "binary"
+
+    def test_no_private_attribute_on_model(self) -> None:
+        """#116: the legacy ``model._widget_config`` private attribute is gone."""
+        adapter = LizyMLAdapter()
+        config = adapter.initialize_config(task="binary")
+        config.update(
+            {
+                "task": "binary",
+                "data": {"target": "y"},
+                "features": {"categorical": [], "exclude": []},
+                "split": {"method": "kfold", "n_splits": 3, "random_state": 42},
+            }
+        )
+        df = pd.DataFrame({"x": range(50), "y": [0, 1] * 25})
+        model = adapter.create_model(config, df)
+        assert not hasattr(model, "_widget_config"), (
+            "create_model should no longer attach _widget_config to the model"
+        )
 
 
 class TestCancelPollingErrorPropagation:

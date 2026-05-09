@@ -37,8 +37,15 @@ export function ConfigTab({
   const configSchema = backendContract?.config_schema ?? {};
   const optionSets: Record<string, Record<string, string[]>> = uiSchema.option_sets ?? {};
 
-  // Sync from Python → local when Python config changes externally
+  // Sync from Python → local when Python config changes externally.
+  // #136: also cancel any pending debounce timer; otherwise it fires
+  // later and computes a patch against a stale baseline, silently
+  // overwriting Python's push.
   useEffect(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     setLocalConfig(config);
     lastSentRef.current = config;
   }, [config]);
@@ -201,6 +208,7 @@ export function ConfigTab({
             localConfig={localConfig}
             configSchema={configSchema}
             uiSchema={uiSchema}
+            capabilities={capabilities}
             task={task}
             dfInfo={dfInfo}
             handleChange={handleChange}

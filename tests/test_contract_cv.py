@@ -91,6 +91,30 @@ class TestCvStrategyFieldsCapabilities:
         assert ds["multiclass"] == "stratified_kfold"
         assert ds["regression"] == "kfold"
 
+    def test_cv_strategy_labels_present(self) -> None:
+        """#119: every cv_strategies entry must have a human-readable label."""
+        from lizyml_widget.adapter_contract import build_capabilities
+
+        caps = build_capabilities()
+        assert "cv_strategy_labels" in caps
+        labels = caps["cv_strategy_labels"]
+        for strategy in caps["cv_strategies"]:
+            assert strategy in labels, f"{strategy} missing from cv_strategy_labels"
+            assert isinstance(labels[strategy], str)
+            assert labels[strategy]  # non-empty
+
+    def test_additional_params_hidden_keys_present(self) -> None:
+        """#119: backend declares which param keys to hide from Additional Params UI."""
+        from lizyml_widget.adapter_contract import build_capabilities
+
+        caps = build_capabilities()
+        assert "additional_params_hidden_keys" in caps
+        hidden = caps["additional_params_hidden_keys"]
+        assert isinstance(hidden, list)
+        # verbose / num_threads stay backend-internal even when set on params
+        assert "verbose" in hidden
+        assert "num_threads" in hidden
+
 
 class TestSpecialSearchSpaceFields:
     """build_ui_schema() must expose special_search_space_fields."""
@@ -163,12 +187,13 @@ class TestServiceCvDelegation:
         # Task not in contract defaults -> fallback
         assert svc._default_strategy_for_task("unknown_task") == "kfold"
 
-    def test_default_strategy_fallback_on_adapter_error(self) -> None:
+    def test_default_strategy_fallback_on_contract_shape_error(self) -> None:
+        """KeyError/AttributeError on contract -> fall back silently (with debug log)."""
         from lizyml_widget.service import WidgetService
 
         adapter = MagicMock()
         adapter.info = {"name": "test", "version": "0.0.0"}
-        adapter.get_backend_contract.side_effect = RuntimeError("no contract")
+        adapter.get_backend_contract.side_effect = AttributeError("missing field")
         adapter.initialize_config.return_value = {
             "model": {"name": "lgbm", "params": {}},
             "training": {},
@@ -177,6 +202,23 @@ class TestServiceCvDelegation:
         assert svc._default_strategy_for_task("binary") == "stratified_kfold"
         assert svc._default_strategy_for_task("regression") == "kfold"
 
+    def test_default_strategy_propagates_unexpected_error(self) -> None:
+        """Non-shape errors (e.g., RuntimeError) must propagate, not silently fall back."""
+        import pytest
+
+        from lizyml_widget.service import WidgetService
+
+        adapter = MagicMock()
+        adapter.info = {"name": "test", "version": "0.0.0"}
+        adapter.get_backend_contract.side_effect = RuntimeError("backend dead")
+        adapter.initialize_config.return_value = {
+            "model": {"name": "lgbm", "params": {}},
+            "training": {},
+        }
+        svc = WidgetService(adapter)
+        with pytest.raises(RuntimeError, match="backend dead"):
+            svc._default_strategy_for_task("binary")
+
     def test_default_cv_state_from_contract(self, service_with_adapter: Any) -> None:
         svc = service_with_adapter
         state = svc._default_cv_state(strategy="kfold", n_splits=3)
@@ -184,12 +226,13 @@ class TestServiceCvDelegation:
         assert state["shuffle"] is False
         assert state["gap"] == 5
 
-    def test_default_cv_state_fallback_on_error(self) -> None:
+    def test_default_cv_state_fallback_on_contract_shape_error(self) -> None:
+        """KeyError/AttributeError on contract -> fall back to documented defaults."""
         from lizyml_widget.service import WidgetService
 
         adapter = MagicMock()
         adapter.info = {"name": "test", "version": "0.0.0"}
-        adapter.get_backend_contract.side_effect = RuntimeError("no contract")
+        adapter.get_backend_contract.side_effect = KeyError("cv_defaults")
         adapter.initialize_config.return_value = {
             "model": {"name": "lgbm", "params": {}},
             "training": {},
@@ -200,6 +243,23 @@ class TestServiceCvDelegation:
         assert state["random_state"] == 42
         assert state["shuffle"] is True
         assert state["gap"] == 0
+
+    def test_default_cv_state_propagates_unexpected_error(self) -> None:
+        """Non-shape errors must propagate, not be silently swallowed."""
+        import pytest
+
+        from lizyml_widget.service import WidgetService
+
+        adapter = MagicMock()
+        adapter.info = {"name": "test", "version": "0.0.0"}
+        adapter.get_backend_contract.side_effect = RuntimeError("backend dead")
+        adapter.initialize_config.return_value = {
+            "model": {"name": "lgbm", "params": {}},
+            "training": {},
+        }
+        svc = WidgetService(adapter)
+        with pytest.raises(RuntimeError, match="backend dead"):
+            svc._default_cv_state(strategy="kfold", n_splits=5)
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +294,57 @@ class TestDataTabContractDriven:
         data_tab_section = content[data_tab_idx : data_tab_idx + 500]
         assert "backendContract" in data_tab_section, (
             "App.tsx should pass backendContract to DataTab"
+        )
+
+    def test_data_tab_has_no_static_cv_strategies_array(self) -> None:
+        """#119: the CV_STRATEGIES literal array is removed; dropdown is contract-driven."""
+        content = (JS_SRC / "tabs" / "DataTab.tsx").read_text()
+        assert "const CV_STRATEGIES" not in content, (
+            "DataTab should no longer ship a static CV_STRATEGIES literal — "
+            "read from backend_contract.capabilities.cv_strategies instead."
+        )
+
+    def test_data_tab_reads_cv_strategies_from_contract(self) -> None:
+        """#119: dropdown options sourced from backend contract."""
+        content = (JS_SRC / "tabs" / "DataTab.tsx").read_text()
+        assert "capabilities.cv_strategies" in content, (
+            "DataTab should read cv_strategies from contract capabilities."
+        )
+        assert "cv_strategy_labels" in content, (
+            "DataTab should read cv_strategy_labels from contract capabilities."
+        )
+
+
+class TestModelEditorsContractDriven:
+    """#119: ModelEditors must source LightGBM-specific keys from the backend contract."""
+
+    def test_model_editors_no_static_handled_model_fields(self) -> None:
+        content = (JS_SRC / "components" / "ModelEditors.tsx").read_text()
+        # The legacy literal `const HANDLED_MODEL_FIELDS = new Set([...])` must be gone.
+        assert "const HANDLED_MODEL_FIELDS = new Set" not in content, (
+            "Static HANDLED_MODEL_FIELDS literal should be replaced by a "
+            "catalog-derived set (smart_params + structural keys)."
+        )
+
+    def test_model_editors_no_num_leaves_default_literal(self) -> None:
+        content = (JS_SRC / "components" / "ModelEditors.tsx").read_text()
+        # `??\s*256` literal default is gone — default flows from contract default.
+        assert "?? 256" not in content, (
+            "num_leaves default 256 literal must be removed; the default lives "
+            "in backend search_space_catalog and propagates via props."
+        )
+
+    def test_model_editors_excludes_via_contract_keys(self) -> None:
+        content = (JS_SRC / "components" / "ModelEditors.tsx").read_text()
+        # Hardcoded "verbose" / "num_threads" exclusions in the Set literal must be gone.
+        # Acceptable references: only the prop name `additionalParamsHiddenKeys`.
+        assert '"verbose", "num_leaves", "num_threads"' not in content, (
+            "Hardcoded LightGBM-specific exclusion list should route through "
+            "additionalParamsHiddenKeys / smart_params keys from contract."
+        )
+        assert "additionalParamsHiddenKeys" in content, (
+            "ModelEditors should accept the additional_params_hidden_keys list "
+            "from the backend contract."
         )
 
 

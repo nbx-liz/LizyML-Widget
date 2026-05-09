@@ -39,6 +39,8 @@ interface ResultsTabProps {
   error: Record<string, any>;
   plots: Record<string, any>;
   plotLoading: Record<string, boolean>;
+  /** P-037 / #152: per-plot error messages (set when service.get_plot raises). */
+  plotErrors?: Record<string, string>;
   onRequestPlot: (plotType: string, options?: PlotRequestOptions) => void;
   sendAction: (type: string, payload?: Record<string, any>) => void;
   onSwitchToFit?: () => void;
@@ -49,6 +51,8 @@ interface ResultsTabProps {
   exportLoading?: boolean;
   /** Callback to initiate a code export download. */
   onExportCode?: () => void;
+  /** P-034: backend contract step_map (passed through to RetuneControls etc.). */
+  stepMap?: Record<string, number>;
 }
 
 /** Format a plot type slug into a display label. */
@@ -75,6 +79,7 @@ export function ResultsTab({
   error,
   plots,
   plotLoading,
+  plotErrors,
   onRequestPlot,
   sendAction,
   onSwitchToFit,
@@ -82,6 +87,7 @@ export function ResultsTab({
   theme = "light",
   exportLoading = false,
   onExportCode,
+  stepMap,
 }: ResultsTabProps) {
   const [selectedPlot, setSelectedPlot] = useState<string | null>(null);
 
@@ -267,6 +273,7 @@ export function ResultsTab({
             <RetuneControls
               disabled={status === "running"}
               onRetune={(payload) => sendAction("retune", payload)}
+              stepMap={stepMap}
             />
             <div class="lzw-form-row" style="margin-top: 8px;">
               <span class="lzw-label">Best Score</span>
@@ -353,6 +360,7 @@ export function ResultsTab({
                 plotType="optimization-history"
                 plots={plots}
                 loading={plotLoading}
+                errors={plotErrors}
                 onRequest={handlePlotRequest}
                 theme={theme}
               />
@@ -409,6 +417,7 @@ export function ResultsTab({
               plotType={activePlot}
               plots={plots}
               loading={plotLoading}
+              errors={plotErrors}
               onRequest={handlePlotRequest}
               theme={theme}
             />

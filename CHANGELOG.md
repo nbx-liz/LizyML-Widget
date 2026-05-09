@@ -7,6 +7,293 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-09
+
+### Fixed
+- **Default-install ``w.retune()`` runs through subprocess and no longer surfaces ``RETUNE_SUBPROCESS_UNSUPPORTED`` (P-038, [#154](https://github.com/nbx-liz/LizyML-Widget/issues/154), [#156](https://github.com/nbx-liz/LizyML-Widget/issues/156))**.
+  After P-036 made subprocess the default on Linux + libgomp,
+  ``w.tune() → w.retune()`` failed by default because the subprocess could
+  not resume the existing Optuna study. P-038 extends the P-037 tune-state
+  IPC to the input direction so the parent serialises the current
+  ``service._tune_model`` tune state into a temp file, the subprocess
+  restores it via ``adapter.restore_tune_state``, then runs
+  ``adapter.tune(resume=True, ...)``. ``RetuneSubprocessUnsupportedError``
+  and the ``RETUNE_SUBPROCESS_UNSUPPORTED`` error code are removed, and the
+  ``widget._run_job`` thread-fallback branch is gone. Empirical perf
+  (100k × 50, 3 trials, libgomp host): clean retune is now within ~1.1x of
+  subprocess tune (was 1.43x with the thread fallback), and the
+  ``tune → main-thread booster.predict → retune`` flow stays within ~1.1x
+  instead of regressing to ~11x via the libgomp pool-affinity catastrophe.
+  Closes [#128](https://github.com/nbx-liz/LizyML-Widget/issues/128).
+- **Persist tune state across subprocess boundary so post-tune plots render on the parent (P-037, [#152](https://github.com/nbx-liz/LizyML-Widget/issues/152))**.
+  After P-036 made subprocess the default on Linux + libgomp, ``w.tune()``
+  followed by Results → Tuning History got stuck at "Loading plot..." because
+  ``model.export()`` (called via the existing ``export_model`` path) raises
+  ``MODEL_NOT_FIT`` for tune-only state, the exception was silently swallowed,
+  and the parent never received a model. ``BackendAdapter`` now exposes
+  ``export_tune_state`` / ``restore_tune_state``: the subprocess pickles
+  ``_tuning_result`` (always) and ``_study`` (best-effort, omitted when not
+  pickleable) to a temp file, and the parent reattaches it onto a freshly
+  created model so ``service.get_plot("optimization-history")`` works without
+  re-fitting. ``_subprocess_entry.py`` no longer attempts ``export_model`` on a
+  tune-only run, and ``PlotViewer`` now clears its loading state on
+  ``plot_error`` instead of looping. The Optuna study handle is bundled
+  best-effort to set up follow-up work on subprocess retune resume
+  ([#128](https://github.com/nbx-liz/LizyML-Widget/issues/128)).
+
+- **Restore subprocess execution as the default on Linux + libgomp (P-036, [#147](https://github.com/nbx-liz/LizyML-Widget/issues/147))**.
+  ``w.fit()`` / ``w.tune()`` previously ran in a worker thread regardless of
+  OpenMP runtime, hitting libgomp's pool-affinity bug (~30x slowdown for Fit,
+  20-50x for multi-trial Tune; reproducer in
+  ``tests/regression/test_reg_147_openmp_perf.py``). The
+  ``LZW_FORCE_SUBPROCESS=1`` gate has been replaced: subprocess is now the
+  default whenever ``openmp_detect.is_libgomp_affected()`` returns ``True``,
+  and the new ``LZW_FORCE_THREAD=1`` env var lets users opt back into the
+  legacy in-process path. ``is_libgomp_affected()`` now force-imports
+  ``lightgbm`` before reading ``/proc/self/maps`` and caches the result, so
+  the affinity check runs against the loaded runtime instead of an empty
+  process map. Retune still runs in-thread (subprocess retune is tracked by
+  [#128](https://github.com/nbx-liz/LizyML-Widget/issues/128)).
+
+### Tests
+- **E2E coverage for failed-status, cancel-mid-tune, and multiclass /
+  regression assertions** ([#133](https://github.com/nbx-liz/LizyML-Widget/issues/133)).
+  Un-skipped ``test_failed_status_shows_re_run_button`` (now backed by a
+  deterministic ``test_failed_state.ipynb`` fixture that drives the same
+  traitlet-write path the supervisor uses on real failures). Added
+  ``test_cancel_button_aborts_a_running_tune`` (200-trial tune via
+  ``test_long_tune.ipynb`` + Cancel button click; asserts the
+  CANCELLED transition and INV-F slot release). Strengthened
+  ``test_p030_compat`` assertions to pin PredTable row count, chip
+  count for smape/wape, and that at least one Plotly figure container
+  mounts on the Results tab.
+
+### Changed
+- **Backend contract owns UI numeric defaults and step values (P-034)**
+  ([#131](https://github.com/nbx-liz/LizyML-Widget/issues/131)).
+  ``ui_schema.defaults`` gains ``cv`` / ``tune`` / ``metric_params``
+  sub-dicts and ``ui_schema.step_map`` gains ``feature_weights`` /
+  ``boundary_threshold`` so the JS UI no longer falls back to hardcoded
+  literals (``n_splits ?? 5``, ``n_trials ?? 10``, ``random_state ?? 42``,
+  ``step={0.1}``, ``step={0.01}``, etc.). A backend default change now
+  propagates to the UI without a JS edit (CLAUDE.md §8). Affected JS
+  files: ``DataTab.tsx``, ``TuneSubTab.tsx``, ``SearchSpace.tsx``,
+  ``ModelEditors.tsx`` (new ``metricParamDefaults`` prop on
+  ``ModelSection`` / ``TypedParamsEditor``), ``RetuneControls.tsx``,
+  ``ResultsTab.tsx`` (forwards ``stepMap`` to ``RetuneControls``), and
+  ``App.tsx`` (passes ``stepMap`` from ``backend_contract``). New
+  ``TestContractNumericDefaultsAndStepMap`` golden test pins the new
+  contract shape.
+
+### Changed
+- **TuningSummary owns post-tune snapshots (P-035)**
+  ([#132](https://github.com/nbx-liz/LizyML-Widget/issues/132)).
+  ``TuningSummary`` gains two new fields — ``config_snapshot`` (canonical
+  run config) and ``ui_snapshot`` (widget ``config`` traitlet at tune
+  time) — so post-tune Apply-to-Fit no longer relies on Widget-side
+  ``_tune_config_snapshot`` / ``_tune_ui_snapshot`` private attributes
+  (CLAUDE.md §4 violation removed). ``WidgetService`` keeps the latest
+  ``TuningSummary`` in ``_last_tune_summary``; ``apply_best_params``
+  now reads snapshots from there. ``load_data`` invalidates a prior
+  summary explicitly so a stale-on-new-data Apply fails fast with
+  ``ValueError("tune summary cleared by load …")`` instead of silently
+  rebuilding from a snapshot pinned to the old DataFrame.
+  ``JobSpec.ui_snapshot`` carries the snapshot through both
+  ``ThreadJobRunner`` and ``SubprocessJobRunner`` (the latter calls a
+  new ``WidgetService.record_subprocess_tune_summary`` because the
+  child process cannot share Python objects with the parent).
+
+### Removed
+- ``LizyWidget._tune_config_snapshot`` / ``LizyWidget._tune_ui_snapshot``
+  attributes (P-035 — replaced by Service-owned ``_last_tune_summary``).
+- ``WidgetService.apply_best_params(params, current_config, *, tune_snapshot=...,
+  tune_ui_snapshot=...)`` kwargs. The public signature is now just
+  ``apply_best_params(params, current_config)``; tests that exercised
+  the snapshot path now seed ``service._last_tune_summary`` directly.
+
+### Changed
+- **service.py / adapter.py file-size split**
+  ([#137](https://github.com/nbx-liz/LizyML-Widget/issues/137)).
+  Both core modules now sit below the CLAUDE.md §8 < 800-line ceiling.
+  ``service.py`` shrinks from 1019 → 790 lines by extracting CV helpers
+  (``service_cv.py``: ``compute_preview_splits``, ``validate_inner_valid``,
+  ``default_strategy_for_task``, ``default_cv_state``) and column
+  auto-detection helpers (``service_columns.py``: ``detect_task``,
+  ``auto_configure_column``, ``calc_feature_summary``,
+  ``merge_best_params_into_config``).
+  ``adapter.py`` shrinks from 1107 → 761 lines by moving stateless
+  helpers into ``adapter_internals.py`` (version guard, dict path
+  helpers, ``deep_merge``, ``extract_defaults``,
+  ``convert_metric_entries``, ``enforce_auto_num_leaves``,
+  ``_serialize_*``) and result-side helpers into ``adapter_results.py``
+  (``render_plot``, ``list_available_plots``, ``render_inference_plot``,
+  ``task_for_model``).  Composition only — no inheritance changes.
+  Backward-compatible ``LizyMLAdapter._<helper>`` static aliases keep
+  existing tests untouched. Public API and behavior are unchanged.
+- **Widget action dispatcher extracted to `widget_actions.py`**
+  ([#127](https://github.com/nbx-liz/LizyML-Widget/issues/127)).
+  Follow-up to #117. All 19 ``_handle_*`` action handlers now live in
+  a new ``WidgetActionDispatcher`` class in
+  ``src/lizyml_widget/widget_actions.py``. ``LizyWidget`` retains
+  ``_handle_custom_msg`` / ``_on_action`` as the JS-facing dispatch
+  entry points and delegates to ``self._dispatcher.dispatch(...)``.
+  ``widget.py`` shrinks from 1158 → 788 lines, satisfying the
+  CLAUDE.md §8 < 800 ceiling. A ``__getattr__`` proxy keeps the legacy
+  ``_handle_*`` names callable so existing tests need no changes.
+
+### Fixed
+- **ConfigTab debounce / traitlet sync race**
+  ([#136](https://github.com/nbx-liz/LizyML-Widget/issues/136)).
+  When Python pushed a new ``config`` (e.g. after ``apply_best_params``)
+  while a user edit was still mid-debounce, the pending timer fired
+  later and computed a patch against a stale baseline, silently
+  overwriting Python's update. The ``[config]`` ``useEffect`` now
+  cancels the pending debounce timer before resyncing local state.
+
+### Changed
+- **Drop hardcoded CV-strategy fallback in widget**
+  ([#130](https://github.com/nbx-liz/LizyML-Widget/issues/130)).
+  `LizyWidget._handle_update_cv` no longer keeps a `_FALLBACK_STRATEGIES`
+  frozenset for the case where ``backend_contract`` is unloaded.
+  The contract is now the single source of truth: a missing
+  ``capabilities.cv_strategies`` returns a structured
+  ``BACKEND_NOT_READY`` error instead of silently validating against an
+  outdated allowlist. CLAUDE.md §8 (no backend-specific option sets in
+  Widget / JS) is respected uniformly.
+
+### Added
+- **Runtime guards for state-machine invariants**
+  ([#135](https://github.com/nbx-liz/LizyML-Widget/issues/135)).
+  Follow-up to P-033: BLUEPRINT.md §6.4 INV-A / INV-D / INV-E / INV-F
+  are now enforced at runtime via `assert` statements inside
+  `widget.py::_supervise` and `_apply_job_result`. Production
+  behaviour is unchanged (`python -O` strips the asserts), but
+  development and CI runs surface invariant violations immediately
+  instead of as silent UI weirdness. Six new tests in
+  `tests/test_invariants.py` drive each violation path.
+- **State-machine invariants declared (INV-A..F)** (P-033,
+  [#118](https://github.com/nbx-liz/LizyML-Widget/issues/118)).
+  `BLUEPRINT.md` §6.4 now enumerates six invariants over the widget's
+  status FSM, job-thread singleton, `_tune_model` ownership,
+  `_cancel_flag` lifecycle, `progress.round` monotonicity, and
+  `boundary_report.dims` uniqueness. Each invariant has a
+  RED-then-GREEN test in `tests/test_invariants.py`, and the relevant
+  guards in `widget.py::_run_job` / `_supervise` carry inline INV-X
+  breadcrumbs so future PRs reviewing those sites see the contract
+  they must preserve.
+
+### Changed
+- **JobRunner Protocol extracted from widget.py** (P-032,
+  [#117](https://github.com/nbx-liz/LizyML-Widget/issues/117)).
+  The widget no longer carries two near-duplicate `_job_worker` methods
+  for the in-process and subprocess execution paths. A new
+  `src/lizyml_widget/job_runner.py` defines the `JobRunner` Protocol
+  with `ThreadJobRunner` / `SubprocessJobRunner` implementations, and
+  `widget.py::_supervise` owns all state-machine transitions, traitlet
+  plumbing, and error classification for both runners. The legacy
+  `_job_worker` and `_subprocess_job_worker` are removed; `JobSpec`
+  carries `job_type` / `config` / `retune_kwargs` immutably.
+  `RETUNE_SUBPROCESS_UNSUPPORTED` is now a typed
+  `RetuneSubprocessUnsupportedError` raised by `SubprocessJobRunner`
+  and translated to the widget error code in `_supervise`. New
+  `tests/test_job_runner.py` covers each runner across normal
+  completion / cancel / exception / retune-rejection.
+- **Adapter boundary typed via `LMResultView`** ([#116](https://github.com/nbx-liz/LizyML-Widget/issues/116)).
+  All `getattr(...)` reads on lizyml result objects are consolidated into a
+  new `adapter_views.py` module (`view_fit_result`, `view_tuning_result`,
+  `view_tune_progress`, `view_prediction_result`, `view_boundary_report`,
+  `view_rounds`). Each view raises `LizyMLContractError` on a missing
+  required field, giving the version guard real teeth — a renamed field
+  in a future lizyml minor fails fast at the boundary rather than
+  silently degrading to `None` / `[]` deeper in the widget.
+- **Removed `model._widget_config` private write** ([#116](https://github.com/nbx-liz/LizyML-Widget/issues/116)).
+  `LizyMLAdapter.create_model` no longer monkey-patches the lizyml model
+  with a widget-specific attribute. Configs now live in an adapter-side
+  registry keyed by `id(model)`, and the legacy `_cfg.task` / fallback
+  config read is centralised in a single `_task_for_model(model)`
+  helper used by both `available_plots()` and `model_info()`.
+
+### Added
+- **E2E test coverage Phase B** ([#114](https://github.com/nbx-liz/LizyML-Widget/issues/114)).
+  Four new test files plus a Tune→Apply→Re-tune extension to the existing
+  user-flow suite:
+  - `test_p030_compat.py` — multiclass string-label round-trip + smape/wape
+    regression chip rendering (locks in P-030 acceptance).
+  - `test_inference_flow.py` — Fit → Open Inference → Run Inference →
+    PredTable rows, plus SHAP-toggle dispatch.
+  - `test_error_flows.py` — backend-error banner + Re-run gate.
+  - `test_user_flows.py` — Tune → Apply to Fit → Re-tune resume → Boundary
+    Expansion panel.
+  Two new notebooks (`test_multiclass_strings.ipynb`,
+  `test_regression_smape_wape.ipynb`) drive the P-030 fixtures, with
+  matching `multiclass_widget_page` / `regression_smape_wape_page` Playwright
+  fixtures in `conftest.py`.
+- **JS test coverage Phase A** ([#114](https://github.com/nbx-liz/LizyML-Widget/issues/114)).
+  Vitest suite expanded from 171 to 272 cases covering `App.tsx`, `Header.tsx`,
+  `configHelpers.ts`, `ModelEditors.tsx`, `TuneSubTab.tsx`, `FitSubTab.tsx`,
+  `DistributionBar.tsx`, `FoldPreview.tsx`, `PredTable.tsx`,
+  `BlockedGroupKFold.tsx`, plus the P-030 smape/wape regression chip in
+  `SearchSpace.tsx` and failed/error rendering paths in `ResultsTab.tsx`.
+  Statement coverage rose from 47% to 75%.
+- `pnpm test:coverage` script and `vitest.config.ts` `coverage.thresholds`
+  block (75% statements/lines, 70% branches, 50% functions). CI now runs
+  `pnpm test:coverage` and prints the e2e test count for visibility.
+- **Backend contract**: new `cv_strategy_labels` and `additional_params_hidden_keys`
+  capabilities ([#119](https://github.com/nbx-liz/LizyML-Widget/issues/119)).
+  Adding a new CV strategy in `adapter_contract.py` now surfaces in the UI dropdown
+  without any JS edit; a `humaniseSnake()` fallback covers labels missing from the map.
+
+### Changed
+- **Code quality**: Closed two HIGH-tier code-review findings ([#115](https://github.com/nbx-liz/LizyML-Widget/issues/115)).
+  - `LizyWidget.model_info` now routes through a new `WidgetService.model_info(model)`
+    delegate instead of reaching into `Service._adapter` private state.
+  - Bare `except Exception: pass` blocks in `WidgetService._default_strategy_for_task`,
+    `WidgetService._default_cv_state`, and `_job_worker`'s tune-only fit-summary
+    fallback have been narrowed to documented exception types and now leave a
+    `_log.debug` breadcrumb instead of swallowing silently.
+- **JS no longer hardcodes LightGBM-specific catalogs** ([#119](https://github.com/nbx-liz/LizyML-Widget/issues/119)).
+  - `DataTab.tsx`: dropped the `CV_STRATEGIES` literal — strategy chips now derive
+    from `backend_contract.capabilities.cv_strategies`/`cv_strategy_labels`. The
+    `cv.strategy === "kfold"` and `cv.strategy === "blocked_group_kfold"`
+    equality literals are replaced with capability-driven checks.
+  - `FitSubTab.tsx`: `GROUP_STRATEGIES`/`TIME_STRATEGIES` literals replaced with
+    `cv_strategy_fields`-driven derivation.
+  - `ModelEditors.tsx`: `HANDLED_MODEL_FIELDS` static set is gone — derived from
+    `search_space_catalog` (smart_params group) plus structural keys. The
+    `num_leaves ?? 256` defaults are removed; default flows from the catalog.
+    The `verbose / num_threads` exclusion comes from
+    `additional_params_hidden_keys`.
+
+### Changed
+- **Required lizyml version bumped to `>=0.10.0,<0.13`** (P-030, [#112](https://github.com/nbx-liz/LizyML-Widget/issues/112))
+  — the widget now admits lizyml 0.10 / 0.11 / 0.12. Lower bound is raised to
+  0.10.0 because the Adapter relies on lizyml 0.10's `FitResult.target_encoder`
+  for label dtype preservation; running the new code paths against 0.9.x would
+  surface late-bound `AttributeError`. Existing users on lizyml 0.9.x must
+  upgrade alongside the widget.
+
+### Added
+- **Non-numeric classification target round-trip** (P-030) — lizyml 0.10
+  auto-encodes non-numeric `y` (`object` / `pd.StringDtype` / `category` / `bool`)
+  via `TargetEncoder` and decodes predictions back to the original label dtype.
+  The widget now passes that contract through transparently: `LizyWidget.predict()`
+  on a multiclass model trained on string labels returns `pred` values like
+  `"Adelie"` / `"Chinstrap"` rather than int codes. New regression test
+  `test_reg_112_target_encoder_roundtrip.py` locks this in.
+- **smape / wape regression metrics** (P-030) — lizyml 0.11's zero-tolerant
+  percentage-style regression metrics are now exposed in the BackendContract
+  `model_metric.regression` option set, surfaced as Search Space / Model tab
+  metric chips, and routed correctly by tune direction resolution
+  (`MODEL_METRIC_TO_EVAL` identity mappings + `minimize` direction).
+
+### Compatibility
+- The widget's compat-matrix doc (`docs/VERSION_COMPAT.md`) gains a new top
+  row pinning `lizyml-widget 0.9.x` to `lizyml >=0.10.0,<0.13`. Older widgets
+  remain documented for past-release reference.
+- The 0.12 resumable-tuning Optuna storage is **not** surfaced through the
+  widget UI in this release — that exposure is tracked separately and will
+  ship under a follow-up Proposal.
+
 ## [0.8.0] - 2026-04-12
 
 ### Added

@@ -136,6 +136,33 @@ print(lizyml_widget.__version__)
 
 Powered by [anywidget](https://anywidget.dev/) for cross-environment compatibility.
 
+### Execution strategy on Linux + libgomp
+
+On Linux hosts where ``lightgbm`` is dynamically linked against GCC's
+``libgomp`` (the common apt / pip distribution), Fit and Tune jobs run in a
+fresh subprocess by default. This avoids a libgomp pool-affinity bug that
+makes worker-thread training ~30x slower than main-thread training (and
+multi-trial Tune compounds to 20–50x). See [issue #147](https://github.com/nbx-liz/LizyML-Widget/issues/147).
+
+The trade-off is a fixed startup cost on every Fit/Tune call:
+
+| Path | Typical wall-clock (5000 rows × 30 cols) |
+|---|---|
+| in-process Fit (`LZW_FORCE_THREAD=1`) | ~0.7 s |
+| subprocess startup + lightgbm import (overhead) | ~0.8–1.2 s |
+| subprocess Fit (default) | ~1.6–2.0 s |
+
+For interactive Notebook workflows where you fit small datasets repeatedly
+and the libgomp affinity bug does not manifest in your environment (e.g.
+fresh kernel, single Fit per session), set the opt-out env var:
+
+```bash
+export LZW_FORCE_THREAD=1
+```
+
+Tune still benefits from subprocess execution — leave the default in place
+when running multi-trial hyperparameter searches.
+
 ## Development
 
 ```bash
@@ -148,10 +175,20 @@ uv run mypy src/lizyml_widget/
 # TypeScript
 cd js
 pnpm install
-pnpm dev    # watch build
-pnpm build  # production build
+pnpm dev               # watch build
+pnpm build             # production build
 pnpm lint
+pnpm test              # vitest run
+pnpm test:coverage     # vitest run --coverage (CI gate at 75% statements / 70% branches)
 ```
+
+### Test coverage targets
+
+- Python (pytest): **80% line coverage** — enforced in CI via `--cov-fail-under=80`.
+- TypeScript (vitest): **75% statements / lines, 70% branches, 50% functions** —
+  enforced via thresholds in [`js/vitest.config.ts`](js/vitest.config.ts).
+- E2E (Playwright + JupyterLab): suite under [`tests/e2e/`](tests/e2e/); CI prints
+  the test count so additions/removals are visible in PR diffs.
 
 ### Stable Notebook Launch
 

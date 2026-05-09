@@ -206,6 +206,57 @@ class TestRunJob:
         result_msg = next(m for m in messages if m["type"] == "result")
         assert "tune_summary" in result_msg
 
+    def test_tune_without_prior_fit_propagates_empty_tables(self) -> None:
+        """#147 / P-036: ``model.tune()`` does not auto-fit. The adapter
+        layer is now responsible for returning ``[]`` from
+        ``evaluate_table`` / ``split_summary`` on an unfit model
+        (``LizyMLAdapter`` checks :func:`adapter_results.is_model_fitted`).
+        The subprocess entry simply forwards whatever the adapter returns
+        — pin that here by mocking the adapter to return ``[]`` and
+        asserting the result message ships them through cleanly.
+        """
+        import io
+
+        df = pd.DataFrame({"x": [1, 2, 3, 4], "y": [0, 1, 0, 1]})
+        output = io.BytesIO()
+
+        mock_summary = MagicMock()
+        mock_summary.best_params = {"lr": 0.1}
+        mock_summary.best_score = 0.98
+        mock_summary.trials = []
+        mock_summary.metric_name = "auc"
+        mock_summary.direction = "maximize"
+        mock_summary.rounds = []
+        mock_summary.boundary_report = None
+
+        mock_adapter = MagicMock()
+        mock_adapter.tune.return_value = mock_summary
+        mock_adapter.evaluate_table.return_value = []
+        mock_adapter.split_summary.return_value = []
+        mock_adapter.available_plots.return_value = ["tuning-history"]
+
+        with patch(
+            "lizyml_widget._subprocess_entry._create_adapter",
+            return_value=mock_adapter,
+        ):
+            run_job(
+                job_type="tune",
+                config={"model": {"name": "lgbm"}},
+                df=df,
+                target="y",
+                model_out_path=None,
+                output=output,
+            )
+
+        messages = decode_messages(output.getvalue())
+        types = [m["type"] for m in messages]
+        assert "error" not in types, f"Subprocess tune surfaced an error: {messages}"
+        result_msg = next(m for m in messages if m["type"] == "result")
+        assert result_msg["tune_summary"]["best_params"] == {"lr": 0.1}
+        assert result_msg["eval_table"] == []
+        assert result_msg["split_summary"] == []
+        assert result_msg["available_plots"] == ["tuning-history"]
+
     def test_error_sends_error_message(self) -> None:
         """Exception during fit sends error message."""
         import io

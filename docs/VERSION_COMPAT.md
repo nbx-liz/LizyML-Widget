@@ -13,7 +13,8 @@ LizyML-Widget は `lizyml` の ML 仕様（`Config schema`, `TuningResult`,
 
 | lizyml-widget | lizyml               | Python  | 主な新機能 / 破壊的変更                                               |
 | ------------- | -------------------- | ------- | --------------------------------------------------------------------- |
-| **0.8.x**     | `>=0.9.0, <0.10`     | `>=3.10`| Re-tune（Round progress, Boundary Expansion, Tuning History, `w.retune()` API, UI ボタン）|
+| **0.9.x**     | `>=0.10.0, <0.13`    | `>=3.10`| 非数値ラベル分類（`FitResult.target_encoder`）, 回帰メトリック `smape` / `wape`, lizyml 0.10–0.12 対応 |
+| 0.8.x         | `>=0.9.0, <0.10`     | `>=3.10`| Re-tune（Round progress, Boundary Expansion, Tuning History, `w.retune()` API, UI ボタン）|
 | 0.7.x         | `>=0.7.0, <0.9`      | `>=3.10`| Calibration method 既定変更, training seed 既定変更, Search Space 既定値整理 |
 | 0.6.x / 0.5.x | `>=0.5.0, <0.7`      | `>=3.10`| Learning Curve metrics フィルタ, CV strategy metadata                  |
 | 0.4.x         | `>=0.3.0, <0.5`      | `>=3.10`| Canonical config, Backend Contract 駆動 UI                             |
@@ -37,10 +38,10 @@ LizyML-Widget は `lizyml` の ML 仕様（`Config schema`, `TuningResult`,
 
 ```toml
 [project.optional-dependencies]
-lizyml = ["lizyml[plots,tuning,calibration,explain]>=0.9.0,<0.10"]
+lizyml = ["lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.13"]
 ```
 
-のように **lower bound = 0.9.0**, **upper bound = 0.10 未満** の厳密範囲を
+のように **lower bound = 0.10.0**, **upper bound = 0.13 未満** の厳密範囲を
 指定する。
 
 ---
@@ -54,7 +55,7 @@ pip install "lizyml-widget[lizyml]"
 ```
 
 - pip / uv / Poetry の resolver が自動的に互換な `lizyml` を選択する。
-- optional extras `[lizyml]` は `lizyml[plots,tuning,calibration,explain]>=0.9.0,<0.10`
+- optional extras `[lizyml]` は `lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.13`
   を内包する。
 - ユーザー側で `lizyml` のバージョンを気にする必要がない。
 
@@ -65,7 +66,7 @@ pip install "lizyml-widget[lizyml]"
 ```bash
 pip install lizyml-widget
 # lizyml は既に入っているが、互換バージョンに合わせる必要がある
-pip install "lizyml[plots,tuning,calibration,explain]>=0.9.0,<0.10"
+pip install "lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.13"
 ```
 
 - 既存の `lizyml==0.7.x` などがあると pip resolver が **ResolutionImpossible** を
@@ -89,17 +90,17 @@ Colab は pip の resolver がラックして古い `lizyml` を強制するこ�
 
 ## トラブルシューティング
 
-### `ImportError: lizyml-widget requires lizyml>=0.9.0`
+### `ImportError: lizyml-widget requires lizyml>=0.10.0`
 
 - 旧い `lizyml` がインストールされている。
 - 解決策:
   ```bash
-  pip install --upgrade "lizyml[plots,tuning,calibration,explain]>=0.9.0,<0.10"
+  pip install --upgrade "lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.13"
   ```
 
-### `AttributeError: 'TuningResult' object has no attribute 'rounds'`
+### `AttributeError: 'FitResult' object has no attribute 'target_encoder'`
 
-- `lizyml < 0.9.0` が残存している（インストール順の問題）。
+- `lizyml < 0.10.0` が残存している（インストール順の問題）。
 - 仮想環境を作り直すか、`pip list | grep lizyml` で実際のバージョンを確認する。
 
 ### pip resolver が `ResolutionImpossible` を返す
@@ -118,9 +119,9 @@ LizyML-Widget は import 時に `lizyml` の version を検証する。
 ```python
 >>> from lizyml_widget import LizyWidget
 >>> w = LizyWidget()
-ImportError: lizyml-widget 0.5.0 requires lizyml>=0.9.0,<0.10
-  (found: lizyml==0.7.3). Run:
-  pip install --upgrade "lizyml[plots,tuning,calibration,explain]>=0.9.0,<0.10"
+ImportError: lizyml-widget 0.9.0 requires lizyml>=0.10.0,<0.13
+  (found: lizyml==0.9.1). Run:
+  pip install --upgrade "lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.13"
 ```
 
 この検証は `LizyMLAdapter.__init__` で行われ、

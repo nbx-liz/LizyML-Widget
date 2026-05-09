@@ -1,5 +1,594 @@
 ## LizyML-Widget 仕様変更履歴
 
+### P-038: subprocess Retune Resume を P-037 の tune state IPC を input 方向に拡張して実装（#154 thread fallback の置換）
+
+- **日付**: 2026-05-09（提案・決定・実装）
+- **ステータス**: 決定（実装中 — fix/issue-154-default-retune → develop, PR #155 を Option A に転換）
+- **関連 Issue**: [#156](https://github.com/nbx-liz/LizyML-Widget/issues/156)（PR #155 follow-up）, [#128](https://github.com/nbx-liz/LizyML-Widget/issues/128)（subprocess retune の本フィックス、本 Proposal で完了）, [#154](https://github.com/nbx-liz/LizyML-Widget/issues/154)（PR #155 の元 issue）
+- **背景**:
+  - PR #155（`e286626`）は `widget._run_job` で retune を ThreadJobRunner にフォールバックさせる **暫定 hotfix** を入れた。`w.tune() → w.retune()` の最低限の正常系は復帰したが、構造的な問題が残った。
+  - [#156 の調査](https://github.com/nbx-liz/LizyML-Widget/issues/156#issuecomment-4412462760)で empirical に確認した内容:
+    1. **Clean path のみで 1.43x 劣化**（subprocess tune 3.24 s/trial vs thread retune 4.64 s/trial）。issue#156 本文の 1.96x はこの band。
+    2. **典型的ユーザフローで 11x 劣化（30x catastrophe の再発）**。`w.tune()` の後に `w.predict(test_df)` を 1 回呼ぶだけで、retune 中の親プロセス CPU が ~29 cores（2904%）から ~2.25 cores（225%）に崩壊し per-trial wall が 36 s に達する（S5/S7 で実測：109 s vs 14 s）。原因は GCC #108494 libgomp プール親和性バグ。`booster.predict` 単独でも親 main thread を pool owner に bind するのに十分（`learned/openmp-daemon-thread-degradation`）。
+    3. **同一カーネル内累積劣化**（5.20 s → 9.04 s/trial across 4 cycles）。スレッド数は flat、CPU は full、原因不明。issue #158 で別途追跡。
+  - PR #155 の thread fallback は構造上回避不可能なリスクを抱える。`w.predict` / Inference タブ / SHAP plot のいずれかが tune と retune の間に挟まれた瞬間に catastrophe path に入るが、ユーザがそれを避ける手段はない。
+  - P-037（PR #153）で **subprocess→parent の tune state IPC**（`tune_state_out_path` + `BackendAdapter.export_tune_state` / `restore_tune_state`）を既に整備済み。本 Proposal はこれを **parent→subprocess の方向**にも拡張するだけで完結する。
+- **提案内容**:
+  - **(a) IPC 入力に `tune_state_in_path` と `retune_kwargs` を追加**:
+    - `_subprocess_entry.read_input` が受け取る dict に 2 フィールドを追加:
+      - `tune_state_in_path: str | None` — retune 時に親が事前に書き出した tune state の path（pickle blob, P-037 と同 format）
+      - `retune_kwargs: dict[str, Any] | None` — `{"resume": True, "n_trials": int|None, "expand_boundary": bool|None, "boundary_threshold": float}`
+    - `subprocess_runner.run_job_subprocess` の signature に同 2 引数を追加。
+  - **(b) subprocess エントリの retune ブランチ**:
+    - `retune_kwargs is not None` のとき、`adapter.create_model(config, df)` の直後に `adapter.restore_tune_state(model, tune_state_in_path)` を呼び、`adapter.tune(model, on_progress=on_progress, **retune_kwargs)` を実行する。
+    - retune 後の更新済み tune state は既存の `tune_state_out_path` 経路で親に返す（P-037 と対称）。
+    - subprocess 内の挙動は `service.tune(resume=True)` と論理同等（adapter.tune は既に resume kwargs を受け付ける）。
+  - **(c) Service 拡張**: `WidgetService.export_tune_state_to_path(path)` を追加。`_tune_model` が None の場合は `ValueError` を上げ、subprocess retune を防ぐ defensive guard とする。
+  - **(d) `SubprocessJobRunner.run` の retune 対応**:
+    - `RetuneSubprocessUnsupportedError` の raise を **削除**。
+    - `spec.retune_kwargs is not None` のとき:
+      1. tempfile で `tune_state_in_path` を確保。
+      2. `service.export_tune_state_to_path(tune_state_in_path)` を呼ぶ。
+      3. `run_job_subprocess(..., retune_kwargs=spec.retune_kwargs, tune_state_in_path=tune_state_in_path)` で投げる。
+      4. `finally` で `tune_state_in_path` を削除（既存の `tune_state_out_path` cleanup と対称）。
+    - retune の場合も `record_subprocess_tune_summary` および `restore_tune_state_from_path` の post-subprocess 経路を流用する（既存実装で動作する）。
+  - **(e) widget._run_job の thread fallback を撤去**:
+    - PR #155 が追加した `_retune_fallback_warned` フラグおよび `if self._execution_strategy == "subprocess" and retune_kwargs is not None:` ブランチを削除。
+    - runner 選択は execution strategy のみで決まる（retune_kwargs を見ない）。
+  - **(f) 既存テストの更新**:
+    - `tests/regression/test_reg_154_default_strategy_retune.py::INV-#154-A` の意味を **"retune は subprocess を使う"** に反転。
+    - `INV-#154-B`（`LZW_FORCE_THREAD` 指示文言）は `RetuneSubprocessUnsupportedError` 全削除のため削除。
+    - `INV-#154-C`（subprocess Fit overhead 30s bound）は無関係なので維持。
+  - **(g) 新規 regression test**:
+    - `tests/regression/test_reg_156_subprocess_retune.py`:
+      - `INV-#156-A`: `w.tune() → w.retune()` がデフォルト install で `subprocess` runner 経由で完了する（`SubprocessJobRunner.run` 呼び出しを mock で検証）。
+      - `INV-#156-B`（slow）: 100k × 50, 3 trials, `tune → main-thread booster.predict → retune` の per-trial wall-clock が clean subprocess tune の 1.5x 以内。catastrophe path を pin する（`learned/promote-learned-skill-to-regression-test` 適用）。
+      - `INV-#156-C`（slow）: clean tune→retune の per-trial wall-clock が clean subprocess tune の 1.2x 以内。
+- **Invariants**:
+  - INV-1: subprocess retune を実行する条件下では、親プロセスは lightgbm を `import` のみで `train` / `predict` を呼ばない（subprocess が全並列領域を担う）。
+  - INV-2: `service.export_tune_state_to_path` は `_tune_model is None` のとき必ず `ValueError` を上げる（subprocess retune の前提逸脱を early fail）。
+  - INV-3: `tune_state_in_path` は `SubprocessJobRunner.run` の `finally` で必ず削除される（INV-5 の対称、ファイルリーク防止）。
+  - INV-4: subprocess retune 完了後、親プロセスの `_tune_model._tuning_result.rounds` は元の rounds + retune で追加された rounds を含む（`restore_tune_state_from_path` 経由で復元）。
+  - INV-5: `RetuneSubprocessUnsupportedError` は本 Proposal で削除する。BackendAdapter Protocol が `export_tune_state` / `restore_tune_state` を required としているため、retune を支えられない adapter は型レベルで存在しない。
+- **影響範囲**:
+  - `src/lizyml_widget/_subprocess_entry.py` — input dict に 2 フィールド、retune branch 追加
+  - `src/lizyml_widget/subprocess_runner.py` — `run_job_subprocess` signature 拡張、input pickle に 2 フィールド追加
+  - `src/lizyml_widget/job_runner.py` — `SubprocessJobRunner.run` で `RetuneSubprocessUnsupportedError` 削除、retune 経路追加；`RetuneSubprocessUnsupportedError` クラス自体は削除し import を整理
+  - `src/lizyml_widget/service.py` — `export_tune_state_to_path` メソッド追加
+  - `src/lizyml_widget/widget.py` — `_retune_fallback_warned` フラグと thread fallback ブランチを削除；`RetuneSubprocessUnsupportedError` の `except` 句は削除（type 削除に伴う）
+  - `tests/regression/test_reg_154_default_strategy_retune.py` — INV-A 反転、INV-B 削除、INV-C 維持
+  - `tests/regression/test_reg_156_subprocess_retune.py` — 新規（catastrophe path pin + clean perf bound）
+  - `tests/test_subprocess_integration.py` — happy-path retune の mock テスト追加
+  - `tests/test_widget.py` / `tests/test_widget_threading.py` — `RetuneSubprocessUnsupportedError` 参照の更新（残っていれば削除）
+  - `BLUEPRINT.md` §3.7.1 — subprocess IPC ペイロードの input 方向追加を記載
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[0.9.0]` セクションの「Bug fixes」に追加（PR #155 のエントリを置換）
+- **互換性**:
+  - 公開 Python API（`w.fit/tune/retune`）の signature / 振る舞いは変更なし。`w.retune()` のユーザ可視動作は PR #155 の v0.9.0 直前状態と同一（成功する／status=`completed`）。
+  - 副次的に `RetuneSubprocessUnsupportedError` クラスを削除する。`from lizyml_widget.job_runner import RetuneSubprocessUnsupportedError` は ImportError になるが、これは internal class（BLUEPRINT で公開 API として宣言されておらず、テストのみが参照していた）。CHANGELOG で internal change として明記。
+  - subprocess IPC は input pickle に 2 フィールド追加。古い親 + 新しい subprocess の組み合わせは存在しない（subprocess は親と同じ Python 環境で起動する）ので skew リスクなし。
+- **代替案（却下）**:
+  - **案A**: PR #155 の thread fallback を維持し、`w.predict` の前後で警告を出す → ユーザ教育に頼るのは脆弱、誤って踏むと 11x 劣化、現在の v0.9.0 リリースを正当化できない。
+  - **案B**: PR #155 を revert し `RETUNE_SUBPROCESS_UNSUPPORTED` を再露出 → #154 の元症状に戻る、最悪。
+  - **案C**: lizyml 0.12 の resumable Optuna SQLite storage（issue #129）に依存 → P-030 でリリーススコープから外しており UI 露出が無い。本 Proposal で扱う in-memory tune state pickle で十分目的を達せるため不要。
+- **Optuna study の扱い**:
+  - P-037 と同じ。subprocess は受け取った `_study` を P-037 の `restore_tune_state` 経由で attach し、`adapter.tune(resume=True)` を呼ぶ。lizyml 内部で `_study` を使って resume する。
+  - InMemoryStorage（既定）は pickleable。RDB-backed storage の場合 P-037 と同様に best-effort で `study=None` に降格し、retune は新規 study として動作する（functional には正しい動作）。
+- **受け入れ基準**:
+  - [ ] Linux + libgomp デフォルト環境で `w.tune() → w.retune()` が `subprocess` runner で完了する（mock で `SubprocessJobRunner.run` 呼び出しを検証）。
+  - [ ] `tune → main-thread booster.predict → retune` の per-trial wall-clock が `tune` の per-trial wall の 1.5x 以内に収まる（issue #156 S7 の 11x catastrophe を除去）。slow regression test で pin。
+  - [ ] clean `tune → retune` の per-trial wall-clock が `tune` の 1.2x 以内（PR #155 の 1.43x も改善）。
+  - [ ] `RetuneSubprocessUnsupportedError` および `RETUNE_SUBPROCESS_UNSUPPORTED` エラーコードへの参照が widget / supervisor / tests から完全に消える。
+  - [ ] PR #155 が追加した `_retune_fallback_warned` / "re-tune temporarily falls back to thread runner" ログが消える。
+  - [ ] 既存品質ゲート: `pytest`, `pytest -m slow`, `ruff check`, `ruff format --check`, `mypy --strict`, `pnpm test:coverage`, `pnpm lint` 全 green。
+  - [ ] CHANGELOG `[0.9.0]` の retune 関連エントリが PR #155 の "thread fallback" 記述から本 Proposal の "subprocess retune resume" 記述に置換される。
+- **本 Proposal の終了条件**:
+  - 受け入れ基準を満たした PR が `develop` にマージされる。
+  - PR #155 の不採用部分（thread fallback コード）が同じ PR で回収される。
+
+### P-037: Adapter Protocol に Tune State Cross-Process Persistence を追加（subprocess tune 後の plot 復元）
+
+- **日付**: 2026-05-09（提案・決定・実装）
+- **ステータス**: 決定（実装中 — fix/issue-152-subprocess-tune-plot → fix/issue-147-openmp-default-subprocess）
+- **関連 Issue**: [#152](https://github.com/nbx-liz/LizyML-Widget/issues/152)（P-036 follow-up）
+- **背景**:
+  - P-036（PR #151）で Linux + libgomp 環境のデフォルト実行戦略を subprocess に切り替えた結果、`w.tune()`（先行 `w.fit()` なし）の直後に Tuning History（`optimization-history` plot）が "Loading plot..." で停止する回帰が発覚した。
+  - 原因トレース（[issue #152 本文](https://github.com/nbx-liz/LizyML-Widget/issues/152)抜粋）:
+    1. subprocess: `model.tune()` は auto-fit しないため、`adapter.export_model` 経由の `model.export()` が `MODEL_NOT_FIT` を投げる。
+    2. `_subprocess_entry.py` が例外を silent swallow → `model_path = None` → 親プロセス `service._model = None` のまま。
+    3. UI が `optimization-history` plot を要求 → `service.get_plot` が `ValueError("No trained model")` → `plot_error` 送信。
+  - `tuning_plot()` は `_tuning_result`（`@dataclass(frozen=True)` の `TuningResult`）のみを参照し、`_study`（Optuna handle）は不要。`TuningResult` は frozen dataclass + 入れ子 dataclass のみで構成され完全に pickleable。
+  - 同時に解決すべき UX バグ: `usePlot` の `plot_error` ハンドラは `loading[pt]` を解除するが、`PlotViewer` が独自 loading state を保持しており、エラー時にローディング表示が残り続ける。
+- **提案内容**:
+  - **(a) BackendAdapter Protocol に 2 メソッド追加**:
+    ```python
+    class BackendAdapter(Protocol[ModelT]):
+        # ... existing ...
+        def export_tune_state(self, model: ModelT, path: str) -> None: ...
+        def restore_tune_state(self, model: ModelT, path: str) -> None: ...
+    ```
+    - `export_tune_state`: subprocess 内で `_tuning_result`（必須）と `_study`（best-effort、pickle 失敗時は省略）を pickle 形式で `path` に書き出す。
+    - `restore_tune_state`: 親プロセスで `path` から読み戻し、freshly-created model に注入する。private slot への書き込みは adapter 内に閉じ込め、Widget / Service / 共通型は知らない。
+  - **(b) IPC 経路の追加**: `_subprocess_entry.py` の tune ブランチで:
+    1. tune-only では `adapter.export_model`（fit 前提）を **試行しない**。
+    2. 代わりに `adapter.export_tune_state(model, tune_state_path)` を呼ぶ。
+    3. `result_msg["tune_state_path"]` を同梱。
+  - **(c) Service 拡張**: `WidgetService.restore_tune_state_from_path(path, *, config, df)` を追加。adapter 経由で空モデル + tune state を構築し、`self._model` にセット。`is_model_fitted` は False を維持。
+  - **(d) JobRunner**: `SubprocessJobRunner` が `tune_state_path` を service に渡し、`finally` で確実に削除（`model_path` と対称）。
+  - **(e) UI 修正**: `PlotViewer` が `plot_error` を受信したらローディング表示を確実に解除し、エラーメッセージを表示する。`usePlot` の cleanup 確認用 vitest を追加。
+  - **(f) regression test**: `tests/regression/test_reg_152_subprocess_tune_plot.py` を追加（`LizyMLAdapter.tune` を mock、deterministic）。`5497eab`（PR #151 tip）で fail し、修正後に pass。
+- **Invariants**:
+  - INV-1: subprocess tune 完了時、`tune_state_path` は (a) `None` または (b) 親が読める path のいずれか。読めない/破損は `plot_error` に降格し widget 全体は壊さない。
+  - INV-2: 親プロセスで `restore_tune_state` 後、`is_model_fitted(model) == False` を維持する。
+  - INV-3: 親プロセスで `restore_tune_state` 後、`model._tuning_result is not None` であり、`available_plots(model)` が `optimization-history` を含む。
+  - INV-4: tune state の export は `adapter.export_model` 試行より前に実施。export 失敗が tune state を巻き込まない。
+  - INV-5: tune state ファイルは subprocess 終了かつ親側読込完了後に必ず削除される（`finally` cleanup）。
+- **影響範囲**:
+  - `src/lizyml_widget/adapter.py` — `BackendAdapter` Protocol に 2 メソッド宣言、`LizyMLAdapter` 実装
+  - `src/lizyml_widget/_subprocess_entry.py` — tune ブランチで `export_tune_state` を呼び、`export_model` を tune-only でスキップ
+  - `src/lizyml_widget/run_subprocess.py` — `SubprocessResult` に `tune_state_path` 追加
+  - `src/lizyml_widget/job_runner.py` — `SubprocessJobRunner` で `restore_tune_state_from_path` 呼び出し + cleanup
+  - `src/lizyml_widget/service.py` — `restore_tune_state_from_path` メソッド追加
+  - `js/src/components/PlotViewer.tsx`, `js/src/hooks/usePlot.ts` — `plot_error` 時のローディング解除を保証
+  - `tests/test_adapter_tune_state.py`, `tests/test_service_tune_state.py`, `tests/test_subprocess_integration.py`, `tests/regression/test_reg_152_subprocess_tune_plot.py` — 新規 / 拡張
+  - `js/src/__tests__/PlotViewer.test.tsx`, `js/src/__tests__/usePlot.test.ts` — 拡張
+  - `BLUEPRINT.md` §3.3 / §3.7.1 — Adapter Protocol API 追加と subprocess IPC ペイロード変更を記載
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]`
+- **互換性**:
+  - 公開 Python API（`w.fit()`, `w.tune()`, `w.retune()`, `w.apply_best_params()`）の signature / 振る舞いに変更なし。
+  - `BackendAdapter` Protocol 拡張は **追加のみ** であり既存実装（`LizyMLAdapter`）以外を破壊しないが、新規 backend 実装者は 2 メソッドを実装する必要がある。
+  - subprocess IPC `result_msg` に `tune_state_path` フィールドが追加される。古い subprocess バイナリと新しい parent の組み合わせでは `tune_state_path` が欠落するが、parent 側は missing を許容して従来挙動（plot 不可 + plot_error）にフォールバックする。
+- **代替案（却下）**:
+  - **案A: Tune を thread モードにフォールバック** — P-036 で fix した #147 の 30x 劣化を tune で再発させる。
+  - **案B: subprocess で tune 後に auto-fit** — `tune()` の意味論変更（lizyml 仕様と乖離）、wall-clock が +1 fit 分悪化。retune（#128）への影響も大きい。
+  - **案D: subprocess で plot を pre-render し plotly_json をキャッシュ** — 局所修正で短期的には簡潔だが、post-tune plot が増えるたびに同じ対応が必要。Optuna study handle が親に来ないため #128 の取り組みに使えない。
+  - 案C を選んだ理由: **長期方向（#128 retune resume）と #152 の plot 復元を同じ仕組みで満たす**。Adapter Protocol 拡張のコストを払う代わりに、tune state を first-class IPC ペイロードとして扱う。
+- **Optuna study の扱い**:
+  - `_study` は InMemoryStorage（デフォルト）の場合 pickleable、RDBStorage の場合は不可。`export_tune_state` は `pickle.dumps(model._study)` を try/except で best-effort 実行し、失敗したら `study=None` で blob を出力する（warn ログのみ）。
+  - 親側で復元された `_study` は #128 retune resume の前提となる。本 Proposal 自体は retune 対応を含まない（Issue #128 / #129 で別途）。
+- **受け入れ基準**:
+  - Linux + libgomp デフォルト環境で `w.tune()` 直後に Results → Tuning History が描画される。
+  - `tests/regression/test_reg_152_subprocess_tune_plot.py` が `5497eab` で fail し、本 PR で pass する。
+  - Adapter Protocol 拡張により新 backend 実装者は 2 メソッドの実装が必要であることを BLUEPRINT §3.3 に明記。
+  - `_subprocess_entry.py` の tune-without-fit `model.export()` silent swallow が排除される。
+  - `PlotViewer` が `plot_error` 受信時にローディング表示を解除し、明示的なエラーメッセージを出す（vitest で assert）。
+  - 既存テストスイート（`uv run pytest`、`pnpm test:coverage`）は全 green を維持。
+
+### P-036: libgomp 環境でのデフォルト実行戦略を subprocess に切り替え（OpenMP プール親和性回帰の根本対策）
+
+- **日付**: 2026-05-09（提案・決定・実装）
+- **ステータス**: 決定（実装済み — fix/issue-147-openmp-default-subprocess → develop）
+- **関連 Issue**: [#147](https://github.com/nbx-liz/LizyML-Widget/issues/147)
+- **背景**:
+  - P-020 で導入された OpenMP プール親和性問題（GCC bug #108494, libgomp）の subprocess 回避策が、現状デフォルトで無効化されている。
+  - [widget.py:571-581](https://github.com/nbx-liz/LizyML-Widget/blob/develop/src/lizyml_widget/widget.py#L571-L581) のゲートは `LZW_FORCE_SUBPROCESS=1` env var が設定されている場合にのみ `get_execution_strategy()` の戻り値を採用し、デフォルトでは無条件に `"thread"` を選ぶ。インラインコメントは劣化幅を「1.0–1.2x」と記載しているが、issue #147 で実測 30–35x の劣化が再現された（`worker_thread_fit / main_thread_fit = 30.4x`、worker thread 起動ごとに OS スレッドが ~30 本リーク）。
+  - さらに `openmp_detect.is_libgomp_affected()` は `/proc/self/maps` を読むだけで lightgbm を import しないため、`LizyWidget.__init__` 時点では libgomp がまだロードされておらず、たとえ env var ゲートを外しても `("thread", None)` を返してしまう（検知が too lazy）。
+  - Tune は Optuna trial ごとに OpenMP parallel region に再入するため、Fit 単発の劣化（30x）が trial 数倍に積算され、50 trial で end-to-end 20–50x 劣化として観測される。
+- **検証済み再現**:
+  - reproducer (`tests/regression/test_reg_147_openmp_perf.py` のもとデータ): `main: 0.16s` → `worker: 4.77s` (`30.4x`), threads 94 → 126。
+  - learned skills `openmp-daemon-thread-degradation`, `openmp-thread-pool-accumulation` が示す挙動と一致。
+- **提案内容**:
+  - **(a) 検知の deferred 化**: `is_libgomp_affected()` を呼び出し時に lightgbm を force-import してから `/proc/self/maps` を読むよう変更し、結果を module-level cache に保存する（同一プロセス内で結果は不変）。`get_execution_strategy()` を最初に呼ぶ場面（最初の Fit/Tune 直前）で正しい判定が出るようになる。
+  - **(b) ゲートの極性反転**: `LZW_FORCE_SUBPROCESS=1` ゲートを廃止し、libgomp が検知されたら subprocess をデフォルト戦略にする。debug 等で in-process 実行が必要な場合は `LZW_FORCE_THREAD=1` で opt-out できるようにする。
+  - **(c) インラインコメント修正**: `widget.py` の "1.0-1.2x" の文言を実測値（fit 30x / tune 20–50x）に書き換える。
+  - **(d) regression test**: `tests/regression/test_reg_147_openmp_perf.py`（`pytest.mark.slow`）を追加し、reproducer 相当の workload で `worker / main < 2.0x` を assert する。CI は default suite に含めない（slow 系は ad-hoc / nightly）。
+- **Invariants**:
+  - INV-1: `LZW_FORCE_THREAD=1` が設定されている場合、`_execution_strategy == "thread"` （`get_execution_strategy()` の戻り値に依らず）。
+  - INV-2: `LZW_FORCE_THREAD` 未設定かつ libgomp 検知 = True なら `_execution_strategy == "subprocess"`。libgomp 未検知（macOS / Windows / libomp 環境）なら `"thread"`。
+  - INV-3: `is_libgomp_affected()` の結果は同一プロセス内で冪等（cache 後に変化しない）。
+- **影響範囲**:
+  - `src/lizyml_widget/openmp_detect.py` — `is_libgomp_affected()` に lightgbm force-import + cache 追加
+  - `src/lizyml_widget/widget.py` §`_run_job` — env var ゲートを反転、コメント更新
+  - `tests/test_openmp_detect.py` — 新規（detection lifecycle / cache テスト）
+  - `tests/regression/test_reg_147_openmp_perf.py` — 新規（`pytest.mark.slow`、wall-clock regression）
+  - `BLUEPRINT.md` §3.7 — 新デフォルト戦略と opt-out env var を文書化
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]`
+- **互換性**:
+  - 公開 Python API（`w.fit()`, `w.tune()`, `w.retune()`）の signature / behaviour は変わらない。subprocess 経路は P-020 で既に実装済みで、retune 以外のすべての job type をサポートする。
+  - **挙動変更**: Linux + libgomp 環境では Fit/Tune がデフォルトで subprocess 実行となるため、Python ログの一部が parent-process 側で捕捉されない可能性がある（既存の subprocess runner は stdout/stderr を pipe して進捗イベントを抽出する設計）。
+  - **opt-out**: 旧挙動を維持したいユーザーは `LZW_FORCE_THREAD=1` を設定する。`LZW_FORCE_SUBPROCESS=1` は未指定でも subprocess になるため redundant となるが、後方互換のため warning なく無視する。
+  - **retune**: P-020 当時から subprocess runner は retune 未対応 (`RetuneSubprocessUnsupportedError`)。本 Proposal はその制約に変更を加えない。retune は依然 thread 実行となる（issue #128 で別途扱う）。
+- **代替案（却下）**:
+  - **案A: env var ゲートをそのまま残し、デフォルト thread を維持** — 30x の劣化を放置することになり、issue #147 の根治にならない。learned skill に「numeric claim を test で pin する」原則を加えた直後に再発させた経緯（PR #117/#144 で gate を維持した）も踏まえ、デフォルト挙動の修正が妥当。
+  - **案B: lightgbm 自体を libomp build に置き換える** — ユーザー環境のビルドに侵入しなければならず、apt 配布の lightgbm では非現実的。LD_PRELOAD は subprocess 経路で既に提供済みで、デフォルト subprocess 化のほうが副作用が小さい。
+  - **案C: thread 実行のままで `omp_set_num_threads()` / `threadpoolctl` を強制** — P-020 の検証済みアプローチで効果なしと判明済み（プール親和性は ICV では解消できない）。
+- **受け入れ基準**:
+  - Linux + libgomp 環境のデフォルト `w.tune()` が subprocess で実行され、`htop` で main thread と同程度のコア使用率を観測できる。
+  - `LZW_FORCE_THREAD=1` で旧 thread 経路に切り替え可能。
+  - `tests/regression/test_reg_147_openmp_perf.py` (`pytest.mark.slow`) が `worker/main < 2.0x` を assert し、ローカルで pass する。
+  - `tests/test_openmp_detect.py` で (i) `lightgbm` 未 import 状態と import 後で結果が変化すること、(ii) cache が安定していることを assert する。
+  - `widget.py` のインラインコメントが実測値（30x / 50 trial で 20–50x）に更新される。
+  - `BLUEPRINT.md` §3.7 に新デフォルトと opt-out env var が記載される。
+  - 既存テストスイート（`uv run pytest`、`pnpm test:coverage`）は全 green を維持。
+
+### P-035: TuningSummary に config_snapshot / ui_snapshot を追加
+
+- **日付**: 2026-05-08（提案）/ 2026-05-09（決定・実装）
+- **ステータス**: 決定（実装済み — PR #132 → develop）
+- **関連 Issue**: [#132](https://github.com/nbx-liz/LizyML-Widget/issues/132)
+- **背景**:
+  - 現状、`LizyWidget` は `_tune_config_snapshot` / `_tune_ui_snapshot` の 2 個の
+    private 属性を保持し、`_run_job("tune")` 開始時に当時の `full_config` と `self.config`
+    のコピーを書き込む（[widget.py:961-963](https://github.com/nbx-liz/LizyML-Widget/blob/develop/src/lizyml_widget/widget.py#L961-L963)）。
+  - これらは後の `_handle_apply_best_params` で `service.apply_best_params(..., tune_snapshot=...,
+    tune_ui_snapshot=...)` に渡される（[widget.py:823-840](https://github.com/nbx-liz/LizyML-Widget/blob/develop/src/lizyml_widget/widget.py#L823-L840)）。
+  - 結果として Widget が "ジョブ実行時の時系列スナップショット" を保持しており、
+    CLAUDE.md §4 が定義する Widget の責務（traitlets 定義 / Action 処理 / スレッド管理のみ）に違反する。
+    また `tune` と `apply_best_params` の間に `load()` / `set_target()` 等が走るとスナップショットが
+    silently stale になり、apply 結果が誤った config を生成する隠れた時系列依存が発生する。
+- **提案内容**:
+  - 共通型 `TuningSummary`（`src/lizyml_widget/types.py`）に 2 つの読み取り専用フィールドを追加:
+    ```python
+    @dataclass(frozen=True)
+    class TuningSummary:
+        # ... existing fields ...
+        config_snapshot: Mapping[str, Any] = field(default_factory=dict)  # canonical full_config
+        ui_snapshot: Mapping[str, Any] = field(default_factory=dict)      # widget-side ui config
+    ```
+  - `BackendAdapter.tune` / `Adapter.tune` は `TuningSummary(config_snapshot=...,
+    ui_snapshot=...)` を返すよう更新する（adapter は呼び出し元から受け取った canonical config と
+    ui config を Result に閉じ込める）。
+  - `WidgetService.tune` は `_tune_model` だけでなく最新 `TuningSummary` も保持し、
+    `apply_best_params` は `tune_snapshot=...` / `tune_ui_snapshot=...` の引数を取らず、
+    Service が保持する最新 summary から読み出す。
+  - `LizyWidget` から `_tune_config_snapshot` / `_tune_ui_snapshot` を削除。
+- **影響範囲**:
+  - `src/lizyml_widget/types.py` — `TuningSummary` に 2 フィールド追加（共通型変更：change gate）
+  - `src/lizyml_widget/adapter.py` — `tune` 結果に snapshot を埋める
+  - `src/lizyml_widget/service.py` — `apply_best_params` のシグネチャ変更（snapshot 引数削除）
+  - `src/lizyml_widget/widget.py` — `_tune_*_snapshot` 属性削除、`_handle_apply_best_params` 簡素化
+  - `BLUEPRINT.md` §3.2 / §6 — 共通型と Widget 責務の対応更新
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]`
+  - `tests/test_widget_actions.py`, `tests/test_service*.py` — `apply_best_params` のシグネチャに合わせて更新
+- **互換性**:
+  - 公開 Python API（`w.tune()`, `w.apply_best_params(...)`）は変わらない。
+  - `TuningSummary` は dataclass で `default_factory=dict` を持つため、既存テストが
+    construct する `TuningSummary(...)` は引数を増やさなくても通る（後方互換）。
+  - `Service.apply_best_params` の `tune_snapshot=` / `tune_ui_snapshot=` 引数を削除するのは
+    Widget 内部の呼び出し元のみ（外部公開なし）。
+- **代替案（却下）**:
+  - **案A: snapshot は Widget 側に保持したままにする** — CLAUDE.md §4 の Widget 責務違反を
+    残し、tune/apply 間の競合バグの根本原因が解消されない。
+  - **案B: snapshot を `_tune_model` の attribute として lizyml model に書き込む**
+    — `model._widget_config` で過去に同種の私有書き込みを禁じた経緯（#116）がある。
+    Adapter の id-based registry に置く案も検討したが、TuningSummary（既に DTO として存在）に
+    含めるほうが意味論的に正しい。
+- **受け入れ基準**:
+  - `TuningSummary` に `config_snapshot` / `ui_snapshot` フィールドが追加され、Adapter が埋める。
+  - `LizyWidget._tune_config_snapshot` / `_tune_ui_snapshot` が削除される。
+  - `Service.apply_best_params(params, current_config)` のシグネチャは外部から見て不変
+    （内部実装が `_last_tune_summary` から snapshot を取り出す）。
+  - 新規テスト: `apply_best_params` 直前に `load()` が走った場合に、stale な snapshot から
+    再構築するのではなく明示エラー（"tune summary cleared by load"）を返す。
+  - 既存 `tests/test_widget_actions.py::test_apply_best_params_*` が引き続き green。
+  - `mypy --strict` 通過。
+- **実装ノート（2026-05-09）**:
+  - `TuningSummary` に `config_snapshot` / `ui_snapshot` を追加（dataclass のため
+    `default_factory=dict` で後方互換）。
+  - `WidgetService.tune` は新しく `ui_snapshot=` kwarg を受け取り、Adapter 結果を
+    `dataclasses.replace` で `config_snapshot` / `ui_snapshot` 入りに差し替えて
+    `_last_tune_summary` に格納する（Service 内 lock 配下）。
+  - `Service.apply_best_params` は `tune_snapshot=` / `tune_ui_snapshot=` の kwarg を
+    完全削除。`_last_tune_summary` がなければ `current_config` ベース、
+    `load_data` 後の stale 状態では `ValueError("tune summary cleared by load …")` を発火。
+  - `JobSpec.ui_snapshot` を新設し、Widget の `_run_job` で
+    `copy.deepcopy(dict(self.config))` を tune ジョブのみ詰める。
+  - `SubprocessJobRunner` は `service.record_subprocess_tune_summary(...)` 経由で
+    親プロセス側 Service に TuningSummary を再構築する（subprocess 経路は別 process なので
+    `service.tune` 側で記録できないため）。
+  - `LizyWidget.__init__` から `_tune_config_snapshot` / `_tune_ui_snapshot` を削除、
+    `WidgetActionDispatcher.handle_apply_best_params` も簡素化（snapshot 受け渡しなし）。
+
+---
+
+### P-034: BackendContract に UI defaults / step_map を追加
+
+- **日付**: 2026-05-08（提案）/ 2026-05-09（決定・実装）
+- **ステータス**: 決定（実装済み — PR #131 → develop）
+- **関連 Issue**: [#131](https://github.com/nbx-liz/LizyML-Widget/issues/131)
+- **背景**:
+  - PR #119 / #121 で JS から backend 固有 option set / parameter catalog をハードコードする
+    箇所をほぼ撤廃したが、**数値デフォルト** と **step 値** は対象外だった:
+    - `DataTab.tsx`: `n_splits ?? 5`, `random_state ?? 42`, `gap ?? 0`, `purge_gap ?? 0`,
+      `embargo ?? 0`
+    - `TuneSubTab.tsx` / `SearchSpace.tsx`: `n_trials ?? 10`, `_precision_at_k_k ?? 10`
+    - `ModelEditors.tsx`, `SearchSpace.tsx`: feature weight `step={0.1}`
+    - `RetuneControls.tsx`: `boundary_threshold` `step={0.01}`
+  - これらは "payload 未設定時のフォールバック" として `??` 演算子で書かれているが、
+    backend 仕様（lizyml）が変わると JS 側のコード変更なしには反映されない。
+    CLAUDE.md §8 の "JS に backend 固有値をハードコードしない" 原則を厳密に守ると違反となる。
+- **提案内容**:
+  - `BackendContract.ui_schema`（`src/lizyml_widget/adapter_contract.py`）に 2 つの dict を追加:
+    ```python
+    ui_schema["defaults"] = {
+        "cv": {
+            "n_splits": 5, "random_state": 42, "gap": 0,
+            "purge_gap": 0, "embargo": 0,
+        },
+        "tune": {"n_trials": 10},
+        "metric_params": {"precision_at_k_k": 10},
+    }
+    ui_schema["step_map"] = {
+        # 既存エントリに加えて:
+        "feature_weights": 0.1,
+        "boundary_threshold": 0.01,
+    }
+    ```
+  - JS 側で `??` リテラルフォールバックを撤廃し、`capabilities.ui_schema.defaults.cv.n_splits`
+    / `step_map.feature_weights` 等を look-up する。
+- **影響範囲**:
+  - `src/lizyml_widget/adapter_schema.py` または `adapter_contract.py` — `defaults` / `step_map` 拡張
+    （**change gate**: data contract / backend contract 変更）
+  - `js/src/tabs/DataTab.tsx` / `TuneSubTab.tsx` / `components/SearchSpace.tsx`
+    / `ModelEditors.tsx` / `RetuneControls.tsx` — `??` フォールバック削除
+  - `tests/test_adapter_contract.py` 等 — contract shape の golden test 追加
+  - `js/src/__tests__/` — contract-driven レンダリングのケース追加
+  - `BLUEPRINT.md` §3.2 — backend contract 形状の更新
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]`
+- **互換性**:
+  - `BackendContract` schema_version は据え置き（後方互換な追加のみ）。
+  - 既存の `step_map` キーには手を入れず、`feature_weights` / `boundary_threshold` を**追加**するのみ。
+  - 新規 `defaults` キーは optional：JS 側はキー欠落時に既存の `??` 値（互換のため一時保持）を使う
+    実装にする → 移行完了 PR で `??` を全削除。
+- **代替案（却下）**:
+  - **案A: 数値リテラル程度なら JS にハードコードしてよい** — 既存 PR #119 の方針と矛盾し、
+    "backend 固有値は contract 由来" の不変条件を弱める。
+  - **案B: 個別の traitlet で defaults を渡す** — 既に `backend_contract` 経由で
+    capabilities が流れているため、新 traitlet を増やすと sync 経路が増えて煩雑になる。
+- **受け入れ基準**:
+  - `BackendContract.ui_schema.defaults` と `step_map` の追加分が adapter から流れ、
+    `tests/test_adapter_contract.py`（または `test_frontend_contract.py`）の golden test で
+    shape が固定される。
+  - JS 側の `?? 5`, `?? 10`, `?? 42`, `step={0.1}`, `step={0.01}` リテラルが Issue に列挙された
+    すべてのファイルから消える（grep で残存 0）。
+  - `pnpm test:coverage` の vitest threshold（statements 75% / branches 70%）を維持。
+  - `js/src/__tests__/` で contract-driven レンダリング経路を最低 1 ケースずつ検証。
+- **実装ノート（2026-05-09）**:
+  - `adapter_contract.build_ui_schema` の `defaults` に `cv` / `tune` / `metric_params` を、
+    `step_map` に `feature_weights` / `boundary_threshold` を追加。`schema_version` は据え置き。
+  - JS では contract から読み出すための薄いヘルパ（`dN(key, fallback)` 等）を追加し、
+    fallback 数値は **fixture が contract を渡さないユニットテスト用のみ** 残した。
+  - 影響ファイル: `DataTab.tsx` / `TuneSubTab.tsx` / `SearchSpace.tsx` / `ModelEditors.tsx`
+    （`metricParamDefaults` prop を ModelSection→TypedParamsEditor で伝搬） /
+    `RetuneControls.tsx` / `ResultsTab.tsx` / `App.tsx`（`stepMap` を contract から RetuneControls へ伝搬）。
+  - ゴールデンテスト: `TestContractNumericDefaultsAndStepMap` を `tests/test_frontend_contract.py` に追加。
+  - 既存 vitest 274 件 / pytest 935 件すべて green、ruff + mypy strict クリーン。
+
+---
+
+### P-033: 状態機械不変条件（INV-A..F）の宣言と enforcement
+
+- **日付**: 2026-05-08
+- **ステータス**: 提案
+- **関連 Issue**: [#118](https://github.com/nbx-liz/LizyML-Widget/issues/118)
+- **背景**:
+  - `~/.claude/rules/common/invariants-first.md` は並行性 / 状態機械 / リソース所有権を扱うコードに対して、
+    実装前に不変条件を宣言し、テストで enforce することを義務付けている。
+  - 本リポジトリの状態機械（`status` traitlet, `_job_thread`, `WidgetService._tune_model`, `_cancel_flag`,
+    `progress.round`, `tune_summary.boundary_report.dims`）には、これまで形式化された不変条件が存在しなかった
+    （`grep -r "INV-" docs/ src/` で 0 ヒット）。
+  - P-027 / P-028 / P-029 で発生したラウンド +1 ずれ等の状態機械バグは、不変条件が文書化されていなかったため
+    fix が "発見した症状" に対するパッチに留まり、累積的な負債となった（HISTORY.md Bug Fix 参照）。
+  - P-032（issue #117）で `_supervise` に状態遷移ロジックが集約されたため、ここで invariant assert を
+    encode する好機となる。
+- **提案内容**:
+  - **BLUEPRINT.md §6 に「State machine invariants」節（§6.4）を追加** し、INV-A..F を以下の形式で宣言:
+    - **INV-A**: `status` の遷移は `idle → data_loaded → running → {completed | failed} → running → ...`
+      の有限状態機械に従う。`idle → completed` 等の不正遷移は即座に拒否される。
+    - **INV-B**: `_job_thread` は同時に最大 1 個のライブワーカーのみを保持する。
+      `status == "running"` 中の `_run_job` 再呼び出しは黙って無視される（`widget.py::_run_job` の
+      ガード）。
+    - **INV-C**: `WidgetService._tune_model` は最直近の `tune` 呼び出しが所有する。
+      `tune` → `fit` → `retune` の順序で fit が `_tune_model` を破壊しない（P-028）。
+    - **INV-D**: `_cancel_flag` は各ジョブ開始時に `clear()` され、ジョブ終了まで Widget 側からは
+      書き込まれない。`status == "running"` 中の cancel は `failed` (`error.code == "CANCELLED"`)
+      へ遷移する。
+    - **INV-E**: `progress.round` は単一の tune 呼び出し（resume 含む）内で単調非減少。
+      P-029 のラウンド +1 オフバイワンに対するレギュラリゼーション。
+    - **INV-F**: `tune_summary.boundary_report.dims` は各 search space 次元を **過不足なく一度ずつ**
+      列挙する（重複・欠損なし）。ラウンドごとの差分ではなく累積スナップショット。
+  - **invariant tests を新規 `tests/test_invariants.py` に集約**:
+    - INV-A: 不正遷移 (`idle → completed`) を試み、`status` が変わらないこと。
+    - INV-B: `status == "running"` 中の `_run_job` 再呼び出しが `_job_counter` を増やさないこと。
+    - INV-C: `tune → fit → retune` シーケンスで `_tune_model` が破壊されない。
+    - INV-D: `_cancel_flag` が新規ジョブ開始時に `False` になる。Cancel 中の状態遷移が `failed` で
+      `error.code == "CANCELLED"` になる。
+    - INV-E: round が monotonic（連続した round 値が降順にならない）。
+    - INV-F: `boundary_report.dims` のすべての `name` が unique で、search space 全次元と一致する。
+- **影響範囲**:
+  - `BLUEPRINT.md` §6.4 — 新規節（**change gate**: invariants over shared state）
+  - `tests/test_invariants.py` — 新規（INV-A..F 検証）
+  - `src/lizyml_widget/widget.py` — runtime guard の comment 整備（INV-X breadcrumbs）
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]` セクション
+- **互換性**:
+  - 公開 Python API / traitlet / JS dispatcher 互換性は変更なし。
+  - 内部 assert / log は debug-level；ユーザーから観測可能な動作変化なし。
+- **代替案（却下）**:
+  - **案A: 不変条件はコメントのみで十分** — invariants-first.md は "executable checks > comments" を
+    明示。コメントは書き手のメンタルモデルしか保存しない。
+  - **案B: assert ではなく型レベルで強制（ブランド型）** — Python の型システムで状態機械を
+    完全エンコードするには `typing.Literal[...]` の transition 型が必要となり、コードが煩雑化する。
+    test + runtime assert で十分。
+- **受け入れ基準**:
+  - BLUEPRINT.md §6.4 に INV-A..F が `INV-N: <subject> ... — violated if <scenario>` 形式で宣言される。
+  - `tests/test_invariants.py` で INV-A..F 各々に対応する RED-then-GREEN テストが存在する。
+  - `_supervise` / `_run_job` の状態遷移ガードに対応する INV-X breadcrumb がある。
+  - 既存テスト全 green。
+  - 今後の `_supervise` / `status` / `_tune_model` / `_cancel_flag` を触る PR は body に
+    Invariants + Failure Paths セクションを含める運用が確立する。
+
+---
+
+### P-032: JobRunner Protocol 抽出（widget.py God-class 分割）
+
+- **日付**: 2026-05-08
+- **ステータス**: 提案
+- **関連 Issue**: [#117](https://github.com/nbx-liz/LizyML-Widget/issues/117)
+- **背景**:
+  - `src/lizyml_widget/widget.py` は現在 1234 行（CLAUDE.md §8 の 800 行上限を超過）。
+    Python API surface（`load` / `fit` / `tune` / `set_config` / properties）と、
+    JS-action dispatcher + thread orchestrator + dual job worker
+    （`_run_job` / `_job_worker` / `_subprocess_job_worker`）を融合している。
+  - `_job_worker` と `_subprocess_job_worker` は state 遷移・error 分類・traitlet 配信を
+    near-duplicate で実装しており、再 tune 機能（P-028）は subprocess 経路でのフォーク維持コストが
+    高すぎたため subprocess 実行が **disable** されたままになっている（issue 本文参照）。
+  - 状態機械が複数箇所に分散しているため、INV-A..F（issue #118 で宣言予定）を後続で書く際にも
+    enforcement が困難。
+- **提案内容**:
+  - 新モジュール `src/lizyml_widget/job_runner.py` を作成し、以下を定義:
+    - `JobRunner` Protocol — `run(spec, on_progress, cancel_event) -> JobResult` の単一メソッド。
+    - `ThreadJobRunner` — 既存 `_job_worker` のロジックを移植したインプロセス実装。
+    - `SubprocessJobRunner` — 既存 `_subprocess_job_worker` のロジックを移植したアウトプロセス実装。
+  - `JobSpec` / `JobResult` を共通 dataclass として導入（job_type, config, retune_kwargs, etc.）。
+  - `widget.py::_run_job` は薄い supervisor に統合:
+    - state 遷移（status, job_type, job_index, progress, elapsed_sec, error, fit_summary, tune_summary）
+    - error classification（BACKEND_ERROR / INTERNAL_ERROR）
+    - traitlet 配信
+    - cancel flag のリセット
+
+    上記は単一の `_supervise(runner, spec)` 内で実装し、両 runner で共有する。
+  - 既存の `_job_worker` / `_subprocess_job_worker` を削除し、widget.py を 800 行未満に圧縮。
+  - 再 tune の subprocess 経路 enable は別 follow-up（model artifact ハンドオフが独立した設計を要する）。
+    本 Proposal の範囲では `RETUNE_SUBPROCESS_UNSUPPORTED` ガードを `SubprocessJobRunner` に移植するのみ。
+- **影響範囲**:
+  - `src/lizyml_widget/widget.py` — `_run_job` 簡略化、`_job_worker` / `_subprocess_job_worker` 削除（**change gate**: 並行性 / 所有権設計）
+  - `src/lizyml_widget/job_runner.py` — 新規（**change gate**: 共通型 `JobSpec` / `JobResult` 追加）
+  - `src/lizyml_widget/subprocess_runner.py` — `SubprocessJobRunner` への移植先として参照
+  - 既存 `tests/test_widget_jobs.py` / `tests/test_subprocess_integration.py` / `tests/test_thread_safety.py` —
+    新 API で再構成
+  - 新規 `tests/test_job_runner.py` — runner 単体（normal completion / cancel mid-run / exception mid-run）
+  - `CHANGELOG.md` — `[Unreleased]` セクション
+  - `HISTORY.md` — 本 Proposal
+- **互換性**:
+  - 公開 Python API（`LizyWidget.fit` / `tune` / `retune` / `load` / `predict` 等）の振る舞いは変更なし。
+  - 公開 traitlet（`status` / `job_type` / `job_index` / `progress` / `elapsed_sec` / `error` /
+    `fit_summary` / `tune_summary` / `available_plots` / `inference_result`）の意味論は変更なし。
+  - JS 側 action dispatcher の入出力契約は変更なし。
+  - `LZW_FORCE_SUBPROCESS=1` 環境変数の挙動は維持。
+- **代替案（却下）**:
+  - **案A: widget.py 内で `_job_worker` と `_subprocess_job_worker` の共通ロジックを helper に括り出すだけ** —
+    state machine が依然 widget.py に残るため、INV-A..F の宣言・enforcement と並行性設計の単一責任に矛盾する。
+    Issue #118 の前提を崩す。
+  - **案B: subprocess 実行をデフォルトに切り替える** — OpenMP 関連の現実的な fit 劣化は 1.0–1.2x で、
+    subprocess 起動 overhead（≈ 500ms import）の方がレイテンシ影響が大きい。デフォルト切り替えは
+    P-032 の範囲外。
+  - **案C: 抽出をやめて 1234 行の現状を許容** — CLAUDE.md §8（God-class 禁止）違反で、
+    今後の機能追加（async runner / WebWorker 等）に対する拡張コストが累積する。
+- **受け入れ基準**:
+  - `src/lizyml_widget/job_runner.py` が存在し、`JobRunner` Protocol + `ThreadJobRunner` +
+    `SubprocessJobRunner` を提供する。
+  - `widget.py` は 800 行未満。
+  - `widget.py` 内の state 遷移ロジックは `_supervise` のみが管理する（他の `self.status =` 代入は
+    Python API の data_loaded セットなど job 外の用途のみ）。
+  - 新規 `tests/test_job_runner.py` で各 runner について正常完了 / cancel / 例外を assert。
+  - 既存 898 Python テスト + 272 JS テスト + 24 e2e テストが green。
+  - `ruff check` / `ruff format --check` / `mypy --strict` / `pytest` / `eslint` / `tsc` / `vitest` 全 green。
+
+---
+
+### P-030: lizyml 0.10 / 0.11 / 0.12 互換窓拡大
+
+- **日付**: 2026-05-08
+- **ステータス**: 承認・実装
+- **関連 Issue**: [#112](https://github.com/nbx-liz/LizyML-Widget/issues/112)
+- **決定事項**:
+  - **Phase 1–3 を実装**: 互換窓拡大 (`>=0.10.0,<0.13`) + 0.10 の非数値ラベル分類の通過確認 +
+    0.11 の `smape` / `wape` 回帰メトリックの BackendContract 露出。
+  - **Phase 4 (0.12 resumable tuning) は本 Proposal では UI 露出しない**: `Tuner.tune(storage=, study_name=)`
+    の Widget 経由公開は SQLite path lifecycle / kernel 横断 study 共有 / cleanup の独立した設計を要するため、
+    将来の P-031（仮）で扱う。0.12 を compat 範囲に含めること自体の動作確認は Phase 1 + Phase 5 の smoke で
+    完了している。
+  - **Widget 0.9.0 として release**: lizyml 0.9.x は compat 範囲から外れるため、minor bump とする。
+- **背景**:
+  - LizyML が 0.9.0 公開後に `0.9.1` / `0.10.0` / `0.11.0` / `0.12.0` を続けて release。
+  - lizyml-widget 0.8.0 は `lizyml>=0.9.0,<0.10` に固定されており、`pyproject.toml` の extra と
+    `src/lizyml_widget/adapter.py` の `LIZYML_MIN_VERSION` / `LIZYML_MAX_VERSION` が二重に
+    範囲を強制するため、ユーザー側で `lizyml>=0.10` を選択できない。
+  - 0.10–0.12 の主な変更は **加算的（破壊的変更なし）**:
+    - **0.10**: 非数値分類ラベル自動エンコード（`FitResult.target_encoder` 新設、`FORMAT_VERSION` 1→2、
+      旧 v1 artifact は `Model.load()` が in-memory migrate する）、新エラーコード `TARGET_NOT_NUMERIC` /
+      `TARGET_UNSEEN_LABEL`。
+    - **0.11**: 回帰メトリック `smape` / `wape` を `MetricRegistry` に追加、LightGBM feval bridge 経由で
+      `eval_history` / 学習曲線にも反映。
+    - **0.12**: Optuna 永続化ストレージによる resumable tuning（`Tuner.tune(storage=, study_name=)` 追加、
+      `storage=None` で従来挙動）。
+- **提案内容**:
+  - **Phase 1 — 互換窓拡大（基盤）**:
+    - `pyproject.toml` の lizyml extras を `>=0.10.0,<0.13` に更新（**lower bound を 0.10 に切り上げ**: 0.10
+      の `target_encoder` 経由のラベル dtype 保持を Widget 側でも前提とするため）。
+    - `LIZYML_MIN_VERSION = (0, 10, 0)`, `LIZYML_MAX_VERSION = (0, 13, 0)` に更新。
+    - `tests/test_retune_monitoring.py` の guard 定数アサートを追従。
+    - `docs/VERSION_COMPAT.md` に新行追加（`lizyml-widget 0.9.x` ↔ `lizyml >=0.10.0,<0.13`）。
+    - `uv.lock` を `uv lock --upgrade-package lizyml` で再生成。
+  - **Phase 2 — 0.10 統合**:
+    - `LizyMLAdapter.predict()` は `result.pred` がすでに元 dtype（object / category / bool）でデコード済み
+      な前提で受け取り、pandas DataFrame に dtype を保持して載せ替えるだけに留める。
+    - 新エラーコード `TARGET_NOT_NUMERIC` / `TARGET_UNSEEN_LABEL` は `LizyMLError` の message に含めて
+      `BACKEND_ERROR` 配下で表示する（Widget 側で再分類はしない、UI 上はメッセージで識別）。
+    - 旧 v1 artifact の `Model.load()` 後方互換は lizyml 側で吸収済みのため、Widget 追加実装は不要。
+      回帰テストでのみ verify する。
+  - **Phase 3 — 0.11 統合**:
+    - `adapter_params.py` の回帰タスク metric option set に `smape` / `wape` を追加。
+    - `adapter_schema.py` の Search Space catalog（regression metric 選択肢）に `smape` / `wape` を加える。
+    - `LizyMLAdapter.plot()` の `learning-curve` 経路は既存 `metrics` kwarg 透過で動作（追加実装不要、
+      e2e テストで検証）。
+  - **Phase 4 — 0.12 決定**:
+    - **本 Proposal の範囲では UI 露出しない**。`Tuner.tune(storage=, study_name=)` を Widget で公開する場合
+      SQLite ファイル lifecycle / kernel 横断 study 共有 / cleanup の設計が必要となるため、別 Proposal
+      （P-031 仮）で扱う。compat 範囲に 0.12 を含めること自体の動作確認は Phase 1 + Phase 5 の smoke で
+      カバーする。
+- **影響範囲**:
+  - `pyproject.toml` — extras / dev dependency 範囲（**change gate**: 外部依存変更）
+  - `uv.lock` — 再生成
+  - `src/lizyml_widget/adapter.py` — `LIZYML_MIN_VERSION` / `LIZYML_MAX_VERSION` 定数（**change gate**:
+    BackendAdapter Protocol の依存）
+  - `src/lizyml_widget/adapter_params.py` — regression metric option set
+  - `src/lizyml_widget/adapter_schema.py` — Search Space catalog の regression metric
+  - `tests/test_retune_monitoring.py` — guard 定数アサート
+  - `tests/regression/test_reg_112_target_encoder_roundtrip.py` — 新規（非数値ラベル分類の round-trip）
+  - `tests/regression/test_reg_112_smape_wape.py` — 新規（回帰メトリック登録 + learning curve）
+  - `docs/VERSION_COMPAT.md` — 新行
+  - `CHANGELOG.md` — `[0.9.0]` セクション
+  - `HISTORY.md` — 本 Proposal
+- **互換性**:
+  - **Widget 0.9.0 リリース時、lizyml 0.9.x ユーザーは強制的に 0.10 へアップグレードが必要**。
+    0.9.x の `Model.fit` / `Model.tune` / `Model.predict` 公開 API は 0.10 で互換維持されているため、
+    アップグレード自体は import 互換のはず（ただし `FORMAT_VERSION` バンプにより lizyml 0.9 で保存した
+    `model.lizyml` artifact を 0.9 で再ロードする経路は 0.10 への移行で 1 度だけ migrate される）。
+  - `BackendAdapter` Protocol のシグネチャは無変更。
+  - `FitSummary` / `TuningSummary` / `PredictionSummary` / `BackendInfo` の構造は無変更（0.10 の
+    `target_encoder` フィールドは Adapter 内部で吸収、Widget の共通型には漏らさない）。
+  - 既存 traitlet / action / Python API の互換破壊なし。
+  - JS 側の backend_contract 駆動 UI は無変更（metric option set は backend 経由で配信）。
+- **代替案（却下）**:
+  - **案A: 0.10 / 0.11 / 0.12 を別々の PR / Proposal に分割** — 加算的変更が中心で blast radius が小さい
+    ため、3 PR 分の CI / レビューコストに見合わない。単一 PR で段階コミットする方が churn が少ない。
+  - **案B: 互換窓を `>=0.9.0,<0.13` のままにして 0.9 ユーザーを残す** — 0.10 の `target_encoder` を
+    Adapter 内で前提として書くと 0.9 環境では型・属性が存在せず実行時に失敗する。条件分岐で吸収する
+    複雑さは長期保守負債になるため不採用。
+  - **案C: 0.12 の resumable tuning を本 PR で UI 露出する** — SQLite path 解決 / kernel restart 横断 /
+    Widget 間 study 共有 / cleanup は独立した設計が必要。本 Proposal の主目的（compat 窓拡大）から外して
+    P-031（仮）に分離する。
+- **受け入れ基準**:
+  - `pip install "lizyml-widget[lizyml]"` で `lizyml==0.12.x` が解決される。
+  - `LizyWidget` の import / Fit / Tune / Inference が `lizyml==0.12.0` で全 green
+    （Python 3.10 / 3.11 / 3.12 マトリクス CI）。
+  - 非数値ラベル分類（`y` が `object` / `category` / `bool`）で `LizyWidget.fit()` → `predict()` が
+    元 dtype を保持して結果を返す（回帰テストで assert）。
+  - 回帰タスクで `metric=["smape", "wape"]` が backend に届き、学習曲線にプロットされる
+    （e2e テストで assert）。
+  - 旧 lizyml 0.9.x で保存された `model.lizyml` artifact が `Model.load()` 経由で読み込めることを
+    smoke テストで確認（fixture 整備）。
+  - `ruff check` / `ruff format --check` / `mypy --strict` / `pytest` / `eslint` / `tsc` / `vitest` 全 green。
+  - `docs/VERSION_COMPAT.md` の対応表最上行が `lizyml-widget 0.9.x ↔ lizyml >=0.10.0,<0.13` になっている。
+
+---
+
 ### Bug Fix: Convergence Signal の Round 表示 +1 ずれ + チェックマーク escape 不正
 
 - **日付**: 2026-04-12

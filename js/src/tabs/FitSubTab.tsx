@@ -15,6 +15,8 @@ interface FitSubTabProps {
   localConfig: Record<string, any>;
   configSchema: Record<string, any>;
   uiSchema: Record<string, any>;
+  /** Backend capabilities map — used for cv_strategy_fields and additional_params_hidden_keys (#119). */
+  capabilities?: Record<string, any>;
   task: string;
   dfInfo: Record<string, any>;
   handleChange: (newConfig: Record<string, any>) => void;
@@ -25,24 +27,45 @@ interface FitSubTabProps {
   yamlExportCount?: number;
 }
 
-/** Strategies that use a group column. */
-const GROUP_STRATEGIES = new Set([
+/** Fallback strategy sets used only when backendContract.cv_strategy_fields is missing
+ * (e.g. unit-test fixtures). Production runs always supply the contract; adding/removing
+ * group / time strategies in the backend automatically propagates without touching this. */
+const FALLBACK_GROUP_STRATEGIES = new Set([
   "group_kfold", "stratified_group_kfold", "group_time_series", "blocked_group_kfold",
 ]);
-
-/** Strategies that use a time column. */
-const TIME_STRATEGIES = new Set([
+const FALLBACK_TIME_STRATEGIES = new Set([
   "time_series", "purged_time_series", "group_time_series",
 ]);
 
-/** Filter inner validation options based on CV strategy. */
+/** Derive the set of strategies whose declared field list contains any of the given fields. */
+function deriveStrategiesByField(
+  cvStrategyFields: Record<string, string[]>,
+  fieldNames: string[],
+): Set<string> {
+  return new Set(
+    Object.entries(cvStrategyFields)
+      .filter(([, fields]) => fieldNames.some((f) => fields.includes(f)))
+      .map(([strategy]) => strategy),
+  );
+}
+
+/** Filter inner validation options based on CV strategy and contract field map. */
 function filterInnerValidOptions(
   options: string[],
   cv: Record<string, any> | undefined,
+  cvStrategyFields: Record<string, string[]>,
 ): string[] {
-  const strategy = cv?.strategy ?? "kfold";
-  const hasGroup = GROUP_STRATEGIES.has(strategy);
-  const hasTime = TIME_STRATEGIES.has(strategy);
+  const strategy = cv?.strategy;
+  if (!strategy) return options;
+  const hasContract = Object.keys(cvStrategyFields).length > 0;
+  const groupSet = hasContract
+    ? deriveStrategiesByField(cvStrategyFields, ["group_col", "groups_col", "blocks_col"])
+    : FALLBACK_GROUP_STRATEGIES;
+  const timeSet = hasContract
+    ? deriveStrategiesByField(cvStrategyFields, ["time_col"])
+    : FALLBACK_TIME_STRATEGIES;
+  const hasGroup = groupSet.has(strategy);
+  const hasTime = timeSet.has(strategy);
   return options.filter((opt) => {
     if (opt === "group_holdout") return hasGroup;
     if (opt === "time_holdout") return hasTime;
@@ -54,6 +77,7 @@ export function FitSubTab({
   localConfig,
   configSchema,
   uiSchema,
+  capabilities,
   task,
   dfInfo,
   handleChange,
@@ -71,11 +95,26 @@ export function FitSubTab({
   const defaults: Record<string, any> = uiSchema.defaults ?? {};
   const sectionKeys = sections.map((s) => s.key);
   const unknownKeys = getUnknownKeys(configSchema, sectionKeys);
+  // #119: derive group/time strategy sets and additional-params exclusions from
+  // the backend contract instead of hardcoded literals.
+  const cvStrategyFields: Record<string, string[]> = capabilities?.cv_strategy_fields ?? {};
+  const additionalParamsHiddenKeys: string[] = capabilities?.additional_params_hidden_keys ?? [];
+  const searchSpaceCatalog = uiSchema.search_space_catalog ?? [];
 
   // Auto-reset inner_valid method when CV strategy changes
   const allInnerValidOpts: string[] = uiSchema.inner_valid_options ?? [];
-  const availableInnerValidOpts = filterInnerValidOptions(allInnerValidOpts, dfInfo?.cv);
-  const cvStrategy = dfInfo?.cv?.strategy ?? "kfold";
+  const availableInnerValidOpts = filterInnerValidOptions(
+    allInnerValidOpts,
+    dfInfo?.cv,
+    cvStrategyFields,
+  );
+  // Fallback strategy used only when cv state is missing entirely.
+  const cvDefaultByTask: Record<string, string> = capabilities?.cv_default_strategy ?? {};
+  const cvStrategy =
+    dfInfo?.cv?.strategy ??
+    cvDefaultByTask[task] ??
+    (capabilities?.cv_strategies?.[0] as string | undefined) ??
+    "";
   const currentInnerValid =
     localConfig.training?.early_stopping?.inner_valid?.method ?? "holdout";
   const handleSectionChangeRef = useRef(handleSectionChange);
@@ -83,7 +122,11 @@ export function FitSubTab({
   const localConfigRef = useRef(localConfig);
   localConfigRef.current = localConfig;
   useEffect(() => {
-    const available = filterInnerValidOptions(allInnerValidOpts, { strategy: cvStrategy });
+    const available = filterInnerValidOptions(
+      allInnerValidOpts,
+      { strategy: cvStrategy },
+      cvStrategyFields,
+    );
     if (available.length > 0 && !available.includes(currentInnerValid)) {
       const cfg = localConfigRef.current;
       handleSectionChangeRef.current("training", {
@@ -94,7 +137,7 @@ export function FitSubTab({
         },
       });
     }
-  }, [cvStrategy, currentInnerValid, allInnerValidOpts]);
+  }, [cvStrategy, currentInnerValid, allInnerValidOpts, cvStrategyFields]);
 
   // Calibration
   const calibrationEnabled = localConfig.calibration != null;
@@ -136,8 +179,11 @@ export function FitSubTab({
                 parameterHints={parameterHints}
                 optionSets={optionSets}
                 stepMap={stepMap}
+                metricParamDefaults={defaults.metric_params ?? {}}
                 columns={dfInfo?.columns ?? []}
                 additionalParams={uiSchema.additional_params ?? []}
+                searchSpaceCatalog={searchSpaceCatalog}
+                additionalParamsHiddenKeys={additionalParamsHiddenKeys}
               />
             </Accordion>
           );

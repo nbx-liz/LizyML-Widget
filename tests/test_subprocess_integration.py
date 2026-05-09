@@ -106,63 +106,145 @@ class TestWidgetExecutionStrategy:
                 "lizyml_widget.widget.get_execution_strategy",
                 return_value=("subprocess", "/usr/lib/libomp5.so"),
             ),
+            patch.object(
+                __import__("lizyml_widget.widget", fromlist=["SubprocessJobRunner"]),
+                "SubprocessJobRunner",
+            ),
         ):
             w = _make_widget()
             df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
             w.load(df, target="y")
-
-            with patch.object(w, "_subprocess_job_worker"):
-                w._run_job("fit")
-                if w._job_thread:
-                    w._job_thread.join(timeout=2)
+            w._run_job("fit")
+            if w._job_thread:
+                w._job_thread.join(timeout=2)
 
             assert w._execution_strategy == "subprocess"
             assert w._libomp_path == "/usr/lib/libomp5.so"
 
 
 # ===========================================================================
-# Widget: _run_job branching
+# Issue #147 / P-036: env-var gate for execution strategy
+# ===========================================================================
+
+
+class TestLzwForceThreadOptOut:
+    """``LZW_FORCE_THREAD=1`` keeps the legacy in-process path even when the
+    detector says subprocess. ``LZW_FORCE_SUBPROCESS=1`` is retained as a
+    no-op for backward compatibility — subprocess is now the default whenever
+    ``get_execution_strategy()`` says so."""
+
+    def _strategy_after_first_job(
+        self,
+        env: dict[str, str],
+        detector_return: tuple[str, str | None],
+    ) -> tuple[str | None, str | None, MagicMock]:
+        df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch(
+                "lizyml_widget.widget.get_execution_strategy",
+                return_value=detector_return,
+            ) as mock_detect,
+            patch.object(
+                __import__("lizyml_widget.widget", fromlist=["SubprocessJobRunner"]),
+                "SubprocessJobRunner",
+            ),
+            patch.object(
+                __import__("lizyml_widget.widget", fromlist=["ThreadJobRunner"]),
+                "ThreadJobRunner",
+            ),
+        ):
+            w = _make_widget()
+            w.load(df, target="y")
+            w._run_job("fit")
+            if w._job_thread:
+                w._job_thread.join(timeout=2)
+            return w._execution_strategy, w._libomp_path, mock_detect
+
+    def test_default_uses_detector_when_libgomp_present(self) -> None:
+        """Without ``LZW_FORCE_THREAD``, libgomp default = subprocess."""
+        # Drop any pre-set legacy env vars so the test is hermetic.
+        env: dict[str, str] = {}
+        for k in ("LZW_FORCE_THREAD", "LZW_FORCE_SUBPROCESS"):
+            os.environ.pop(k, None)
+        strategy, libomp, detect = self._strategy_after_first_job(
+            env=env,
+            detector_return=("subprocess", "/usr/lib/libomp5.so"),
+        )
+        assert strategy == "subprocess"
+        assert libomp == "/usr/lib/libomp5.so"
+        detect.assert_called_once()
+
+    def test_lzw_force_thread_overrides_subprocess_default(self) -> None:
+        """``LZW_FORCE_THREAD=1`` keeps thread even when detector says subprocess."""
+        os.environ.pop("LZW_FORCE_SUBPROCESS", None)
+        strategy, libomp, detect = self._strategy_after_first_job(
+            env={"LZW_FORCE_THREAD": "1"},
+            detector_return=("subprocess", "/usr/lib/libomp5.so"),
+        )
+        assert strategy == "thread"
+        assert libomp is None
+        # Detector must not be consulted when the user explicitly opts out.
+        detect.assert_not_called()
+
+    def test_lzw_force_subprocess_is_no_op(self) -> None:
+        """``LZW_FORCE_SUBPROCESS=1`` no longer gates subprocess — detector wins."""
+        os.environ.pop("LZW_FORCE_THREAD", None)
+        strategy, libomp, _ = self._strategy_after_first_job(
+            env={"LZW_FORCE_SUBPROCESS": "1"},
+            detector_return=("thread", None),
+        )
+        # Detector said thread → widget honours that even with the legacy env var.
+        assert strategy == "thread"
+        assert libomp is None
+
+
+# ===========================================================================
+# Widget: _run_job runner selection (P-032)
 # ===========================================================================
 
 
 class TestRunJobBranching:
-    """Test that _run_job delegates to correct worker based on strategy."""
+    """Test that _run_job picks the right JobRunner based on strategy."""
 
-    def test_thread_strategy_uses_job_worker(self) -> None:
-        """thread strategy calls _job_worker."""
-        with patch(
-            "lizyml_widget.widget.get_execution_strategy",
-            return_value=("thread", None),
+    def test_thread_strategy_uses_thread_runner(self) -> None:
+        """thread strategy constructs ThreadJobRunner."""
+        with (
+            patch(
+                "lizyml_widget.widget.get_execution_strategy",
+                return_value=("thread", None),
+            ),
+            patch("lizyml_widget.widget.ThreadJobRunner") as mock_thread_runner,
+            patch("lizyml_widget.widget.SubprocessJobRunner") as mock_sp_runner,
         ):
             w = _make_widget()
             df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
             w.load(df, target="y")
+            w._run_job("fit")
+            if w._job_thread:
+                w._job_thread.join(timeout=2)
+            mock_thread_runner.assert_called_once()
+            mock_sp_runner.assert_not_called()
 
-            with patch.object(w, "_job_worker") as mock_worker:
-                w._run_job("fit")
-                # Give thread time to start
-                if w._job_thread:
-                    w._job_thread.join(timeout=2)
-                mock_worker.assert_called_once()
-
-    def test_subprocess_strategy_uses_subprocess_worker(self) -> None:
-        """subprocess strategy calls _subprocess_job_worker."""
+    def test_subprocess_strategy_uses_subprocess_runner(self) -> None:
+        """subprocess strategy constructs SubprocessJobRunner."""
         with (
             _force_subprocess,
             patch(
                 "lizyml_widget.widget.get_execution_strategy",
                 return_value=("subprocess", "/usr/lib/libomp5.so"),
             ),
+            patch("lizyml_widget.widget.ThreadJobRunner") as mock_thread_runner,
+            patch("lizyml_widget.widget.SubprocessJobRunner") as mock_sp_runner,
         ):
             w = _make_widget()
             df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
             w.load(df, target="y")
-
-            with patch.object(w, "_subprocess_job_worker") as mock_worker:
-                w._run_job("fit")
-                if w._job_thread:
-                    w._job_thread.join(timeout=2)
-                mock_worker.assert_called_once()
+            w._run_job("fit")
+            if w._job_thread:
+                w._job_thread.join(timeout=2)
+            mock_sp_runner.assert_called_once()
+            mock_thread_runner.assert_not_called()
 
 
 # ===========================================================================
@@ -196,7 +278,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 return_value=mock_result,
             ),
         ):
@@ -236,7 +318,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 return_value=mock_result,
             ),
         ):
@@ -259,7 +341,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 side_effect=RuntimeError("[RuntimeError] LightGBM crashed"),
             ),
         ):
@@ -282,7 +364,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 side_effect=InterruptedError("Job cancelled"),
             ),
         ):
@@ -315,7 +397,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 return_value=mock_result,
             ),
         ):
@@ -328,6 +410,51 @@ class TestSubprocessJobWorker:
                 if w._job_thread:
                     w._job_thread.join(timeout=5)
                 mock_load.assert_called_once_with("/tmp/model.txt")
+
+    def test_tune_state_path_loaded_into_service(self) -> None:
+        """P-037 / #152: when tune_state_path is returned, the runner calls
+        ``service.restore_tune_state_from_path`` so the parent owns a model
+        capable of rendering ``optimization-history``."""
+        mock_result = SubprocessJobResult(
+            job_type="tune",
+            fit_summary={},
+            tune_summary={
+                "best_params": {},
+                "best_score": 0.5,
+                "trials": [],
+                "metric_name": "auc",
+                "direction": "maximize",
+            },
+            eval_table=[],
+            split_summary=[],
+            available_plots=["optimization-history"],
+            model_path=None,
+            tune_state_path="/tmp/tune_state_xyz.pkl",
+        )
+
+        with (
+            _force_subprocess,
+            patch(
+                "lizyml_widget.widget.get_execution_strategy",
+                return_value=("subprocess", None),
+            ),
+            patch(
+                "lizyml_widget.job_runner.run_job_subprocess",
+                return_value=mock_result,
+            ),
+        ):
+            w = _make_widget()
+            df = pd.DataFrame({"x": [i % 10 for i in range(50)], "y": [0, 1] * 25})
+            w.load(df, target="y")
+
+            with patch.object(w._service, "restore_tune_state_from_path") as mock_restore:
+                w._run_job("tune")
+                if w._job_thread:
+                    w._job_thread.join(timeout=5)
+                mock_restore.assert_called_once()
+                # First positional arg is the path
+                call = mock_restore.call_args
+                assert call.args[0] == "/tmp/tune_state_xyz.pkl"
 
     def test_poll_handler_works_with_subprocess(self) -> None:
         """Colab polling handler reads traitlets updated by subprocess worker."""
@@ -348,7 +475,7 @@ class TestSubprocessJobWorker:
                 return_value=("subprocess", None),
             ),
             patch(
-                "lizyml_widget.widget.run_job_subprocess",
+                "lizyml_widget.job_runner.run_job_subprocess",
                 return_value=mock_result,
             ),
         ):

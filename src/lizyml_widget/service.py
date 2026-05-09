@@ -11,6 +11,17 @@ from typing import Any
 import pandas as pd
 
 from .adapter import BackendAdapter
+from .service_columns import (
+    auto_configure_column,
+    calc_feature_summary,
+    detect_task,
+)
+from .service_cv import (
+    compute_preview_splits,
+    default_cv_state,
+    default_strategy_for_task,
+    validate_inner_valid,
+)
 from .types import (
     BackendContract,
     BackendInfo,
@@ -49,6 +60,13 @@ class WidgetService:
         # resume path needs.
         self._tune_model: Any = None
         self._model_lock = threading.Lock()
+        # P-035: latest TuningSummary, owned by Service so the Widget no
+        # longer holds time-series snapshots. Cleared by load_data; the
+        # ``_tune_summary_invalidated_by_load`` flag distinguishes
+        # "never tuned" (None, no flag) from "tuned then load wiped it"
+        # (None, flag) so apply_best_params can fail loud in the latter.
+        self._last_tune_summary: TuningSummary | None = None
+        self._tune_summary_invalidated_by_load: bool = False
 
     @property
     def info(self) -> BackendInfo:
@@ -70,6 +88,13 @@ class WidgetService:
         with self._model_lock:
             self._model = None
             self._tune_model = None
+            # P-035: any prior TuningSummary becomes stale because the data
+            # changed; flag it so apply_best_params fails loud rather than
+            # silently rebuilding from a snapshot pinned to the old data.
+            had_summary = self._last_tune_summary is not None
+            self._last_tune_summary = None
+            if had_summary:
+                self._tune_summary_invalidated_by_load = True
 
         columns: list[dict[str, Any]] = []
         for col in df.columns:
@@ -88,7 +113,7 @@ class WidgetService:
             "auto_task": None,
             "columns": columns,
             "cv": self._default_cv_state(strategy="kfold", n_splits=5),
-            "feature_summary": self._calc_feature_summary(columns),
+            "feature_summary": calc_feature_summary(columns),
         }
 
         if target:
@@ -110,7 +135,7 @@ class WidgetService:
         n_rows = len(df)
         n_unique = int(col.nunique())
 
-        task = self._detect_task(col, n_rows, n_unique)
+        task = detect_task(col, n_rows, n_unique)
 
         # Map existing column settings to detect manual overrides
         existing_settings = {c["name"]: c for c in self._df_info["columns"]}
@@ -125,7 +150,7 @@ class WidgetService:
                 "dtype": str(df[col_name].dtype),
                 "unique_count": int(df[col_name].nunique()),
             }
-            configured = self._auto_configure_column(col_info, n_rows)
+            configured = auto_configure_column(col_info, n_rows, self._df)
             # Preserve manual overrides from update_column()
             prev = existing_settings.get(col_name)
             if prev is not None:
@@ -140,7 +165,7 @@ class WidgetService:
             **self._df_info,
             "target": target,
             "columns": updated_columns,
-            "feature_summary": self._calc_feature_summary(updated_columns),
+            "feature_summary": calc_feature_summary(updated_columns),
         }
         self._apply_task_defaults(task, update_auto_task=True)
         return copy.deepcopy(self._df_info)
@@ -171,7 +196,7 @@ class WidgetService:
         self._df_info = {
             **self._df_info,
             "columns": new_columns,
-            "feature_summary": self._calc_feature_summary(new_columns),
+            "feature_summary": calc_feature_summary(new_columns),
         }
         return copy.deepcopy(self._df_info)
 
@@ -259,12 +284,7 @@ class WidgetService:
     def preview_splits(self) -> dict[str, Any]:
         """Estimate fold structure for blocked_group_kfold before Fit.
 
-        Reads self._df_info["cv"] for blocks config and groups config,
-        then computes the expected fold structure.
-
-        Returns
-        -------
-        dict with keys: total_folds, time_folds, group_folds, periods, folds.
+        Delegates to ``service_cv.compute_preview_splits``.
 
         Raises
         ------
@@ -274,106 +294,7 @@ class WidgetService:
         if self._df is None:
             msg = "No data loaded"
             raise ValueError(msg)
-        cv = self._df_info.get("cv", {})
-        if cv.get("strategy") != "blocked_group_kfold":
-            msg = "preview_splits only supports strategy='blocked_group_kfold'"
-            raise ValueError(msg)
-
-        blocks_cfg: dict[str, Any] = cv.get("blocks") or {}
-        groups_cfg: dict[str, Any] = cv.get("groups") or {}
-
-        blocks_col: str = blocks_cfg.get("col", "")
-        mode: str = blocks_cfg.get("mode", "expanding")
-        train_window: int | None = blocks_cfg.get("train_window")
-        group_folds: int = int(groups_cfg.get("n_splits", cv.get("n_splits", 2)))
-
-        # Build period list from blocks_col unique values sorted
-        if blocks_col and blocks_col in self._df.columns:
-            periods: list[str] = sorted(self._df[blocks_col].dropna().unique().tolist(), key=str)
-        else:
-            periods = []
-
-        num_periods = len(periods)
-        # Each time fold: trains on periods[0..t], validates on periods[t+1]
-        time_folds = max(0, num_periods - 1)
-        total_folds = time_folds * group_folds
-
-        # Precompute row counts per period (MEDIUM-2: O(1) per period lookup)
-        period_counts: dict[str, int] = {}
-        if blocks_col and blocks_col in self._df.columns:
-            vc = self._df[blocks_col].value_counts()
-            period_counts = {str(k): int(v) for k, v in vc.items()}
-
-        # Use cutoffs to group values into periods (MEDIUM-4)
-        cutoffs: list[Any] = blocks_cfg.get("cutoffs", [])
-        if cutoffs and blocks_col and blocks_col in self._df.columns:
-            sorted_values = sorted(self._df[blocks_col].dropna().unique().tolist(), key=str)
-            grouped_periods: list[list[Any]] = []
-            current_group: list[Any] = []
-            cutoff_idx = 0
-            for v in sorted_values:
-                if cutoff_idx < len(cutoffs) and str(v) >= str(cutoffs[cutoff_idx]):
-                    if current_group:
-                        grouped_periods.append(current_group)
-                    current_group = []
-                    cutoff_idx += 1
-                current_group.append(v)
-            if current_group:
-                grouped_periods.append(current_group)
-            # Replace periods with group labels
-            periods = [
-                str(gp[0]) if len(gp) == 1 else f"{gp[0]}..{gp[-1]}" for gp in grouped_periods
-            ]
-            # Rebuild period_counts for grouped periods
-            grouped_counts: dict[str, int] = {}
-            for gp, label in zip(grouped_periods, periods, strict=True):
-                grouped_counts[label] = sum(period_counts.get(str(v), 0) for v in gp)
-            period_counts = grouped_counts
-            num_periods = len(periods)
-            time_folds = max(0, num_periods - 1)
-            total_folds = time_folds * group_folds
-
-        # Build per-time-fold structures
-        folds: list[dict[str, Any]] = []
-        fold_index = 0
-        for t in range(time_folds):
-            valid_period = periods[t + 1]
-            # Expanding: train on all periods up to and including t
-            if mode == "sliding" and train_window is not None:
-                start = max(0, t + 1 - train_window)
-                train_periods_list = periods[start : t + 1]
-            else:
-                train_periods_list = periods[: t + 1]
-
-            # Use precomputed period_counts for O(1) lookup per period
-            train_rows = sum(period_counts.get(str(p), 0) for p in train_periods_list)
-            valid_rows = period_counts.get(str(valid_period), 0)
-
-            period_label = (
-                " + ".join(str(p) for p in train_periods_list) + " -> " + str(valid_period)
-            )
-
-            for group_idx in range(group_folds):
-                folds.append(
-                    {
-                        "fold": fold_index,
-                        "period_label": period_label,
-                        "group_label": f"G{group_idx}",
-                        "train_size": train_rows,
-                        "valid_size": valid_rows,
-                        "train_periods": list(train_periods_list),
-                        "valid_period": valid_period,
-                    }
-                )
-                fold_index += 1
-
-        return {
-            "total_folds": total_folds,
-            "time_folds": time_folds,
-            "group_folds": group_folds,
-            "periods": periods,
-            "folds": folds,
-        }
+        return compute_preview_splits(self._df, self._df_info)
 
     def get_df_info(self) -> dict[str, Any]:
         """Return a copy of the current df_info state."""
@@ -388,67 +309,27 @@ class WidgetService:
         return self._adapter.initialize_config(task=self._df_info.get("task"))
 
     def apply_config_patch(
-        self, config: dict[str, Any], ops: Sequence[ConfigPatchOp]
+        self,
+        config: dict[str, Any],
+        ops: Sequence[ConfigPatchOp],
     ) -> dict[str, Any]:
-        """Apply config patch operations (delegated to adapter)."""
+        """Apply a list of ConfigPatchOp to config (delegated to adapter)."""
         return self._adapter.apply_config_patch(config, ops, task=self._df_info.get("task"))
 
     def canonicalize_config(self, config: dict[str, Any]) -> dict[str, Any]:
-        """Canonicalize a partial/full config via adapter defaults (delegated to adapter)."""
+        """Canonicalize config via adapter."""
         return self._adapter.canonicalize_config(config, task=self._df_info.get("task"))
 
     def apply_task_params(self, config: dict[str, Any], task: str) -> dict[str, Any]:
-        """Apply task-dependent defaults via adapter (no backend-specific keys here)."""
+        """Apply task-dependent params to config via adapter.
+
+        Used when the user changes the task to refresh task-specific defaults.
+        """
         return self._adapter.apply_task_defaults(config, task=task)
 
-    # ── Config ───────────────────────────────────────────────
-
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
-        errors = self._validate_inner_valid(config)
+        errors = validate_inner_valid(config, self._df_info)
         errors.extend(self._adapter.validate_config(config))
-        return errors
-
-    _GROUP_STRATEGIES = frozenset(
-        {"group_kfold", "stratified_group_kfold", "group_time_series", "blocked_group_kfold"}
-    )
-    _TIME_STRATEGIES = frozenset({"time_series", "purged_time_series", "group_time_series"})
-
-    def _validate_inner_valid(self, config: dict[str, Any]) -> list[dict[str, Any]]:
-        """Check inner_valid method is compatible with CV strategy."""
-        training = config.get("training") or {}
-        early_stopping = training.get("early_stopping") or {}
-        inner_valid = early_stopping.get("inner_valid") or {}
-        method = (
-            inner_valid.get("method", "holdout") if isinstance(inner_valid, dict) else inner_valid
-        )
-
-        cv = self._df_info.get("cv") or {}
-        strategy = cv.get("strategy", "kfold")
-        errors: list[dict[str, Any]] = []
-
-        if method == "group_holdout" and strategy not in self._GROUP_STRATEGIES:
-            errors.append(
-                {
-                    "field": "training.early_stopping.inner_valid.method",
-                    "message": (
-                        "group_holdout requires a group-based CV strategy "
-                        "(e.g. group_kfold, stratified_group_kfold, group_time_series)."
-                    ),
-                    "type": "inner_valid_constraint",
-                }
-            )
-        elif method == "time_holdout" and strategy not in self._TIME_STRATEGIES:
-            errors.append(
-                {
-                    "field": "training.early_stopping.inner_valid.method",
-                    "message": (
-                        "time_holdout requires a time-based CV strategy "
-                        "(e.g. time_series, purged_time_series, group_time_series)."
-                    ),
-                    "type": "inner_valid_constraint",
-                }
-            )
-
         return errors
 
     def build_config(self, user_config: dict[str, Any]) -> dict[str, Any]:
@@ -592,7 +473,7 @@ class WidgetService:
             self._df_info = {
                 **self._df_info,
                 "columns": new_columns,
-                "feature_summary": self._calc_feature_summary(new_columns),
+                "feature_summary": calc_feature_summary(new_columns),
             }
 
         # Restore explicit task override
@@ -632,6 +513,7 @@ class WidgetService:
         self,
         config: dict[str, Any],
         *,
+        ui_snapshot: dict[str, Any] | None = None,
         on_progress: Callable[..., Any] | None = None,
         resume: bool = False,
         n_trials: int | None = None,
@@ -681,12 +563,55 @@ class WidgetService:
             expand_boundary=expand_boundary,
             boundary_threshold=boundary_threshold,
         )
+        # P-035: embed snapshots into the TuningSummary so apply_best_params
+        # can rebuild the post-tune Fit config without the Widget keeping
+        # private snapshot attributes.
+        from dataclasses import replace
+
+        summary = replace(
+            result,
+            config_snapshot=copy.deepcopy(config),
+            ui_snapshot=copy.deepcopy(ui_snapshot or {}),
+        )
         with self._model_lock:
             self._model = model
             # Record this as the reference tune model so subsequent retune()
             # calls (even after an intervening fit()) resume *this* study.
             self._tune_model = model
-        return result
+            self._last_tune_summary = summary
+            # A fresh tune always supersedes a prior load-invalidated one.
+            self._tune_summary_invalidated_by_load = False
+        return summary
+
+    def record_subprocess_tune_summary(
+        self,
+        tune_dict: dict[str, Any],
+        *,
+        config_snapshot: dict[str, Any],
+        ui_snapshot: dict[str, Any] | None,
+    ) -> None:
+        """Reconstruct and store a ``TuningSummary`` from a subprocess result.
+
+        Subprocess tune runs cannot share Python objects with the parent;
+        the parent receives the result as a dict (P-029 boundary). This
+        helper reconstructs a typed ``TuningSummary`` on the parent side
+        so ``apply_best_params`` continues to work on the same Service
+        instance the user interacts with via ``LizyWidget``.
+        """
+        summary = TuningSummary(
+            best_params=tune_dict.get("best_params", {}),
+            best_score=tune_dict.get("best_score", 0.0),
+            trials=tune_dict.get("trials", []),
+            metric_name=tune_dict.get("metric_name", ""),
+            direction=tune_dict.get("direction", "maximize"),
+            rounds=tune_dict.get("rounds", []),
+            boundary_report=tune_dict.get("boundary_report"),
+            config_snapshot=copy.deepcopy(config_snapshot),
+            ui_snapshot=copy.deepcopy(ui_snapshot or {}),
+        )
+        with self._model_lock:
+            self._last_tune_summary = summary
+            self._tune_summary_invalidated_by_load = False
 
     def predict(self, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary:
         """Run prediction on new data."""
@@ -740,6 +665,10 @@ class WidgetService:
         with self._model_lock:
             return self._model
 
+    def model_info(self, model: Any) -> dict[str, Any]:
+        """Return adapter-side metadata for the given model."""
+        return self._adapter.model_info(model)
+
     def classify_best_params(
         self, params: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -753,29 +682,41 @@ class WidgetService:
         self,
         params: dict[str, Any],
         current_config: dict[str, Any],
-        *,
-        tune_snapshot: dict[str, Any] | None = None,
-        tune_ui_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Apply best_params from Tune to config, routing by category.
 
+        P-035: snapshot inputs are no longer accepted; the Service reads
+        ``config_snapshot`` and ``ui_snapshot`` from its own
+        ``_last_tune_summary`` (set by :meth:`tune`).
+
         Returns a canonicalized config with best params applied.
 
-        Uses *tune_snapshot* (the backend-ready run config) as the
-        authoritative base for ``model.params`` and ``training``, and
-        *tune_ui_snapshot* to recover calibration (stripped by
-        ``prepare_tune_overrides``) and smart params from older snapshots
-        that were generated before the smart-params-preservation fix.
+        Raises
+        ------
+        ValueError
+            If a prior tune ran but ``load_data`` invalidated its summary
+            (apply on stale data is rejected explicitly rather than
+            silently rebuilding from a snapshot pinned to the old data).
         """
         if not params:
             return self.canonicalize_config(copy.deepcopy(current_config))
 
+        if self._tune_summary_invalidated_by_load:
+            msg = (
+                "tune summary cleared by load — re-run w.tune() "
+                "before applying best params on the new data."
+            )
+            raise ValueError(msg)
+
+        with self._model_lock:
+            summary = self._last_tune_summary
+
         # 1. Choose base config from run snapshot, stripping Service-managed
         #    keys that are re-injected by build_config at execution time.
-        if tune_snapshot is not None:
+        if summary is not None and summary.config_snapshot:
             base = {
                 k: v
-                for k, v in copy.deepcopy(tune_snapshot).items()
+                for k, v in copy.deepcopy(summary.config_snapshot).items()
                 if k not in self._DATA_SECTION_KEYS
             }
         else:
@@ -785,8 +726,8 @@ class WidgetService:
         #    prepare_tune_overrides strips only calibration.  Smart params are
         #    now preserved in new snapshots, but older snapshots (generated
         #    before this fix) may still lack them — back-fill from UI snapshot.
-        if tune_ui_snapshot is not None:
-            ui = copy.deepcopy(tune_ui_snapshot)
+        if summary is not None and summary.ui_snapshot:
+            ui = copy.deepcopy(summary.ui_snapshot)
             ui_model = ui.get("model", {})
             base_model = base.get("model", {})
             for k, v in ui_model.items():
@@ -850,6 +791,73 @@ class WidgetService:
         with self._model_lock:
             self._model = model
 
+    def export_tune_state_to_path(self, path: str) -> None:
+        """Serialize the current tune state to *path* for subprocess retune (P-038).
+
+        Symmetric counterpart of :meth:`restore_tune_state_from_path`. Used by
+        ``SubprocessJobRunner`` when launching a subprocess retune: the parent
+        writes ``_tune_model._tuning_result`` (and best-effort ``_study``) to
+        *path* so the subprocess can pick up the existing Optuna study before
+        calling ``adapter.tune(resume=True, ...)``.
+
+        Concurrency note
+        ----------------
+        The pickle I/O runs **outside** ``_model_lock`` for the same reason
+        :meth:`tune` does: holding the lock through a multi-MB write would
+        serialise unrelated reads (e.g., ``predict``). The lock is held only
+        long enough to take a strong reference to ``_tune_model`` so that an
+        intervening ``load_data()`` cannot null it out between the read and
+        the export. Inside :meth:`adapter.LizyMLAdapter.export_tune_state`,
+        ``_rounds`` is copied with ``list(...)`` and the study is pickled
+        (deep copy semantics), so concurrent writes to the model after the
+        reference is taken cannot corrupt the blob; the worst case is that
+        the blob reflects a slightly stale snapshot, which the supervisor
+        FSM (INV-A: at most one running job) already prevents in practice.
+
+        Raises
+        ------
+        ValueError
+            If no prior tune model exists. Subprocess retune requires the
+            in-memory state of a previous tune to be exportable; calling
+            without a prior tune is a programming error and is rejected
+            early so the subprocess never spawns.
+        """
+        with self._model_lock:
+            model = self._tune_model
+        if model is None:
+            msg = "Cannot export tune state: no prior tune exists. Run w.tune() first."
+            raise ValueError(msg)
+        self._adapter.export_tune_state(model, path)
+
+    def restore_tune_state_from_path(
+        self,
+        path: str,
+        *,
+        config: dict[str, Any],
+    ) -> None:
+        """Reattach tune state from a subprocess pickle blob (P-037, #152).
+
+        Builds an empty model via ``adapter.create_model`` and asks the
+        adapter to inject ``_tuning_result`` (and best-effort ``_study``)
+        from *path*. The model remains unfit so ``available_plots`` still
+        excludes fit-dependent plots; only ``optimization-history``
+        becomes renderable, which is exactly what tune-only state should
+        expose.
+        """
+        if self._df is None:
+            msg = "No data loaded; cannot restore tune state without DataFrame"
+            raise ValueError(msg)
+        model = self._adapter.create_model(config, self._df)
+        self._adapter.restore_tune_state(model, path)
+        with self._model_lock:
+            self._model = model
+            # Mirror the in-process tune path (P-028 ``_tune_model`` slot) so
+            # apply_best_params → Fit → retune still has the tuned-state model
+            # available. Without this, subprocess tune would leave
+            # ``_tune_model is None`` and the next retune (P-038 subprocess
+            # retune resume) would have no tune state to export.
+            self._tune_model = model
+
     def save_model(self, path: str) -> str:
         """Persist the current trained model using the active adapter."""
         with self._model_lock:
@@ -884,55 +892,11 @@ class WidgetService:
 
     # ── Auto-detection internals ─────────────────────────────
 
-    @staticmethod
-    def _detect_task(col: pd.Series[Any], n_rows: int, n_unique: int) -> str:
-        """Auto-detect task type from target column."""
-        if n_unique == 2:
-            return "binary"
-        if str(col.dtype) in ("object", "str", "string", "category"):
-            return "multiclass"
-        if pd.api.types.is_numeric_dtype(col):
-            threshold = max(20, int(n_rows * 0.05))
-            if n_unique <= threshold:
-                return "multiclass"
-            return "regression"
-        return "multiclass"
-
     def _default_strategy_for_task(self, task: str) -> str:
-        """Get default CV strategy for task from adapter contract."""
-        try:
-            contract = self._adapter.get_backend_contract()
-            defaults = contract.capabilities.get("cv_default_strategy", {})
-            if task in defaults:
-                return str(defaults[task])
-        except Exception:
-            pass
-        # Fallback
-        return "stratified_kfold" if task in ("binary", "multiclass") else "kfold"
+        return default_strategy_for_task(self._adapter, task)
 
     def _default_cv_state(self, *, strategy: str, n_splits: int) -> dict[str, Any]:
-        """Build default CV state, reading defaults from adapter contract."""
-        # Read contract defaults with fallbacks
-        cv_defaults: dict[str, Any] = {}
-        try:
-            contract = self._adapter.get_backend_contract()
-            cv_defaults = contract.capabilities.get("cv_defaults", {})
-        except Exception:
-            pass
-
-        return {
-            "strategy": strategy,
-            "n_splits": n_splits,
-            "group_column": None,
-            "time_column": None,
-            "random_state": cv_defaults.get("random_state", 42),
-            "shuffle": cv_defaults.get("shuffle", True),
-            "gap": cv_defaults.get("gap", 0),
-            "purge_gap": 0,
-            "embargo": 0,
-            "train_size_max": None,
-            "test_size_max": None,
-        }
+        return default_cv_state(self._adapter, strategy=strategy, n_splits=n_splits)
 
     def _apply_task_defaults(self, task: str, *, update_auto_task: bool) -> None:
         cv = self._df_info.get("cv", {})
@@ -960,56 +924,4 @@ class WidgetService:
             "task": task,
             **({"auto_task": task} if update_auto_task else {}),
             "cv": new_cv,
-        }
-
-    def _auto_configure_column(self, col_info: dict[str, Any], n_rows: int) -> dict[str, Any]:
-        """Auto-configure a single column (exclusion + type)."""
-        name = col_info["name"]
-        dtype = col_info["dtype"]
-        unique = col_info["unique_count"]
-
-        excluded = False
-        exclude_reason: str | None = None
-        col_type = "numeric"
-
-        # ID detection — only for integer/string columns, not floats
-        is_float = dtype.startswith("float") or dtype.startswith("Float")
-        if unique == n_rows and not is_float:
-            excluded = True
-            exclude_reason = "id"
-        # Constant detection
-        elif unique == 1:
-            excluded = True
-            exclude_reason = "constant"
-
-        # Type detection
-        if dtype in ("object", "str", "string", "category", "bool"):
-            col_type = "categorical"
-        elif self._df is not None and pd.api.types.is_numeric_dtype(self._df[name]):
-            threshold = max(20, int(n_rows * 0.05))
-            if unique <= threshold:
-                col_type = "categorical"
-
-        return {
-            **col_info,
-            "suggested_type": col_type,
-            "suggested_excluded": excluded,
-            "exclude_reason": exclude_reason,
-            "excluded": excluded,
-            "col_type": col_type,
-        }
-
-    @staticmethod
-    def _calc_feature_summary(columns: list[dict[str, Any]]) -> dict[str, int]:
-        """Calculate feature summary counts."""
-        active = [c for c in columns if not c.get("excluded", False)]
-        excluded = [c for c in columns if c.get("excluded", False)]
-        return {
-            "total": len(active),
-            "numeric": sum(1 for c in active if c.get("col_type") == "numeric"),
-            "categorical": sum(1 for c in active if c.get("col_type") == "categorical"),
-            "excluded": len(excluded),
-            "excluded_id": sum(1 for c in excluded if c.get("exclude_reason") == "id"),
-            "excluded_const": sum(1 for c in excluded if c.get("exclude_reason") == "constant"),
-            "excluded_manual": sum(1 for c in excluded if c.get("exclude_reason") is None),
         }

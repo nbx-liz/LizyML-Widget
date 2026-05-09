@@ -90,7 +90,13 @@ export function App({ model, rootEl }: AppProps) {
   // ConfigTab.  Each uses useEffect cleanup (model.off) so listener accumulation
   // is not a risk.  Full consolidation into App was considered but deferred —
   // the refactoring surface is large and current cleanup is correct.
-  const { plots, loading: plotLoading, requestPlot, clearCache } = usePlot(model);
+  const {
+    plots,
+    loading: plotLoading,
+    errors: plotErrors,
+    requestPlot,
+    clearCache,
+  } = usePlot(model);
 
   // Clear plot cache when a new job starts
   useEffect(() => {
@@ -174,6 +180,7 @@ export function App({ model, rootEl }: AppProps) {
             error={effectiveError}
             plots={plots}
             plotLoading={plotLoading}
+            plotErrors={plotErrors}
             onRequestPlot={requestPlot}
             sendAction={sendAction}
             onSwitchToFit={() => setActiveTab("Model")}
@@ -184,6 +191,7 @@ export function App({ model, rootEl }: AppProps) {
               setExportLoading(true);
               sendAction("export_code", {});
             }}
+            stepMap={backendContract?.ui_schema?.step_map ?? {}}
           />
         )}
       </div>

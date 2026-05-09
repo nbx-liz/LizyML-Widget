@@ -10,6 +10,8 @@ interface PlotViewerProps {
   plotType: string;
   plots: Record<string, any>;
   loading: Record<string, boolean>;
+  /** P-037 / #152: when set, takes precedence over the loading text. */
+  errors?: Record<string, string>;
   onRequest: (plotType: string) => void;
   theme?: ResolvedTheme;
 }
@@ -45,6 +47,7 @@ export function PlotViewer({
   plotType,
   plots,
   loading,
+  errors,
   onRequest,
   theme = "light",
 }: PlotViewerProps) {
@@ -91,11 +94,17 @@ export function PlotViewer({
     return <p class="lzw-muted">No plot selected.</p>;
   }
 
+  // P-037 / #152: surface plot_error explicitly. Error wins over loading
+  // so users never see "Loading plot..." stuck on top of a failed request.
+  const errorMessage = errors?.[plotType];
+
   return (
     <div class="lzw-plot-viewer">
       <div class="lzw-plot-viewer__container">
-        {loading[plotType] && (
-          <p class="lzw-muted">Loading plot...</p>
+        {errorMessage ? (
+          <p class="lzw-muted">Plot unavailable: {errorMessage}</p>
+        ) : (
+          loading[plotType] && <p class="lzw-muted">Loading plot...</p>
         )}
         <div ref={plotRef} class="lzw-plot-viewer__canvas" />
       </div>

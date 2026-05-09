@@ -33,13 +33,20 @@ interface RetuneControlsProps {
   disabled: boolean;
   /** Optional default n_trials; defaults to 20 so the bump is visible. */
   defaultNTrials?: number;
+  /** P-034: step values from backend contract (``ui_schema.step_map``). */
+  stepMap?: Record<string, number>;
 }
 
 export function RetuneControls({
   onRetune,
   disabled,
   defaultNTrials = 20,
+  stepMap,
 }: RetuneControlsProps) {
+  // P-034: read step from contract; fall back to historical literal so unit
+  // tests that omit a contract still render the same input.
+  const boundaryThresholdStep: number =
+    typeof stepMap?.boundary_threshold === "number" ? stepMap.boundary_threshold : 0.01;
   const [nTrials, setNTrials] = useState<number>(defaultNTrials);
   const [expandBoundary, setExpandBoundary] = useState<boolean>(true);
   const [boundaryThreshold, setBoundaryThreshold] = useState<number>(0.05);
@@ -96,7 +103,7 @@ export function RetuneControls({
           value={boundaryThreshold}
           min={0}
           max={1}
-          step={0.01}
+          step={boundaryThresholdStep}
           onChange={(v) => setBoundaryThreshold(v ?? 0.05)}
         />
       </div>

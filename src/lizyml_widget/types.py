@@ -51,6 +51,12 @@ class TuningSummary:
     Fields ``rounds`` and ``boundary_report`` require lizyml>=0.9.0 (re-tune
     support, proposal P-027). For single-round tuning both collapse to a
     single-element ``rounds`` list and ``boundary_report=None``.
+
+    P-035: ``config_snapshot`` (canonical run config) and ``ui_snapshot``
+    (widget-side ``config`` traitlet at tune time) are populated by
+    ``WidgetService.tune`` so ``apply_best_params`` can rebuild the
+    post-tune Fit config without the Widget having to keep its own
+    private snapshot attributes.
     """
 
     best_params: dict[str, Any]
@@ -60,6 +66,8 @@ class TuningSummary:
     direction: str  # "minimize" | "maximize"
     rounds: list[dict[str, Any]] = field(default_factory=list)  # per-round summary
     boundary_report: dict[str, Any] | None = None  # None when no resume rounds ran
+    config_snapshot: dict[str, Any] = field(default_factory=dict)  # P-035: canonical run config
+    ui_snapshot: dict[str, Any] = field(default_factory=dict)  # P-035: widget config traitlet
 
 
 @dataclass

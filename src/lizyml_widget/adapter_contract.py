@@ -108,6 +108,8 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
                     "rmse",
                     "quantile",
                     "mape",
+                    "smape",
+                    "wape",
                     "huber",
                     "fair",
                     "poisson",
@@ -385,6 +387,9 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
             "early_stopping.rounds": 50,
             "validation_ratio": 0.05,
             "seed": 1,
+            # P-034: step values for fields whose JS used a hardcoded literal.
+            "feature_weights": 0.1,
+            "boundary_threshold": 0.01,
         },
         "conditional_visibility": {
             "calibration": {"task": ["binary"]},
@@ -396,6 +401,23 @@ def build_ui_schema(all_metrics_by_task: dict[str, list[str]]) -> dict[str, Any]
         },
         "defaults": {
             "calibration": {"method": "isotonic", "params": {}},
+            # P-034: numeric defaults the JS UI used to fall back to via
+            # ``payload ?? <literal>``. Centralising them here keeps the
+            # contract the single source of truth (CLAUDE.md §8) so
+            # updating a default no longer requires a JS-side change.
+            "cv": {
+                "n_splits": 5,
+                "random_state": 42,
+                "gap": 0,
+                "purge_gap": 0,
+                "embargo": 0,
+            },
+            "tune": {
+                "n_trials": 10,
+            },
+            "metric_params": {
+                "precision_at_k_k": 10,
+            },
         },
         "calibration_methods": ["platt", "isotonic", "beta"],
         "calibration_params": {
@@ -441,6 +463,24 @@ def build_capabilities() -> dict[str, Any]:
             "stratified_group_kfold",
             "blocked_group_kfold",
         ],
+        # Display labels for cv_strategies. JS falls back to a humanise() helper
+        # when a strategy is missing from this map, so adding a new strategy in
+        # cv_strategies still surfaces in the UI without a JS change (#119).
+        "cv_strategy_labels": {
+            "kfold": "KFold",
+            "stratified_kfold": "StratifiedKFold",
+            "group_kfold": "GroupKFold",
+            "stratified_group_kfold": "StratifiedGroup",
+            "time_series": "TimeSeriesSplit",
+            "purged_time_series": "PurgedTimeSeriesSplit",
+            "group_time_series": "GroupTimeSeriesSplit",
+            "blocked_group_kfold": "BlockedGroup",
+        },
+        # Param keys to hide from the Additional Params dropdown / list even
+        # though they are not in parameter_hints or smart_params. These are
+        # backend-internal knobs (logging, threading) the widget intentionally
+        # keeps off the tuning surface (#119).
+        "additional_params_hidden_keys": ["verbose", "num_threads"],
         "cv_strategy_fields": {
             "kfold": ["n_splits", "shuffle", "random_state"],
             "stratified_kfold": ["n_splits", "shuffle", "random_state"],

@@ -43,13 +43,17 @@ class TestVersionGuard:
         assert _parse_lizyml_version("0.9") == (0, 9, 0)
 
     def test_version_range_constants(self) -> None:
-        assert LIZYML_MIN_VERSION == (0, 9, 0)
-        assert LIZYML_MAX_VERSION == (0, 10, 0)
+        # P-030: lizyml 0.10–0.12 compat window. Lower bound bumped to 0.10.0
+        # because the Adapter assumes target_encoder-driven label dtype
+        # preservation (a 0.10+ feature). Upper bound is exclusive 0.13 so
+        # 0.12.x patches are still admitted without a guard bump.
+        assert LIZYML_MIN_VERSION == (0, 10, 0)
+        assert LIZYML_MAX_VERSION == (0, 13, 0)
 
     def test_check_passes_for_supported_version(self) -> None:
         with patch.dict(
             "sys.modules",
-            {"lizyml": MagicMock(__version__="0.9.5")},
+            {"lizyml": MagicMock(__version__="0.12.0")},
         ):
             _check_lizyml_version()  # must not raise
 
@@ -57,9 +61,9 @@ class TestVersionGuard:
         with (
             patch.dict(
                 "sys.modules",
-                {"lizyml": MagicMock(__version__="0.7.3")},
+                {"lizyml": MagicMock(__version__="0.9.1")},
             ),
-            pytest.raises(ImportError, match=r"lizyml>=0\.9\.0,<0\.10\.0"),
+            pytest.raises(ImportError, match=r"lizyml>=0\.10\.0,<0\.13\.0"),
         ):
             _check_lizyml_version()
 
@@ -67,9 +71,9 @@ class TestVersionGuard:
         with (
             patch.dict(
                 "sys.modules",
-                {"lizyml": MagicMock(__version__="0.10.0")},
+                {"lizyml": MagicMock(__version__="0.13.0")},
             ),
-            pytest.raises(ImportError, match=r"lizyml>=0\.9\.0,<0\.10\.0"),
+            pytest.raises(ImportError, match=r"lizyml>=0\.10\.0,<0\.13\.0"),
         ):
             _check_lizyml_version()
 
@@ -328,7 +332,7 @@ class TestWidgetProgressTraitletRoundFields:
 
         w = self._make_widget()
 
-        def mock_tune(config: Any, *, on_progress: Any = None) -> Any:
+        def mock_tune(config: Any, *, on_progress: Any = None, **_kwargs: Any) -> Any:
             assert on_progress is not None
             # Simulate a re-tune round 2 progress update.
             on_progress(
