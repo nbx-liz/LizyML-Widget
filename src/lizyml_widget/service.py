@@ -791,6 +791,29 @@ class WidgetService:
         with self._model_lock:
             self._model = model
 
+    def restore_tune_state_from_path(
+        self,
+        path: str,
+        *,
+        config: dict[str, Any],
+    ) -> None:
+        """Reattach tune state from a subprocess pickle blob (P-037, #152).
+
+        Builds an empty model via ``adapter.create_model`` and asks the
+        adapter to inject ``_tuning_result`` (and best-effort ``_study``)
+        from *path*. The model remains unfit so ``available_plots`` still
+        excludes fit-dependent plots; only ``optimization-history``
+        becomes renderable, which is exactly what tune-only state should
+        expose.
+        """
+        if self._df is None:
+            msg = "No data loaded; cannot restore tune state without DataFrame"
+            raise ValueError(msg)
+        model = self._adapter.create_model(config, self._df)
+        self._adapter.restore_tune_state(model, path)
+        with self._model_lock:
+            self._model = model
+
     def save_model(self, path: str) -> str:
         """Persist the current trained model using the active adapter."""
         with self._model_lock:

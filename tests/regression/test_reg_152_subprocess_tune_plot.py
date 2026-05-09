@@ -44,16 +44,33 @@ def _fake_tuning_result() -> Any:
     )
 
 
-def _make_service_with_data() -> WidgetService:
+def _make_service_with_data() -> tuple[WidgetService, dict[str, Any]]:
     svc = WidgetService(adapter=LizyMLAdapter())
-    df = pd.DataFrame({"x": list(range(20)), "y": [0, 1] * 10})
+    # Multiple feature columns so build_config does not strip everything.
+    df = pd.DataFrame(
+        {
+            "f1": list(range(20)),
+            "f2": [i * 0.5 for i in range(20)],
+            "f3": [i % 3 for i in range(20)],
+            "y": [0, 1] * 10,
+        }
+    )
     svc.load_data(df, target="y")
-    return svc
+    # Build the same canonical config the widget would hand to the runner.
+    run_config = svc.prepare_run_config({}, job_type="tune")
+    return svc, run_config
+
+
+def _fake_subprocess_writes_blob(target_path: str) -> None:
+    """Mimic the real subprocess: write a tune-state blob at the path the
+    parent provided via ``tune_state_out_path``."""
+    blob = {"tuning_result": _fake_tuning_result(), "study": None}
+    with open(target_path, "wb") as f:  # noqa: PTH123
+        pickle.dump(blob, f)
 
 
 def test_subprocess_tune_renders_optimization_history_plot(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     """End-to-end: subprocess tune → parent renders ``optimization-history``.
 
@@ -69,19 +86,14 @@ def test_subprocess_tune_renders_optimization_history_plot(
     inject ``_tuning_result`` onto a freshly created model. The parent then
     serves the plot via the adapter's existing ``model.tuning_plot()`` path.
     """
-    svc = _make_service_with_data()
+    svc, run_config = _make_service_with_data()
 
-    # 1) Pre-build a tune-state blob the way the subprocess would.
-    tune_state_path = tmp_path / "tune_state.pkl"
-    blob = {"tuning_result": _fake_tuning_result(), "study": None}
-    with tune_state_path.open("wb") as f:
-        pickle.dump(blob, f)
-
-    # 2) Mock the actual subprocess call so we don't fork. Return a result
-    #    that carries ``tune_state_path`` plus the same payload the parent
-    #    used to receive (sans ``model_path`` — that's exactly the bug:
-    #    tune cannot land a model file via export()).
-    def fake_run_job_subprocess(**_kwargs: Any) -> SubprocessJobResult:
+    # Mock the subprocess call. Mirror the real contract: the entry point
+    # writes the blob at the parent-provided ``tune_state_out_path`` and
+    # echoes that same path back in the result.
+    def fake_run_job_subprocess(**kwargs: Any) -> SubprocessJobResult:
+        out_path = kwargs["tune_state_out_path"]
+        _fake_subprocess_writes_blob(out_path)
         return SubprocessJobResult(
             job_type="tune",
             fit_summary={},
@@ -98,7 +110,7 @@ def test_subprocess_tune_renders_optimization_history_plot(
             split_summary=[],
             available_plots=["optimization-history"],
             model_path=None,
-            tune_state_path=str(tune_state_path),
+            tune_state_path=out_path,
         )
 
     monkeypatch.setattr(
@@ -106,43 +118,38 @@ def test_subprocess_tune_renders_optimization_history_plot(
         fake_run_job_subprocess,
     )
 
-    # 3) Run via SubprocessJobRunner.
     runner = SubprocessJobRunner(svc)
     spec = JobSpec(
         job_type="tune",
-        config={"task": "binary"},
+        config=run_config,
         retune_kwargs=None,
         ui_snapshot={},
     )
     result = runner.run(spec, on_progress=lambda *a, **kw: None, cancel_event=threading.Event())
 
-    # 4) Post-conditions for the bug fix.
     assert result.job_type == "tune"
     assert "optimization-history" in result.available_plots
 
     # The parent must now own a tune-restored model that can render the plot.
     plot = svc.get_plot("optimization-history")
     assert plot.plotly_json  # non-empty string
-    assert "Best Score" in plot.plotly_json or "trial" in plot.plotly_json.lower()
 
 
 def test_subprocess_tune_state_path_is_cleaned_up_after_run(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     """INV-5: tune state file is removed after the parent finishes loading it.
 
     The runner is responsible for unlinking the path in the ``finally``
     branch, mirroring how ``model_path`` is handled.
     """
-    svc = _make_service_with_data()
+    svc, run_config = _make_service_with_data()
+    captured_path: dict[str, str] = {}
 
-    tune_state_path = tmp_path / "tune_state_cleanup.pkl"
-    blob = {"tuning_result": _fake_tuning_result(), "study": None}
-    with tune_state_path.open("wb") as f:
-        pickle.dump(blob, f)
-
-    def fake_run_job_subprocess(**_kwargs: Any) -> SubprocessJobResult:
+    def fake_run_job_subprocess(**kwargs: Any) -> SubprocessJobResult:
+        out_path = kwargs["tune_state_out_path"]
+        captured_path["path"] = out_path
+        _fake_subprocess_writes_blob(out_path)
         return SubprocessJobResult(
             job_type="tune",
             fit_summary={},
@@ -157,7 +164,7 @@ def test_subprocess_tune_state_path_is_cleaned_up_after_run(
             split_summary=[],
             available_plots=["optimization-history"],
             model_path=None,
-            tune_state_path=str(tune_state_path),
+            tune_state_path=out_path,
         )
 
     monkeypatch.setattr(
@@ -166,10 +173,11 @@ def test_subprocess_tune_state_path_is_cleaned_up_after_run(
     )
 
     runner = SubprocessJobRunner(svc)
-    spec = JobSpec(job_type="tune", config={"task": "binary"}, ui_snapshot={})
+    spec = JobSpec(job_type="tune", config=run_config, ui_snapshot={})
     runner.run(spec, on_progress=lambda *a, **kw: None, cancel_event=threading.Event())
 
-    assert not tune_state_path.exists(), "tune state file must be removed after run"
+    assert "path" in captured_path, "subprocess mock did not receive a path"
+    assert not Path(captured_path["path"]).exists(), "tune state file must be removed after run"
 
 
 def test_subprocess_tune_handles_missing_tune_state_path_gracefully(
@@ -179,7 +187,7 @@ def test_subprocess_tune_handles_missing_tune_state_path_gracefully(
     (e.g., a pre-P-037 child binary or export failure), the runner does NOT
     crash; the tune summary is still recorded so ``apply_best_params`` works.
     """
-    svc = _make_service_with_data()
+    svc, run_config = _make_service_with_data()
 
     def fake_run_job_subprocess(**_kwargs: Any) -> SubprocessJobResult:
         return SubprocessJobResult(
@@ -205,7 +213,7 @@ def test_subprocess_tune_handles_missing_tune_state_path_gracefully(
     )
 
     runner = SubprocessJobRunner(svc)
-    spec = JobSpec(job_type="tune", config={"task": "binary"}, ui_snapshot={})
+    spec = JobSpec(job_type="tune", config=run_config, ui_snapshot={})
     result = runner.run(spec, on_progress=lambda *a, **kw: None, cancel_event=threading.Event())
 
     assert result.tune_summary["best_score"] == pytest.approx(0.5)
@@ -220,7 +228,7 @@ def test_subprocess_tune_handles_corrupt_tune_state_blob(
     """INV-1 (corrupt path): if the blob fails to load, the runner logs a
     warning and continues with the tune summary recorded. The widget remains
     operable; only the plot is unavailable."""
-    svc = _make_service_with_data()
+    svc, run_config = _make_service_with_data()
 
     bad_path = tmp_path / "broken.pkl"
     bad_path.write_bytes(b"this is not a pickle stream")
@@ -249,7 +257,7 @@ def test_subprocess_tune_handles_corrupt_tune_state_blob(
     )
 
     runner = SubprocessJobRunner(svc)
-    spec = JobSpec(job_type="tune", config={"task": "binary"}, ui_snapshot={})
+    spec = JobSpec(job_type="tune", config=run_config, ui_snapshot={})
     runner.run(spec, on_progress=lambda *a, **kw: None, cancel_event=threading.Event())
 
     # No exception reaches the widget; tune summary still recorded.

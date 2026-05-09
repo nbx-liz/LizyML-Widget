@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import pickle
 import threading
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol
@@ -163,6 +164,14 @@ class BackendAdapter(Protocol):
     def load_model(self, path: str) -> Any: ...
 
     def model_info(self, model: Any) -> dict[str, Any]: ...
+
+    # P-037: tune state cross-process persistence (#152). The subprocess
+    # writes ``model._tuning_result`` (and best-effort ``_study``) to a
+    # path; the parent reads the path back onto a freshly-created model so
+    # ``optimization-history`` plot renders without re-fitting.
+    def export_tune_state(self, model: Any, path: str) -> None: ...
+
+    def restore_tune_state(self, model: Any, path: str) -> None: ...
 
     def classify_best_params(
         self, params: dict[str, Any]
@@ -741,6 +750,58 @@ class LizyMLAdapter:
     def export_model(self, model: Any, path: str) -> str:
         model.export(path)
         return path
+
+    def export_tune_state(self, model: Any, path: str) -> None:
+        """Persist tune state for IPC across the subprocess boundary (P-037).
+
+        Writes a pickle blob containing ``_tuning_result`` (always) and
+        ``_study`` (best-effort — silently dropped when the study object
+        cannot be pickled, e.g., RDB-backed Optuna storage).
+
+        Raises:
+            ValueError: when *model* has no tune state to export. Callers
+                MUST gate this on tune completion; calling on a fresh
+                model is a programming error.
+        """
+        tuning_result = getattr(model, "_tuning_result", None)
+        if tuning_result is None:
+            msg = "Model has no tune state to export (run tune() first)"
+            raise ValueError(msg)
+
+        blob: dict[str, Any] = {"tuning_result": tuning_result, "study": None}
+
+        study = getattr(model, "_study", None)
+        if study is not None:
+            try:
+                pickle.dumps(study)
+            except Exception as study_err:  # noqa: BLE001 — study is opaque
+                _log.warning(
+                    "tune-state export: dropping non-pickleable study (%s)",
+                    study_err,
+                )
+            else:
+                blob["study"] = study
+
+        with open(path, "wb") as f:  # noqa: PTH123
+            pickle.dump(blob, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def restore_tune_state(self, model: Any, path: str) -> None:
+        """Reattach tune state onto *model* from an IPC blob (P-037).
+
+        Reads what :meth:`export_tune_state` wrote and assigns
+        ``model._tuning_result`` (and ``model._study`` when present).
+        The model remains unfit — INV-2 keeps ``is_model_fitted`` False so
+        downstream guards (``available_plots``, ``evaluate_table``)
+        continue to behave correctly.
+        """
+        with open(path, "rb") as f:  # noqa: PTH123
+            blob = pickle.load(f)  # noqa: S301 — trusted, written by us
+
+        # Private slot writes are allowed inside the adapter only.
+        model._tuning_result = blob.get("tuning_result")  # noqa: SLF001
+        study = blob.get("study")
+        if study is not None:
+            model._study = study  # noqa: SLF001
 
     def export_code(self, model: Any, path: str) -> Any:
         """Export inference code for the trained model."""
