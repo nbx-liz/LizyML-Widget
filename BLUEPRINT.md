@@ -422,32 +422,62 @@ anywidget は traitlets への書き込みをスレッドセーフに処理す�
 
 **`is_libgomp_affected` の検知タイミング:** `__init__` 時点では lightgbm が未 import のため `/proc/self/maps` には libgomp が存在しない。`openmp_detect.is_libgomp_affected()` は呼び出し時に `import lightgbm` を best-effort で行ってから maps を読み、結果を module-level cache に格納する。これにより最初の Fit/Tune 直前に正しい判定が出る。
 
-**Retune の例外:** `SubprocessJobRunner` は study resume を伴う retune に未対応（`RetuneSubprocessUnsupportedError`）。retune のみ thread 戦略にフォールバックする運用は issue #128 で扱う。
+**Retune（P-038, #156 / #128）:** `SubprocessJobRunner` は P-037 の tune state IPC を **input 方向にも拡張**することで study resume に対応した。retune は初回 tune と同じ実行戦略（subprocess）で動作し、parent main thread における libgomp parallel region の発生有無に依らず性能が安定する。`RetuneSubprocessUnsupportedError` および `widget._run_job` の thread fallback は P-038 で削除済み。詳細は §3.7.2。
 
-#### 3.7.2 Tune state IPC（P-037）
+#### 3.7.2 Tune state IPC（P-037 + P-038）
 
-Subprocess tune は親プロセスとモデルオブジェクトを共有できないため、tune 後に親側から `optimization-history` plot を描画するには tune state を IPC 越しに復元する必要がある（issue #152）。
+Subprocess tune / retune は親プロセスとモデルオブジェクトを共有できないため、tune state を IPC 越しに**双方向**で受け渡す必要がある（issue #152 / #156）。
 
-**ペイロード:** `BackendAdapter.export_tune_state(model, path)` が pickle 形式で `_tuning_result`（必須）と `_study`（best-effort、pickle 不可なら省略）を `path` に書き出す。`BackendAdapter.restore_tune_state(model, path)` が freshly-created model に注入する。**バックエンド固有の private slot 書き込みは adapter 内に閉じ込め**、Widget / Service / 共通型は知らない。
+**ペイロード（双方向同型）:** `BackendAdapter.export_tune_state(model, path)` が pickle 形式で 6 keys を `path` に書き出し、`BackendAdapter.restore_tune_state(model, path)` が freshly-created model に注入する。**バックエンド固有の private slot 書き込みは adapter 内に閉じ込め**、Widget / Service / 共通型は知らない。
 
-**IPC フロー:**
+| Key | 用途 | Phase | Mandatory |
+| --- | --- | --- | --- |
+| `tuning_result` | `optimization-history` plot 描画、apply_best_params | P-037 | 必須 |
+| `study` | retune resume（Optuna study 継続） | P-037 | best-effort（RDB-backed なら省略可） |
+| `round_number` | round 連番 | P-038 | 必須（retune resume） |
+| `rounds` | RoundSummary 累積（boundary expansion 履歴を含む） | P-038 | 必須（retune resume） |
+| `space` | 直前 round の search space | P-038 | 必須（retune resume） |
+| `used_default_space` | デフォルト space 使用フラグ（expand_boundary の挙動分岐） | P-038 | 必須（retune resume） |
+
+P-037-only blob（旧 2-key 形式）は P-038 adapter で**前方互換**：`restore_tune_state` は `key in blob` ガードで欠落 key を許容し、plot 描画路は引き続き機能する（retune は当然不可）。
+
+**IPC フロー（output direction — P-037, tune-only）:**
 
 ```
-subprocess: tune() → export_tune_state(model, tune_state_path) → result_msg["tune_state_path"]
+subprocess: tune() → export_tune_state(model, tune_state_out_path)
+            → result_msg["tune_state_path"]
 parent:     SubprocessJobRunner → service.restore_tune_state_from_path(path, ...)
             → adapter.create_model(config, df) → adapter.restore_tune_state(model, path)
-            → service._model = model （is_model_fitted=False を維持）
-cleanup:    parent finally → unlink(tune_state_path)（INV-5）
+            → service._model = service._tune_model = model （is_model_fitted=False）
+cleanup:    parent finally → unlink(tune_state_out_path)（INV-5）
+```
+
+**IPC フロー（input direction — P-038, retune-only）:**
+
+```
+parent:     SubprocessJobRunner.run（retune_kwargs is not None）
+            → tempfile.NamedTemporaryFile(prefix="lzw_tune_state_in_") → tune_state_in_path
+            → service.export_tune_state_to_path(tune_state_in_path)
+              （_tune_model is None なら ValueError、subprocess 起動前に早期失敗）
+            → run_job_subprocess(retune_kwargs=..., tune_state_in_path=...)
+subprocess: read_input → adapter.create_model(config, df)
+            → adapter.restore_tune_state(model, tune_state_in_path)
+            → adapter.tune(model, resume=True, n_trials=..., ...) （cumulative rounds 構築）
+            → adapter.export_tune_state(model, tune_state_out_path)
+            → result_msg["tune_state_path"]  ※ output 経路（上記）と合流
+cleanup:    parent finally → unlink(tune_state_in_path)（INV-3', success / error / cancel すべてで実行）
 ```
 
 **不変条件:**
-- INV-1: `tune_state_path` は `None` または親が読める path のいずれか。読込失敗は `plot_error` 降格、Widget は壊さない。
+- INV-1: `tune_state_path`（output）は `None` または親が読める path のいずれか。読込失敗は `plot_error` 降格、Widget は壊さない。
 - INV-2: `restore_tune_state` 後、`is_model_fitted(model) == False` を維持。
 - INV-3: `restore_tune_state` 後、`model._tuning_result is not None`、`available_plots` は `optimization-history` を含む。
+- INV-3' (P-038): `tune_state_in_path` は `SubprocessJobRunner.run` の `finally` 句で必ず削除される（success / error / cancel すべて）。
 - INV-4: `export_tune_state` は `export_model` 試行より前に実施（export 失敗が tune state を巻き込まない）。
-- INV-5: tune state ファイルは subprocess 終了かつ親側読込完了後に必ず削除される。
+- INV-5: tune state ファイル（input / output 両方）は subprocess 終了かつ親側読込完了後に必ず削除される。
+- INV-6 (P-038): subprocess retune の round 累積は `service._tune_model._tuning_result.rounds` に反映され、`len(rounds) == initial_rounds + retune_calls`（slow regression test `INV-#156-J` で pin）。
 
-**Optuna study の扱い:** `_study` は InMemoryStorage の場合 pickleable、RDBStorage の場合は不可。`export_tune_state` は `pickle.dumps(model._study)` を try/except で best-effort 実行し、失敗時は study 抜き blob を出力する。復元された `_study` は #128 retune resume の前提となる。
+**Optuna study の扱い:** `_study` は InMemoryStorage の場合 pickleable、RDBStorage の場合は不可。`export_tune_state` は `pickle.dumps(model._study)` を try/except で best-effort 実行し、失敗時は study 抜き blob を出力する。study 抜き blob を P-038 retune resume に渡すと lizyml が「resume 不能（_study が None）」エラーを上げる — RDB-backed storage を使う運用は #129（P-031）で UI 露出する予定。
 
 ---
 
