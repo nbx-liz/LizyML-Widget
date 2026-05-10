@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-10
+
 ### Added
 - **CI gate: ML library imports outside the BackendExecutor / Adapter
   layer fail CI** (P-039 Phase 4 / INV-H,
