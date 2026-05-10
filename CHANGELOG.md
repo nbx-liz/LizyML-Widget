@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **BackendExecutor caller-thread ML library funnel** (P-039 Phase 3,
+  [#160](https://github.com/nbx-liz/2LizyML-Widget/issues/160)).
+  New module ``src/lizyml_widget/backend_executor.py`` exposes
+  ``BackendExecutor.run_ml(op, *, ml_kind)`` — a single chokepoint for
+  every caller-thread ML library call. ``WidgetService.predict``,
+  ``WidgetService.get_plot``, and ``WidgetService.get_inference_plot``
+  now route through ``self._executor.run_ml(...)`` instead of marking
+  ``_libgomp_pool_owner`` directly. ``ml_kind`` categorises the call
+  (``predict`` / ``explain`` / ``plot_shap`` / ``plot_other``) so the
+  executor knows which calls bind libgomp pool affinity and which do
+  not. This consolidates Phase 2's owner-state marking into one place
+  and sets up Phase 4 (lint rule) to enforce "no ML library call
+  outside the executor" as a structural invariant. No behavioural
+  change for end users — predict / plot semantics are unchanged.
 - **Runtime guard: parent-main-thread libgomp binding auto-routes
   Tune/Fit/Retune to subprocess** (P-039 Phase 2 / INV-G,
   [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160)).
