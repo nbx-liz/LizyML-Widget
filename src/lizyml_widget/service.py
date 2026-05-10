@@ -6,11 +6,15 @@ import copy
 import logging
 import threading
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
 
 from .adapter import BackendAdapter
+from .backend_executor import BackendExecutor
+
+if TYPE_CHECKING:
+    from .backend_executor import MLKind
 from .service_columns import (
     auto_configure_column,
     calc_feature_summary,
@@ -35,6 +39,12 @@ from .types import (
 _log = logging.getLogger(__name__)
 
 MAX_STATS_VALUES = 1000
+
+# P-039 Phase 2 / INV-G: states for ``WidgetService._libgomp_pool_owner``.
+# Tracks which thread/process most recently entered an OpenMP parallel
+# region so the widget guard can re-route worker-thread Tune/Fit/Retune
+# to subprocess when the parent main thread has bound libgomp.
+LibgompPoolOwner = Literal["unknown", "subprocess", "worker", "main"]
 
 
 class WidgetService:
@@ -67,6 +77,20 @@ class WidgetService:
         # (None, flag) so apply_best_params can fail loud in the latter.
         self._last_tune_summary: TuningSummary | None = None
         self._tune_summary_invalidated_by_load: bool = False
+        # P-039 Phase 2 (INV-G): track which thread/process most recently
+        # entered an OpenMP parallel region. Once "main" is observed (via
+        # parent-main-thread predict / SHAP), all subsequent worker-thread
+        # Tune/Fit/Retune jobs are catastrophe-prone on libgomp hosts and
+        # the widget guard re-routes them to subprocess. The state is
+        # process-sticky — load_data does NOT reset it because libgomp
+        # pool affinity does not unbind on data reload.
+        self._libgomp_pool_owner: LibgompPoolOwner = "unknown"
+        # P-039 Phase 3: caller-thread ML library calls (predict / SHAP)
+        # are routed through this executor so libgomp owner state is
+        # marked in exactly one place. A future phase may extend the
+        # executor to offload predict/SHAP to a subprocess when state
+        # tracking alone is not enough.
+        self._executor = BackendExecutor(self)
 
     @property
     def info(self) -> BackendInfo:
@@ -613,32 +637,84 @@ class WidgetService:
             self._last_tune_summary = summary
             self._tune_summary_invalidated_by_load = False
 
+    def mark_libgomp_owner(self, owner: LibgompPoolOwner) -> None:
+        """Record which thread/process most recently entered an OpenMP region.
+
+        P-039 Phase 2 (INV-G): the widget guard reads this to decide
+        whether a worker-thread Tune/Fit would hit the libgomp
+        pool-affinity catastrophe. Once ``"main"`` is set, stay sticky —
+        the libgomp bind in this process does not go away on data reload
+        or model swap. Callers:
+
+        - ``SubprocessJobRunner`` (after successful run) → ``"subprocess"``
+        - ``ThreadJobRunner`` (after successful run) → ``"worker"``
+        - ``predict`` / SHAP plot paths → ``"main"`` (parent main thread)
+        """
+        # If main already observed, do not downgrade — the libgomp bind
+        # to the parent main thread is permanent for this process.
+        if self._libgomp_pool_owner == "main" and owner != "main":
+            return
+        self._libgomp_pool_owner = owner
+
     def predict(self, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary:
-        """Run prediction on new data."""
+        """Run prediction on new data.
+
+        P-039 Phase 3: routed through ``BackendExecutor.run_ml`` so the
+        libgomp owner state is marked in exactly one place. The
+        executor enters ``"main"`` after ``adapter.predict`` runs
+        because LightGBM / SHAP TreeExplainer enters an OpenMP parallel
+        region on the caller thread.
+        """
         with self._model_lock:
             model = self._model
         if model is None:
             msg = "No trained model. Run fit or tune first."
             raise ValueError(msg)
-        return self._adapter.predict(model, data, return_shap=return_shap)
+        return self._executor.run_ml(
+            lambda: self._adapter.predict(model, data, return_shap=return_shap),
+            ml_kind="predict",
+        )
 
     # ── Results ──────────────────────────────────────────────
 
     def get_plot(self, plot_type: str, **kwargs: Any) -> PlotData:
+        """Render a plot for the trained model.
+
+        P-039 Phase 3: routed through ``BackendExecutor.run_ml``. SHAP
+        plots are tagged ``"plot_shap"`` so the executor marks the
+        libgomp owner state to ``"main"`` (TreeExplainer is OpenMP-
+        parallel on the caller thread); other plots are tagged
+        ``"plot_other"`` and do not change state.
+        """
         with self._model_lock:
             model = self._model
         if model is None:
             msg = "No trained model"
             raise ValueError(msg)
-        return self._adapter.plot(model, plot_type, **kwargs)
+        ml_kind: MLKind = "plot_shap" if plot_type == "feature-importance-shap" else "plot_other"
+        return self._executor.run_ml(
+            lambda: self._adapter.plot(model, plot_type, **kwargs),
+            ml_kind=ml_kind,
+        )
 
     def get_inference_plot(self, predictions: pd.DataFrame, plot_type: str) -> PlotData:
-        """Generate an inference plot (prediction-distribution or shap-summary)."""
-        try:
-            return self._adapter.plot_inference(predictions, plot_type)
-        except AttributeError:
-            msg = "Inference plots not supported by this adapter"
-            raise TypeError(msg) from None
+        """Generate an inference plot (prediction-distribution or shap-summary).
+
+        P-039 Phase 3: routed through ``BackendExecutor.run_ml``.
+        ``shap-summary`` is tagged ``"plot_shap"`` (TreeExplainer
+        recomputed on the caller thread); other plots are
+        ``"plot_other"``.
+        """
+        ml_kind: MLKind = "plot_shap" if plot_type == "shap-summary" else "plot_other"
+
+        def _run() -> PlotData:
+            try:
+                return self._adapter.plot_inference(predictions, plot_type)
+            except AttributeError:
+                msg = "Inference plots not supported by this adapter"
+                raise TypeError(msg) from None
+
+        return self._executor.run_ml(_run, ml_kind=ml_kind)
 
     def get_available_plots(self) -> list[str]:
         with self._model_lock:

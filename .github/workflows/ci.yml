@@ -65,8 +65,55 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy src/lizyml_widget/
 
+      - name: ML-call lint (P-039 Phase 4)
+        # Block direct ML library imports outside the BackendExecutor /
+        # adapter / subprocess-entry / openmp-detect allowlist. Enforces
+        # INV-H structurally so a future contributor cannot silently
+        # re-introduce parent-main-thread ML calls outside the funnel.
+        # See HISTORY.md P-039 Phase 4.
+        run: uv run python scripts/lint_ml_imports.py
+
       - name: Test (pytest)
         run: uv run pytest --cov=lizyml_widget --cov-report=term-missing --cov-fail-under=80 -q
+
+  libgomp-perf:
+    # P-039 Phase 1 / Layer 4. Runs the parameterised libgomp perf grid
+    # (test_reg_160_libgomp_perf_grid.py) on ubuntu-latest, which ships
+    # with libgomp by default. The grid asserts INV-#160-A: per-unit
+    # wall-clock of every {intermediate × next_op} cell stays within
+    # 1.5x of an op-matched clean baseline. This blocks merges that
+    # silently re-introduce the 10-50x libgomp pool-affinity slowdown
+    # family (#147 / #154 / #156). See HISTORY.md P-039.
+    name: libgomp perf (slow regression grid)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: uv sync --frozen --dev
+
+      - name: Confirm libgomp is loaded on the runner
+        # Sanity check — if this prints nothing, the grid would skip
+        # silently and the gate would be a no-op. The grid imports
+        # lightgbm so libgomp shows up in /proc/self/maps post-import.
+        run: |
+          uv run python -c "
+          import lightgbm  # noqa: F401
+          with open('/proc/self/maps') as f:
+              hits = [l for l in f if 'libgomp' in l]
+          assert hits, 'libgomp not loaded — perf grid would skip; CI gate would be ineffective'
+          print('libgomp loaded:', hits[0].strip())
+          "
+
+      - name: Run libgomp perf grid (slow tier)
+        run: uv run pytest -m slow tests/regression/test_reg_160_libgomp_perf_grid.py -v
 
   distribution:
     name: Distribution check

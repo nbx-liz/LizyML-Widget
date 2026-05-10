@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-10
+
+### Added
+- **CI gate: ML library imports outside the BackendExecutor / Adapter
+  layer fail CI** (P-039 Phase 4 / INV-H,
+  [#160](https://github.com/nbx-liz/2LizyML-Widget/issues/160)).
+  New ``scripts/lint_ml_imports.py`` walks every ``.py`` file under
+  ``src/lizyml_widget/`` and fails (exit 1) on any import of
+  ``lightgbm`` / ``shap`` / ``xgboost`` / ``lizyml`` that is not in
+  the allowlist (``adapter.py`` / ``adapter_*.py`` / ``backend_executor.py``
+  / ``_subprocess_entry.py`` / ``openmp_detect.py``). The CI quality
+  job runs the lint between mypy and pytest. ``# noqa: ML-CALL``
+  on the offending line is the documented escape hatch — the
+  surrounding docstring / PR body must explain the exception.
+  CLAUDE.md §8 codifies the rule and explicitly tags new caller-
+  thread ML call sites as a change-gate-required category. With
+  Phase 4, P-039 is fully landed: catastrophe class is now blocked
+  by (a) Phase 1 perf-grid catching it on a PR, (b) Phase 2 runtime
+  guard auto-routing it on production, (c) Phase 3 funnel
+  centralising the marking, and (d) Phase 4 lint blocking new call
+  sites at PR review. Issue #160 closes when this PR merges.
+- **BackendExecutor caller-thread ML library funnel** (P-039 Phase 3,
+  [#160](https://github.com/nbx-liz/2LizyML-Widget/issues/160)).
+  New module ``src/lizyml_widget/backend_executor.py`` exposes
+  ``BackendExecutor.run_ml(op, *, ml_kind)`` — a single chokepoint for
+  every caller-thread ML library call. ``WidgetService.predict``,
+  ``WidgetService.get_plot``, and ``WidgetService.get_inference_plot``
+  now route through ``self._executor.run_ml(...)`` instead of marking
+  ``_libgomp_pool_owner`` directly. ``ml_kind`` categorises the call
+  (``predict`` / ``explain`` / ``plot_shap`` / ``plot_other``) so the
+  executor knows which calls bind libgomp pool affinity and which do
+  not. This consolidates Phase 2's owner-state marking into one place
+  and sets up Phase 4 (lint rule) to enforce "no ML library call
+  outside the executor" as a structural invariant. No behavioural
+  change for end users — predict / plot semantics are unchanged.
+- **Runtime guard: parent-main-thread libgomp binding auto-routes
+  Tune/Fit/Retune to subprocess** (P-039 Phase 2 / INV-G,
+  [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160)).
+  ``WidgetService`` now tracks ``_libgomp_pool_owner`` (one of
+  ``"unknown" / "subprocess" / "worker" / "main"``). Calls that run an
+  OpenMP parallel region on the caller thread —
+  ``WidgetService.predict``, ``WidgetService.get_plot("feature-importance-shap")``,
+  ``WidgetService.get_inference_plot(..., "shap-summary")`` — mark the
+  state ``"main"``. ``ThreadJobRunner`` / ``SubprocessJobRunner`` mark
+  ``"worker"`` / ``"subprocess"`` on successful completion.
+  ``LizyWidget._run_job`` reads the state and re-routes a thread-strategy
+  job to subprocess when the state is ``"main"`` (with a structured WARN
+  log), since GCC libgomp's pool affinity (#108494) would otherwise
+  deliver a 10-50x slowdown for the next worker-thread call.
+  ``LZW_FORCE_THREAD=1`` is honored as an explicit user opt-out — only
+  WARN, no auto-reroute. The state is process-sticky: ``load_data``
+  does NOT reset it because the libgomp bind in this process does not
+  unbind on data reload. BLUEPRINT.md §6.4 declares INV-G with the
+  state-transition table.
+- **CI: `libgomp-perf` job runs a parameterised libgomp perf regression
+  grid on every PR** (P-039 Phase 1, [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160)).
+  The libgomp pool-affinity / "CPU core usage decreases" regression has
+  reoccurred four times in this codebase
+  ([#147](https://github.com/nbx-liz/LizyML-Widget/issues/147) /
+  [#154](https://github.com/nbx-liz/LizyML-Widget/issues/154) /
+  [#156](https://github.com/nbx-liz/LizyML-Widget/issues/156) /
+  [#158](https://github.com/nbx-liz/LizyML-Widget/issues/158)). Each
+  prior fix only pinned the *specific* path observed — a future code
+  change could silently re-introduce the same class of 10-50x slowdown
+  via a new ML call site. P-039 Phase 1 closes that gap by adding a
+  dedicated CI job that runs ``tests/regression/test_reg_160_libgomp_perf_grid.py``
+  on ``ubuntu-latest`` (libgomp by default). The grid covers the
+  cross-product ``{intermediate parent-thread op ∈ noop /
+  main_thread_predict / main_thread_fit_predict}`` × ``{next ML op ∈
+  retune / fit}`` and asserts INV-#160-A: per-unit wall-clock of every
+  cell stays within 1.5x of an op-matched clean baseline. The grid uses
+  small datasets (5k × 20, 2 trials) so the job fits the CI budget;
+  catastrophe is not dataset-size dependent so the 1.5x bound retains
+  its expressiveness on small data. Phases 2-4 (runtime INV-G guard,
+  ``BackendExecutor`` funnel, change-gate codification) are tracked
+  under [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160) and
+  ship in follow-up PRs.
+
 ## [0.9.0] - 2026-05-09
 
 ### Fixed

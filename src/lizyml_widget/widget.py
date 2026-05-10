@@ -603,8 +603,36 @@ class LizyWidget(anywidget.AnyWidget):
         # to the same path as initial tune. The previous PR #155 thread
         # fallback is gone; it was unsafe whenever the user entered any
         # libgomp parallel region on the parent main thread (#156).
+        #
+        # P-039 Phase 2 / INV-G: if the parent main thread has already
+        # bound the libgomp pool (via prior predict / SHAP), a thread
+        # runner job would hit the 10-50x catastrophe. Re-route to
+        # subprocess unless the user explicitly opted out with
+        # LZW_FORCE_THREAD=1, in which case respect the opt-out and
+        # WARN. ``effective_strategy`` is per-job and does NOT mutate
+        # the cached ``_execution_strategy`` so a subsequent job after
+        # ``unknown`` recovery still consults the strategy detector.
+        effective_strategy = self._execution_strategy
+        if effective_strategy == "thread" and self._service._libgomp_pool_owner == "main":
+            if os.environ.get("LZW_FORCE_THREAD") == "1":
+                _log.warning(
+                    "INV-G: libgomp pool bound to parent main thread "
+                    "(prior predict/SHAP); LZW_FORCE_THREAD=1 honored — "
+                    "thread runner may be 10-50x slower for this %s job. "
+                    "Unset LZW_FORCE_THREAD to enable automatic subprocess re-route.",
+                    job_type,
+                )
+            else:
+                _log.warning(
+                    "INV-G: libgomp pool bound to parent main thread "
+                    "(prior predict/SHAP) — re-routing %s job to subprocess "
+                    "to avoid 10-50x slowdown.",
+                    job_type,
+                )
+                effective_strategy = "subprocess"
+
         runner: JobRunner
-        if self._execution_strategy == "subprocess":
+        if effective_strategy == "subprocess":
             runner = SubprocessJobRunner(self._service, libomp_path=self._libomp_path)
         else:
             runner = ThreadJobRunner(self._service)
@@ -688,6 +716,14 @@ class LizyWidget(anywidget.AnyWidget):
             self._apply_job_result(result)
             self.elapsed_sec = round(time.monotonic() - start, 1)
             self.status = "completed"
+            # P-039 Phase 2 / INV-G: record which thread/process most
+            # recently entered an OpenMP parallel region. Subprocess
+            # never touches the parent's libgomp pool; thread runner
+            # binds to the worker thread (not main, so OK). Either way,
+            # subsequent worker-thread jobs can proceed without the
+            # catastrophe path. Only mark on success — failed jobs may
+            # have been killed before any parallel region executed.
+            self._service.mark_libgomp_owner("subprocess" if is_subprocess else "worker")
         except InterruptedError:
             # INV-D (BLUEPRINT §6.4): cancel during running -> failed/CANCELLED.
             self.elapsed_sec = round(time.monotonic() - start, 1)

@@ -97,6 +97,7 @@ Widget は LizyML の型・契約（`BackendAdapter` Protocol, `TuningResult`, `
 | **UI** | `js/src/` | `backend_contract` / `config` / `df_info` を描画し、ユーザー操作を `action` に変換する。ローカル状態は表示都合（例: Search Space の Mode）に限定する | ML ロジック・Python 直接呼び出し・backend 固有 option set / parameter catalog / step 値のハードコード・full config dict の合成 |
 | **Widget** | `src/lizyml_widget/widget.py` | traitlets 定義・Action 処理・スレッド管理・`msg:custom` 中継 | ML ロジック直接記述、Service の private 状態参照、backend 固有 config 意味論の保持、ジョブ実行時の時系列スナップショット保持（P-035 で `_tune_*_snapshot` を Service の `_last_tune_summary` へ移管済み）|
 | **Service** | `src/lizyml_widget/service.py` | Data タブ由来 state（target / task / columns / CV）の管理、実行前提判定、Adapter 呼び出し調整、canonical config と Data 系 state の結合 | バックエンド固有の default / option set / search space catalog / step 定数の保持 |
+| **BackendExecutor** | `src/lizyml_widget/backend_executor.py` | caller-thread の ML library 呼出（predict / SHAP plot / 推論プロット）の単一 chokepoint。`run_ml(op, ml_kind=...)` で全呼出を funnel し、libgomp owner state（INV-G）の遷移を一元化する。Phase 4 の lint rule で「executor 外部の ML library 直接呼出」を禁止する基盤 | ML 結果の加工・キャッシュ・runner 配下（worker thread / subprocess）のジョブ実行 |
 | **Adapter** | `src/lizyml_widget/adapter.py` | Backend Contract 提供、backend 固有 config default / patch 適用 / 実行前準備、バックエンドライブラリ呼び出し、共通型への変換 | Widget / traitlets の知識 |
 
 `LizyWidget` は backend 差し替え・テスト容易性のため `adapter` をコンストラクタ引数で受け取れる。未指定時のみ既定の `LizyMLAdapter` を使用する。
@@ -1411,7 +1412,7 @@ UI は Search Space の `mode=Fixed/Range/Choice` のような表示用 state �
 
 ---
 
-### 6.4 状態機械不変条件 (INV-A..F)
+### 6.4 状態機械不変条件 (INV-A..H)
 
 並行性 / 状態機械 / リソース所有権を扱うコードに対して、`~/.claude/rules/common/invariants-first.md`
 に従い不変条件を宣言する。各 INV は `tests/test_invariants.py` に対応する RED-then-GREEN テストを持ち、
@@ -1425,9 +1426,21 @@ runtime assert / breadcrumb log として `_supervise` / `_run_job` に encode �
 | **INV-D** | `_cancel_flag` は各ジョブ開始時に `clear()` され、ジョブ終了まで Widget 側からは書き込まれない。Cancel は `failed` (`error.code == "CANCELLED"`) へ遷移する。 | 前回ジョブの cancel フラグが残ったまま新規ジョブが起動して、即座に `CANCELLED` で落ちる。 |
 | **INV-E** | `progress.round` は単一の tune 呼び出し（resume 含む）内で単調非減少。 | round が降順になる、または同一ラウンドで `round` 値が +1 ずれる（P-029 オフバイワンの再発）。 |
 | **INV-F** | `tune_summary.boundary_report.dims` は各 search space 次元を過不足なく一度ずつ列挙する。ラウンド差分ではなく累積スナップショット。 | dims が重複する、または search space に存在する次元が dims に欠ける。 |
+| **INV-G** | `WidgetService._libgomp_pool_owner` が `"main"` のとき `ThreadJobRunner` で Tune/Fit/Retune を起動しない（自動的に `SubprocessJobRunner` へ re-route するか、`LZW_FORCE_THREAD=1` のとき WARN を出して thread 続行）。`predict` / SHAP plot 等が parent main thread で libgomp parallel region に入った後の thread runner 起動は GCC #108494 で 10-50x 劣化するため。 | `w.tune() → w.predict(df) → w.fit()` のシーケンスで thread runner が選ばれ、catastrophe path（10-50x 劣化）が発火する。 |
+| **INV-H** | ML library（`lightgbm` / `shap` / `xgboost` / `lizyml`）への直接 import / 呼出は、Adapter 系（`adapter.py` / `adapter_*.py`）/ `BackendExecutor` / `_subprocess_entry.py` / `openmp_detect.py` のいずれかの内部からのみ発生する。caller-thread の ML 呼出は必ず `WidgetService._executor.run_ml(op, ml_kind=...)` を経由する。例外承認は対象行に `# noqa: ML-CALL` コメント + 理由を残し、PR body に動機を記載する。`scripts/lint_ml_imports.py` が CI gate を強制する（P-039 Phase 4）。 | `widget.py` / `service.py` / `widget_actions.py` 等が `import lightgbm` / `import shap` を直接行い、libgomp pool affinity を主スレッドで bind する catastrophe を再導入する。 |
+
+`_libgomp_pool_owner` の状態遷移（P-039 Phase 2）:
+
+- 初期値 `"unknown"`
+- `SubprocessJobRunner.run` 完了後 → `"subprocess"`（subprocess が parallel region を所有、parent main thread は untouched）
+- `ThreadJobRunner.run` 完了後 → `"worker"`（worker thread が pool を所有、parent main thread は untouched）
+- `WidgetService.predict` / `WidgetService.get_plot("feature-importance-shap")` / `WidgetService.get_inference_plot(... "shap-summary")` の呼出後 → `"main"`（caller thread = parent main thread に bind）
+- `WidgetService.load_data(...)` 呼出後はリセットしない（プロセス内の libgomp pool 親和性は data reload で消えないため）
+
+`"main"` への遷移は本プロセス内で単方向（同一 Python プロセスでは libgomp の bind は data reload で消えない）。後続 thread runner job は INV-G ガードで subprocess に re-route される。`LZW_FORCE_THREAD=1` が明示的に設定されている場合は user opt-out を尊重し WARN のみ。
 
 **運用ルール**: `_supervise` / `_run_job` / `_tune_model` / `_cancel_flag` / `status` / `progress` /
-`boundary_report` を変更する PR は body に以下を含める。
+`boundary_report` / `_libgomp_pool_owner` を変更する PR は body に以下を含める。
 
 ```markdown
 ## Invariants

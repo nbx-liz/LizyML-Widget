@@ -1,5 +1,51 @@
 ## LizyML-Widget 仕様変更履歴
 
+### P-039: libgomp / OpenMP プール親和性回帰の体系的予防（policy(openmp,perf) — #147 / #154 / #156 retrospective）
+
+- **日付**: 2026-05-10（提案・Phase 1-3 完了 / Phase 4 着手中）
+- **ステータス**: 採択（Phase 1-3: develop マージ済 / Phase 4: 着手中）
+- **関連 Issue**: [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160)（本 Proposal の元 issue）, [#147](https://github.com/nbx-liz/LizyML-Widget/issues/147)（P-036 motivating case）, [#154](https://github.com/nbx-liz/LizyML-Widget/issues/154)（PR #155 motivating case）, [#156](https://github.com/nbx-liz/LizyML-Widget/issues/156)（P-038 motivating case）, [#158](https://github.com/nbx-liz/LizyML-Widget/issues/158)（同累積劣化、follow-up）
+- **背景**:
+  - libgomp プール親和性問題（GCC bug [#108494](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=108494)）に起因する 10-50x スローダウンが、本 codebase で **4 回** 異なる近接症状として再発した。各回ごとに reactive な修正（P-020, P-036, PR #155 thread fallback, P-038 subprocess retune resume）を入れ、learned skill を書き、specific path を pin する regression test を追加してきたが、**新規 ML 呼出経路を追加することで同種クラスの回帰を再導入できる構造的弱点が残っている**。
+  - 同一 root cause: GCC libgomp は OpenMP parallel region に最初に入った thread に thread pool を bind する。LightGBM / SHAP は OpenMP を多用する。Jupyter / anywidget 環境では `widget._run_job → ThreadJobRunner`, `widget.predict(df)`, `widget_actions.handle_run_inference → service.predict`, `adapter.plot(model, "feature-importance-shap")` のいずれかが parent main thread で OpenMP region に入った瞬間、後続の worker-thread 上の Tune / Fit / Retune が catastrophe path に入る。
+  - PR #155 thread fallback / P-038 subprocess retune resume / P-036 subprocess default は **既知の call site** を 1 つずつ塞いだが、**将来追加される 5 つ目の call site** を構造的に防ぐ仕組みは無い。
+- **提案内容**: 段階的な防御層（defense in depth）。各 Layer は独立に着手可能だが、Phase の順序で着手する。
+  - **Layer 1（Architectural — Phase 3）**: `BackendExecutor` 抽象を `WidgetService` 配下に新設し、すべての ML library 呼出（predict / SHAP / model 内部 plot 等）を必ず通す。executor は execution strategy を見て inline / subprocess / dedicated-OpenMP-owner-thread を選ぶ。`service.predict` / `service.get_inference_plot`（SHAP 含む経路）/ `adapter.plot(... feature-importance-shap)` を funnel する。
+  - **Layer 2（Runtime invariant guard — Phase 2）**: BLUEPRINT.md §6.4 に **INV-G** を追加 — "post-subprocess-tune において parent main thread の libgomp parallel region が次の worker-thread Tune/Fit/Retune より先に発生してはならない"。`service._libgomp_pool_owner_known: Literal["subprocess","main","worker","unknown"]` を追加し、`SubprocessJobRunner.run` 完了時に `"subprocess"` をセット、parent main thread の predict/SHAP 経路で `"main"` をセット、worker-thread Tune/Fit 起動前に検査して `"main"` の場合 subprocess に re-route または WARN log。
+  - **Layer 3（Test grid — Phase 1）**: `tests/regression/test_reg_160_libgomp_perf_grid.py` を新設。`{intermediate ∈ noop / main_thread_predict / main_thread_fit_predict}` × `{next_op ∈ retune / fit}` の cross-product で per-trial wall-clock を baseline subprocess tune の 1.5x 以内に pin。#154（clean → retune）と #156（predict → retune catastrophe）の両方を grid の異なる cell で再現可能にする。
+  - **Layer 4（CI — Phase 1）**: `.github/workflows/ci.yml` に `libgomp-perf` job を追加し `ubuntu-latest`（libgomp by default）で `pytest -m slow tests/regression/test_reg_160_libgomp_perf_grid.py` を毎 PR 実行。catastrophe を CI ブロッカーにする。既存 `test_reg_147_openmp_perf.py` / `test_reg_156_subprocess_retune.py` は dataset サイズが GitHub runner にとって過大なため別経路（developer / nightly）で動かす（本 Proposal では grid のみを CI gate に組み込む）。
+  - **Layer 5（Change-gate — Phase 4）**: `~/.claude/rules/project/change-gate.md`（global rule）と `CLAUDE.md` に "ML library への直接呼出（lightgbm / shap / xgboost / sklearn）を `BackendExecutor` 外部に追加する" を gate-required category として追記。pre-commit / ruff custom rule で `import lightgbm` / `import shap` / `model.predict` 等が executor module 外部に出現したら fail。`# noqa: ML-CALL` allowlist comment で例外承認。
+- **Phase 構成と本 Proposal のスコープ**:
+  - **Phase 0**: 本 Proposal の HISTORY.md 追加（**本コミットで完了**）
+  - **Phase 1**: Layer 3 + Layer 4（**本 PR で着手** — CI gate と parameterised grid）
+  - **Phase 2**: Layer 2（INV-G + 実行時ガード — 別 PR）
+  - **Phase 3**: Layer 1（`BackendExecutor` refactor — 別 PR、blast radius 最大）
+  - **Phase 4**: Layer 5（change-gate codification + lint rule — 別 PR）
+- **Invariants（本 Proposal が宣言する将来不変条件）**:
+  - INV-G（Phase 2 で encode）: post-subprocess-tune において、parent main thread の libgomp parallel region が次の worker-thread Tune/Fit/Retune より先に観測されない（観測された場合は subprocess に re-route または WARN）。
+  - INV-H（Phase 3 で encode）: lightgbm / shap / xgboost / sklearn API への直接呼出は `BackendExecutor` モジュール外部から発生しない（type system + lint で enforce）。
+  - INV-I（Phase 1 で encode、本 PR）: `tests/regression/test_reg_160_libgomp_perf_grid.py` の各 cell について per-trial wall-clock が baseline subprocess tune の 1.5x 以内（catastrophe 検出のみ。absolute perf budget は別 grid で扱う）。
+- **Phase 1 影響範囲（本 PR）**:
+  - `tests/regression/test_reg_160_libgomp_perf_grid.py` — 新規（parameterised grid + 1.5x bound）
+  - `.github/workflows/ci.yml` — 新規 job `libgomp-perf` を追加
+  - `HISTORY.md` — 本 Proposal
+  - `CHANGELOG.md` — `[Unreleased]` セクションに Phase 1 entry を追加
+- **互換性**:
+  - 公開 API・traitlets・JS UI の変更なし（Phase 1 は test + CI のみ）
+  - `pytest -m slow` は引き続き opt-in。新 grid は CI で自動実行されるが、ローカル開発では `-m slow` を明示しない限り skip
+- **代替案（却下）**:
+  - **案A**: Phase 1 で既存 `test_reg_147` / `test_reg_156` をそのまま CI に乗せる → GitHub Actions 2-core runner で 100k × 50 dataset は per-job 30 分超になる。Phase 1 で別 grid を新設し dataset を 5k × 20 まで縮小する方が PR latency 影響が小さい。catastrophe は dataset サイズに依存しないので 1.5x bound は同じ表現力を持つ。
+  - **案B**: Phase 3（`BackendExecutor`）から先に着手 → blast radius が公開 Python API（`w.predict(df)` の async 化検討）まで及ぶ。既知 call site の incremental 修正（P-036 / P-038）と異なり、Proposal 単位の合意形成と段階的 migration が必要。Phase 1 が CI を gate に入れる時点で historical regression class は捕捉できるため、Phase 3 を急ぐ便益が小さい。
+  - **案C**: `LD_PRELOAD=libomp` の wrapper script 配布で GCC bug 自体を回避 → ユーザの環境管理に踏み込みすぎる（Out of scope per #160）。
+- **受け入れ基準（Phase 1）**:
+  - [ ] `tests/regression/test_reg_160_libgomp_perf_grid.py` が `intermediate × next_op` の cross-product を `@pytest.mark.parametrize` で表現する。
+  - [ ] 各 cell の per-trial wall-clock が baseline subprocess tune の 1.5x 以内であることを assert する（libgomp 非搭載環境では skip）。
+  - [ ] `.github/workflows/ci.yml` に `libgomp-perf` job が存在し、`pull_request` トリガで `ubuntu-latest` 上で grid を実行する。
+  - [ ] grid を意図的に regress させると（例: 1.5x bound を 1.0x に絞る）CI が fail することを手元で確認する。
+  - [ ] 既存品質ゲート（`pytest`, `ruff check`, `ruff format --check`, `mypy --strict`, `pnpm test:coverage`, `pnpm lint`）全 green。
+- **本 Proposal の終了条件**:
+  - Phase 1 〜 Phase 4 すべてが develop にマージされる。本 Proposal 自体は Phase 1 PR がマージされた時点で「decision: 採択」とし、Phase 2-4 はそれぞれ独立 PR で着手する。
+
 ### P-038: subprocess Retune Resume を P-037 の tune state IPC を input 方向に拡張して実装（#154 thread fallback の置換）
 
 - **日付**: 2026-05-09（提案・決定・実装）
