@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **CI gate: ML library imports outside the BackendExecutor / Adapter
+  layer fail CI** (P-039 Phase 4 / INV-H,
+  [#160](https://github.com/nbx-liz/2LizyML-Widget/issues/160)).
+  New ``scripts/lint_ml_imports.py`` walks every ``.py`` file under
+  ``src/lizyml_widget/`` and fails (exit 1) on any import of
+  ``lightgbm`` / ``shap`` / ``xgboost`` / ``lizyml`` that is not in
+  the allowlist (``adapter.py`` / ``adapter_*.py`` / ``backend_executor.py``
+  / ``_subprocess_entry.py`` / ``openmp_detect.py``). The CI quality
+  job runs the lint between mypy and pytest. ``# noqa: ML-CALL``
+  on the offending line is the documented escape hatch — the
+  surrounding docstring / PR body must explain the exception.
+  CLAUDE.md §8 codifies the rule and explicitly tags new caller-
+  thread ML call sites as a change-gate-required category. With
+  Phase 4, P-039 is fully landed: catastrophe class is now blocked
+  by (a) Phase 1 perf-grid catching it on a PR, (b) Phase 2 runtime
+  guard auto-routing it on production, (c) Phase 3 funnel
+  centralising the marking, and (d) Phase 4 lint blocking new call
+  sites at PR review. Issue #160 closes when this PR merges.
 - **BackendExecutor caller-thread ML library funnel** (P-039 Phase 3,
   [#160](https://github.com/nbx-liz/2LizyML-Widget/issues/160)).
   New module ``src/lizyml_widget/backend_executor.py`` exposes

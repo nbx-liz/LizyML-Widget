@@ -65,6 +65,14 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy src/lizyml_widget/
 
+      - name: ML-call lint (P-039 Phase 4)
+        # Block direct ML library imports outside the BackendExecutor /
+        # adapter / subprocess-entry / openmp-detect allowlist. Enforces
+        # INV-H structurally so a future contributor cannot silently
+        # re-introduce parent-main-thread ML calls outside the funnel.
+        # See HISTORY.md P-039 Phase 4.
+        run: uv run python scripts/lint_ml_imports.py
+
       - name: Test (pytest)
         run: uv run pytest --cov=lizyml_widget --cov-report=term-missing --cov-fail-under=80 -q
 
