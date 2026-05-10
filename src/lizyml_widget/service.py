@@ -6,7 +6,7 @@ import copy
 import logging
 import threading
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -35,6 +35,12 @@ from .types import (
 _log = logging.getLogger(__name__)
 
 MAX_STATS_VALUES = 1000
+
+# P-039 Phase 2 / INV-G: states for ``WidgetService._libgomp_pool_owner``.
+# Tracks which thread/process most recently entered an OpenMP parallel
+# region so the widget guard can re-route worker-thread Tune/Fit/Retune
+# to subprocess when the parent main thread has bound libgomp.
+LibgompPoolOwner = Literal["unknown", "subprocess", "worker", "main"]
 
 
 class WidgetService:
@@ -67,6 +73,14 @@ class WidgetService:
         # (None, flag) so apply_best_params can fail loud in the latter.
         self._last_tune_summary: TuningSummary | None = None
         self._tune_summary_invalidated_by_load: bool = False
+        # P-039 Phase 2 (INV-G): track which thread/process most recently
+        # entered an OpenMP parallel region. Once "main" is observed (via
+        # parent-main-thread predict / SHAP), all subsequent worker-thread
+        # Tune/Fit/Retune jobs are catastrophe-prone on libgomp hosts and
+        # the widget guard re-routes them to subprocess. The state is
+        # process-sticky — load_data does NOT reset it because libgomp
+        # pool affinity does not unbind on data reload.
+        self._libgomp_pool_owner: LibgompPoolOwner = "unknown"
 
     @property
     def info(self) -> BackendInfo:
@@ -613,6 +627,25 @@ class WidgetService:
             self._last_tune_summary = summary
             self._tune_summary_invalidated_by_load = False
 
+    def mark_libgomp_owner(self, owner: LibgompPoolOwner) -> None:
+        """Record which thread/process most recently entered an OpenMP region.
+
+        P-039 Phase 2 (INV-G): the widget guard reads this to decide
+        whether a worker-thread Tune/Fit would hit the libgomp
+        pool-affinity catastrophe. Once ``"main"`` is set, stay sticky —
+        the libgomp bind in this process does not go away on data reload
+        or model swap. Callers:
+
+        - ``SubprocessJobRunner`` (after successful run) → ``"subprocess"``
+        - ``ThreadJobRunner`` (after successful run) → ``"worker"``
+        - ``predict`` / SHAP plot paths → ``"main"`` (parent main thread)
+        """
+        # If main already observed, do not downgrade — the libgomp bind
+        # to the parent main thread is permanent for this process.
+        if self._libgomp_pool_owner == "main" and owner != "main":
+            return
+        self._libgomp_pool_owner = owner
+
     def predict(self, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary:
         """Run prediction on new data."""
         with self._model_lock:
@@ -620,7 +653,15 @@ class WidgetService:
         if model is None:
             msg = "No trained model. Run fit or tune first."
             raise ValueError(msg)
-        return self._adapter.predict(model, data, return_shap=return_shap)
+        try:
+            return self._adapter.predict(model, data, return_shap=return_shap)
+        finally:
+            # P-039 Phase 2 / INV-G: predict runs on the caller thread
+            # (parent main thread for ``w.predict()`` / Inference tab
+            # callbacks). Mark even on exception because the LightGBM /
+            # SHAP TreeExplainer call has already entered an OpenMP
+            # parallel region by the time the exception unwinds.
+            self.mark_libgomp_owner("main")
 
     # ── Results ──────────────────────────────────────────────
 
@@ -630,7 +671,14 @@ class WidgetService:
         if model is None:
             msg = "No trained model"
             raise ValueError(msg)
-        return self._adapter.plot(model, plot_type, **kwargs)
+        try:
+            return self._adapter.plot(model, plot_type, **kwargs)
+        finally:
+            # P-039 Phase 2 / INV-G: SHAP plots run TreeExplainer on the
+            # caller thread which is parallel under OpenMP. Mark "main"
+            # so the next worker-thread Tune/Fit re-routes to subprocess.
+            if plot_type == "feature-importance-shap":
+                self.mark_libgomp_owner("main")
 
     def get_inference_plot(self, predictions: pd.DataFrame, plot_type: str) -> PlotData:
         """Generate an inference plot (prediction-distribution or shap-summary)."""
@@ -639,6 +687,11 @@ class WidgetService:
         except AttributeError:
             msg = "Inference plots not supported by this adapter"
             raise TypeError(msg) from None
+        finally:
+            # P-039 Phase 2 / INV-G: shap-summary recomputes a TreeExplainer
+            # on the caller thread (parent main thread for the Inference tab).
+            if plot_type == "shap-summary":
+                self.mark_libgomp_owner("main")
 
     def get_available_plots(self) -> list[str]:
         with self._model_lock:

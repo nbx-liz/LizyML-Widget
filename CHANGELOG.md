@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Runtime guard: parent-main-thread libgomp binding auto-routes
+  Tune/Fit/Retune to subprocess** (P-039 Phase 2 / INV-G,
+  [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160)).
+  ``WidgetService`` now tracks ``_libgomp_pool_owner`` (one of
+  ``"unknown" / "subprocess" / "worker" / "main"``). Calls that run an
+  OpenMP parallel region on the caller thread —
+  ``WidgetService.predict``, ``WidgetService.get_plot("feature-importance-shap")``,
+  ``WidgetService.get_inference_plot(..., "shap-summary")`` — mark the
+  state ``"main"``. ``ThreadJobRunner`` / ``SubprocessJobRunner`` mark
+  ``"worker"`` / ``"subprocess"`` on successful completion.
+  ``LizyWidget._run_job`` reads the state and re-routes a thread-strategy
+  job to subprocess when the state is ``"main"`` (with a structured WARN
+  log), since GCC libgomp's pool affinity (#108494) would otherwise
+  deliver a 10-50x slowdown for the next worker-thread call.
+  ``LZW_FORCE_THREAD=1`` is honored as an explicit user opt-out — only
+  WARN, no auto-reroute. The state is process-sticky: ``load_data``
+  does NOT reset it because the libgomp bind in this process does not
+  unbind on data reload. BLUEPRINT.md §6.4 declares INV-G with the
+  state-transition table.
 - **CI: `libgomp-perf` job runs a parameterised libgomp perf regression
   grid on every PR** (P-039 Phase 1, [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160)).
   The libgomp pool-affinity / "CPU core usage decreases" regression has
