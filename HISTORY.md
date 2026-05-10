@@ -2,8 +2,8 @@
 
 ### P-039: libgomp / OpenMP プール親和性回帰の体系的予防（policy(openmp,perf) — #147 / #154 / #156 retrospective）
 
-- **日付**: 2026-05-10（提案・Phase 1-2 完了 / Phase 3 着手中）
-- **ステータス**: 採択（Phase 1-2: develop マージ済 / Phase 3: 着手中 / Phase 4: 着手前）
+- **日付**: 2026-05-10（提案・Phase 1-3 完了 / Phase 4 着手中）
+- **ステータス**: 採択（Phase 1-3: develop マージ済 / Phase 4: 着手中）
 - **関連 Issue**: [#160](https://github.com/nbx-liz/LizyML-Widget/issues/160)（本 Proposal の元 issue）, [#147](https://github.com/nbx-liz/LizyML-Widget/issues/147)（P-036 motivating case）, [#154](https://github.com/nbx-liz/LizyML-Widget/issues/154)（PR #155 motivating case）, [#156](https://github.com/nbx-liz/LizyML-Widget/issues/156)（P-038 motivating case）, [#158](https://github.com/nbx-liz/LizyML-Widget/issues/158)（同累積劣化、follow-up）
 - **背景**:
   - libgomp プール親和性問題（GCC bug [#108494](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=108494)）に起因する 10-50x スローダウンが、本 codebase で **4 回** 異なる近接症状として再発した。各回ごとに reactive な修正（P-020, P-036, PR #155 thread fallback, P-038 subprocess retune resume）を入れ、learned skill を書き、specific path を pin する regression test を追加してきたが、**新規 ML 呼出経路を追加することで同種クラスの回帰を再導入できる構造的弱点が残っている**。

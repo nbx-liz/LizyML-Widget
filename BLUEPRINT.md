@@ -1412,7 +1412,7 @@ UI は Search Space の `mode=Fixed/Range/Choice` のような表示用 state �
 
 ---
 
-### 6.4 状態機械不変条件 (INV-A..G)
+### 6.4 状態機械不変条件 (INV-A..H)
 
 並行性 / 状態機械 / リソース所有権を扱うコードに対して、`~/.claude/rules/common/invariants-first.md`
 に従い不変条件を宣言する。各 INV は `tests/test_invariants.py` に対応する RED-then-GREEN テストを持ち、
@@ -1427,6 +1427,7 @@ runtime assert / breadcrumb log として `_supervise` / `_run_job` に encode �
 | **INV-E** | `progress.round` は単一の tune 呼び出し（resume 含む）内で単調非減少。 | round が降順になる、または同一ラウンドで `round` 値が +1 ずれる（P-029 オフバイワンの再発）。 |
 | **INV-F** | `tune_summary.boundary_report.dims` は各 search space 次元を過不足なく一度ずつ列挙する。ラウンド差分ではなく累積スナップショット。 | dims が重複する、または search space に存在する次元が dims に欠ける。 |
 | **INV-G** | `WidgetService._libgomp_pool_owner` が `"main"` のとき `ThreadJobRunner` で Tune/Fit/Retune を起動しない（自動的に `SubprocessJobRunner` へ re-route するか、`LZW_FORCE_THREAD=1` のとき WARN を出して thread 続行）。`predict` / SHAP plot 等が parent main thread で libgomp parallel region に入った後の thread runner 起動は GCC #108494 で 10-50x 劣化するため。 | `w.tune() → w.predict(df) → w.fit()` のシーケンスで thread runner が選ばれ、catastrophe path（10-50x 劣化）が発火する。 |
+| **INV-H** | ML library（`lightgbm` / `shap` / `xgboost` / `lizyml`）への直接 import / 呼出は、Adapter 系（`adapter.py` / `adapter_*.py`）/ `BackendExecutor` / `_subprocess_entry.py` / `openmp_detect.py` のいずれかの内部からのみ発生する。caller-thread の ML 呼出は必ず `WidgetService._executor.run_ml(op, ml_kind=...)` を経由する。例外承認は対象行に `# noqa: ML-CALL` コメント + 理由を残し、PR body に動機を記載する。`scripts/lint_ml_imports.py` が CI gate を強制する（P-039 Phase 4）。 | `widget.py` / `service.py` / `widget_actions.py` 等が `import lightgbm` / `import shap` を直接行い、libgomp pool affinity を主スレッドで bind する catastrophe を再導入する。 |
 
 `_libgomp_pool_owner` の状態遷移（P-039 Phase 2）:
 
