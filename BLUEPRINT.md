@@ -97,6 +97,7 @@ Widget は LizyML の型・契約（`BackendAdapter` Protocol, `TuningResult`, `
 | **UI** | `js/src/` | `backend_contract` / `config` / `df_info` を描画し、ユーザー操作を `action` に変換する。ローカル状態は表示都合（例: Search Space の Mode）に限定する | ML ロジック・Python 直接呼び出し・backend 固有 option set / parameter catalog / step 値のハードコード・full config dict の合成 |
 | **Widget** | `src/lizyml_widget/widget.py` | traitlets 定義・Action 処理・スレッド管理・`msg:custom` 中継 | ML ロジック直接記述、Service の private 状態参照、backend 固有 config 意味論の保持、ジョブ実行時の時系列スナップショット保持（P-035 で `_tune_*_snapshot` を Service の `_last_tune_summary` へ移管済み）|
 | **Service** | `src/lizyml_widget/service.py` | Data タブ由来 state（target / task / columns / CV）の管理、実行前提判定、Adapter 呼び出し調整、canonical config と Data 系 state の結合 | バックエンド固有の default / option set / search space catalog / step 定数の保持 |
+| **BackendExecutor** | `src/lizyml_widget/backend_executor.py` | caller-thread の ML library 呼出（predict / SHAP plot / 推論プロット）の単一 chokepoint。`run_ml(op, ml_kind=...)` で全呼出を funnel し、libgomp owner state（INV-G）の遷移を一元化する。Phase 4 の lint rule で「executor 外部の ML library 直接呼出」を禁止する基盤 | ML 結果の加工・キャッシュ・runner 配下（worker thread / subprocess）のジョブ実行 |
 | **Adapter** | `src/lizyml_widget/adapter.py` | Backend Contract 提供、backend 固有 config default / patch 適用 / 実行前準備、バックエンドライブラリ呼び出し、共通型への変換 | Widget / traitlets の知識 |
 
 `LizyWidget` は backend 差し替え・テスト容易性のため `adapter` をコンストラクタ引数で受け取れる。未指定時のみ既定の `LizyMLAdapter` を使用する。
