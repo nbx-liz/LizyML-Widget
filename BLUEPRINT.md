@@ -1411,7 +1411,7 @@ UI は Search Space の `mode=Fixed/Range/Choice` のような表示用 state �
 
 ---
 
-### 6.4 状態機械不変条件 (INV-A..F)
+### 6.4 状態機械不変条件 (INV-A..G)
 
 並行性 / 状態機械 / リソース所有権を扱うコードに対して、`~/.claude/rules/common/invariants-first.md`
 に従い不変条件を宣言する。各 INV は `tests/test_invariants.py` に対応する RED-then-GREEN テストを持ち、
@@ -1425,9 +1425,20 @@ runtime assert / breadcrumb log として `_supervise` / `_run_job` に encode �
 | **INV-D** | `_cancel_flag` は各ジョブ開始時に `clear()` され、ジョブ終了まで Widget 側からは書き込まれない。Cancel は `failed` (`error.code == "CANCELLED"`) へ遷移する。 | 前回ジョブの cancel フラグが残ったまま新規ジョブが起動して、即座に `CANCELLED` で落ちる。 |
 | **INV-E** | `progress.round` は単一の tune 呼び出し（resume 含む）内で単調非減少。 | round が降順になる、または同一ラウンドで `round` 値が +1 ずれる（P-029 オフバイワンの再発）。 |
 | **INV-F** | `tune_summary.boundary_report.dims` は各 search space 次元を過不足なく一度ずつ列挙する。ラウンド差分ではなく累積スナップショット。 | dims が重複する、または search space に存在する次元が dims に欠ける。 |
+| **INV-G** | `WidgetService._libgomp_pool_owner` が `"main"` のとき `ThreadJobRunner` で Tune/Fit/Retune を起動しない（自動的に `SubprocessJobRunner` へ re-route するか、`LZW_FORCE_THREAD=1` のとき WARN を出して thread 続行）。`predict` / SHAP plot 等が parent main thread で libgomp parallel region に入った後の thread runner 起動は GCC #108494 で 10-50x 劣化するため。 | `w.tune() → w.predict(df) → w.fit()` のシーケンスで thread runner が選ばれ、catastrophe path（10-50x 劣化）が発火する。 |
+
+`_libgomp_pool_owner` の状態遷移（P-039 Phase 2）:
+
+- 初期値 `"unknown"`
+- `SubprocessJobRunner.run` 完了後 → `"subprocess"`（subprocess が parallel region を所有、parent main thread は untouched）
+- `ThreadJobRunner.run` 完了後 → `"worker"`（worker thread が pool を所有、parent main thread は untouched）
+- `WidgetService.predict` / `WidgetService.get_plot("feature-importance-shap")` / `WidgetService.get_inference_plot(... "shap-summary")` の呼出後 → `"main"`（caller thread = parent main thread に bind）
+- `WidgetService.load_data(...)` 呼出後はリセットしない（プロセス内の libgomp pool 親和性は data reload で消えないため）
+
+`"main"` への遷移は本プロセス内で単方向（同一 Python プロセスでは libgomp の bind は data reload で消えない）。後続 thread runner job は INV-G ガードで subprocess に re-route される。`LZW_FORCE_THREAD=1` が明示的に設定されている場合は user opt-out を尊重し WARN のみ。
 
 **運用ルール**: `_supervise` / `_run_job` / `_tune_model` / `_cancel_flag` / `status` / `progress` /
-`boundary_report` を変更する PR は body に以下を含める。
+`boundary_report` / `_libgomp_pool_owner` を変更する PR は body に以下を含める。
 
 ```markdown
 ## Invariants
