@@ -33,6 +33,16 @@ jobs:
           cache: pnpm
           cache-dependency-path: js/pnpm-lock.yaml
 
+      - name: Verify uv.lock is in sync with pyproject.toml
+        # Guard against the silent dependency-drift class: dependabot pip
+        # bumps update pyproject.toml but do NOT regenerate uv.lock, and
+        # `uv sync --frozen` tolerates a stale lock — so without this check
+        # CI can run against an out-of-date dependency set. This actually
+        # happened pre-v0.10.1 (lizyml pinned <0.13 in the lock while the
+        # manifest already said <0.17). `uv lock --check` fails when the
+        # lockfile no longer matches the manifest, forcing a regen at PR time.
+        run: uv lock --check
+
       - name: Install Python dependencies
         run: uv sync --frozen --dev
 
