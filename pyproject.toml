@@ -42,7 +42,7 @@ Changelog = "https://github.com/nbx-liz/LizyML-Widget/blob/main/CHANGELOG.md"
 # The upper bound is excluded so that new minor releases with potentially
 # incompatible type/contract changes do not silently break the widget.
 # See docs/VERSION_COMPAT.md for the full compatibility matrix.
-lizyml = ["lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.13"]
+lizyml = ["lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.17"]
 dev = [
     "pytest>=7.0",
     "ruff>=0.4",
@@ -50,7 +50,7 @@ dev = [
     "jupyterlab>=4.0",
     "ipykernel>=6.0",
     "pandas-stubs>=2.0",
-    "lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.13",
+    "lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.17",
     "scikit-learn>=1.0",
     "watchfiles>=1.1",
 ]
@@ -99,7 +99,7 @@ dev = [
     "jupyterlab>=4.0",
     "ipykernel>=6.0",
     "pandas-stubs>=2.0",
-    "lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.13",
+    "lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.17",
     "scikit-learn>=1.0",
     "watchfiles>=1.1",
     "twine>=6.2.0",
