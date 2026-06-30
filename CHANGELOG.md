@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-06-30
+
+Maintenance release: dependency updates only. No public API, traitlets, or
+backend-contract changes.
+
+### Changed
+- Widen the `lizyml` runtime requirement to `>=0.10.0,<0.17`
+  ([#169](https://github.com/nbx-liz/LizyML-Widget/pull/169),
+  [#176](https://github.com/nbx-liz/LizyML-Widget/pull/176)).
+- Bump bundled `preact` 10.29.1 → 10.29.2
+  ([#173](https://github.com/nbx-liz/LizyML-Widget/pull/173)).
+
+### Internal
+- Dev / CI dependency bumps: `typescript-eslint` → 8.61.1
+  ([#170](https://github.com/nbx-liz/LizyML-Widget/pull/170),
+  [#172](https://github.com/nbx-liz/LizyML-Widget/pull/172),
+  [#182](https://github.com/nbx-liz/LizyML-Widget/pull/182)),
+  `eslint` → 10.6.0
+  ([#171](https://github.com/nbx-liz/LizyML-Widget/pull/171),
+  [#180](https://github.com/nbx-liz/LizyML-Widget/pull/180)),
+  `esbuild` → 0.28.1
+  ([#178](https://github.com/nbx-liz/LizyML-Widget/pull/178)),
+  `actions/checkout` → 7
+  ([#181](https://github.com/nbx-liz/LizyML-Widget/pull/181)).
+
 ## [0.10.0] - 2026-05-10
 
 ### Added
