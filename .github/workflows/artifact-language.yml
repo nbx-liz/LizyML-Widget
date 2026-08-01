@@ -1,0 +1,33 @@
+name: artifact-language
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+  issues:
+    types: [opened, edited, reopened]
+  issue_comment:
+    types: [created, edited]
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate selected artifact boundary
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            bash tests/test-artifact-language.sh
+          else
+            python3 .githooks/artifact-language.py github-event \
+              --event-name "$GITHUB_EVENT_NAME" \
+              --event-path "$GITHUB_EVENT_PATH"
+          fi
