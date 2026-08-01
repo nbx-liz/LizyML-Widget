@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# managed-by: claude-code-config (.githooks/install.sh installs this copy)
+# pre-commit — refuse a commit made while HEAD is on a protected branch.
+#
+# Git runs this on the commit *operation*, so the command form cannot route
+# around it: `git add -A && git commit …`, `true; git commit …` and
+# `git commit --amend` all reach it, while all three skip
+# `hooks/validate-commit.sh`, which matches `^\s*git\s+commit` against the whole
+# command string (claude-code-config#147).
+set -euo pipefail
+
+probe_file="${CLAUDE_CODE_CONFIG_PRE_COMMIT_PROBE:-}"
+if [ -n "$probe_file" ]; then
+  case "$probe_file" in
+    /*) ;;
+    *) echo "BLOCKED: pre-commit integration probe path must be absolute" >&2; exit 1 ;;
+  esac
+  probe_parent="${probe_file%/*}"
+  [ -n "$probe_parent" ] || probe_parent="/"
+  [ -d "$probe_parent" ] && [ ! -L "$probe_parent" ] \
+    || { echo "BLOCKED: pre-commit integration probe parent is unsafe" >&2; exit 1; }
+  [ ! -e "$probe_file" ] && [ ! -L "$probe_file" ] \
+    || { echo "BLOCKED: pre-commit integration probe path already exists" >&2; exit 1; }
+  umask 077
+  (set -o noclobber; printf '%s\n' 'claude-code-config-pre-commit-reached' >"$probe_file") \
+    || { echo "BLOCKED: cannot publish pre-commit integration probe" >&2; exit 1; }
+fi
+
+# shellcheck source=./protected-refs.sh
+. "$(dirname "${BASH_SOURCE[0]}")/protected-refs.sh"
+
+assert_not_on_protected_branch commit

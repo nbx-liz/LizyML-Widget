@@ -15,3 +15,14 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=500]
       - id: detect-private-key
+
+  # managed-by: claude-code-config (.githooks/pre-commit runs through pre-commit)
+  - repo: local
+    hooks:
+      - id: claude-code-config-protected-commit
+        name: protected local commit (claude-code-config)
+        entry: .githooks/pre-commit
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
