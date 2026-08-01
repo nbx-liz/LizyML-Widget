@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# managed-by: claude-code-config (.githooks/install.sh installs this copy)
+set -euo pipefail
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+VALIDATOR="$HOOK_DIR/artifact-language.py"
+
+if [ "$#" -ne 1 ]; then
+  echo "BLOCKED: commit-msg requires exactly one message-file argument" >&2
+  exit 1
+fi
+if [ ! -f "$VALIDATOR" ]; then
+  echo "BLOCKED: artifact-language validator is missing from $HOOK_DIR" >&2
+  exit 1
+fi
+exec python3 "$VALIDATOR" commit-message --file "$1"

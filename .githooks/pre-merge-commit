@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# managed-by: claude-code-config (.githooks/install.sh installs this copy)
+# pre-merge-commit — refuse a merge commit created while HEAD is on a protected
+# branch.
+#
+# Git does not run `pre-commit` for a merge commit, so without this hook
+# `git merge <feature>` onto `master` would create a local commit with no gate at
+# all — the same destination `pre-commit` refuses for an ordinary commit.
+set -euo pipefail
+
+# shellcheck source=./protected-refs.sh
+. "$(dirname "${BASH_SOURCE[0]}")/protected-refs.sh"
+
+assert_not_on_protected_branch merge
