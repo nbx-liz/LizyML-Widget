@@ -8,7 +8,8 @@ Thank you for your interest in contributing!
 git clone https://github.com/nbx-liz/LizyML-Widget.git
 cd LizyML-Widget
 uv sync --frozen --dev
-pre-commit install
+uv run pre-commit install
+uv run bash .githooks/install.sh --preserve-pre-commit
 
 # JS frontend
 cd js && pnpm install && pnpm build && cd ..

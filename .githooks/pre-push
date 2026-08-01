@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# managed-by: claude-code-config (.githooks/install.sh installs this copy)
+# pre-push — refuse a push whose destination is a protected branch.
+#
+# Git supplies one line per ref on stdin:
+#
+#   <local ref> <local sha> <remote ref> <remote sha>
+#
+# with the remote ref **already resolved**, which is the whole point: `HEAD`,
+# `@`, `HEAD:master`, `+master`, `--all` and a bare `git push` under
+# `push.default` all arrive as `refs/heads/master`. `hooks/validate-push.sh`
+# compares the refspec as it was typed and therefore lets `git push -u origin
+# HEAD` through (claude-code-config#147).
+#
+# A deletion written as a refspec (`git push origin :master`,
+# `git push --prune origin '+refs/heads/*:refs/heads/*'`) arrives with
+# `<local ref>` set to `(delete)` and its sha all zeros, while `<remote ref>`
+# still names the branch — so it is refused by the same comparison.
+#
+# A mirror prune is the exception, and it is not fixable from the record stream:
+# when `git push --mirror` deletes a remote branch that has no local counterpart,
+# Git writes **no record at all** for it, so the hook is handed a clean-looking
+# stream and exits 0 while a protected branch is deleted. The configured form of
+# that push is refused below; the command-line `--mirror` flag is invisible to a
+# hook and is documented as uncovered in CONTRIBUTING.md.
+set -euo pipefail
+
+# shellcheck source=./protected-refs.sh
+. "$(dirname "${BASH_SOURCE[0]}")/protected-refs.sh"
+
+blocked=0
+
+# `$1` is the remote's name (or its URL for an anonymous push). A remote carrying
+# `remote.<name>.mirror` — which `git clone --mirror` sets — turns a plain
+# `git push <name>` into a mirror push, and a mirror push can delete a protected
+# branch without ever reporting it here. Refuse the whole push rather than let
+# the deletion through unseen; `--no-verify` remains for the operator who means
+# it.
+if [ -n "${1:-}" ] &&
+   [ "$(git config --bool --get "remote.$1.mirror" 2>/dev/null || echo false)" = true ]; then
+  echo "BLOCKED: '$1' is configured as a mirror remote (remote.$1.mirror)." >&2
+  echo "A mirror push deletes remote branches without reporting them to this hook," >&2
+  echo "so a protected branch could be removed unseen." >&2
+  blocked=1
+fi
+
+# The line is read whole and split afterwards, rather than read straight into
+# four names, so that "the record was empty" and "the record consumed bytes"
+# stay distinguishable. `|| [ -n "$record" ]` then keeps a final record that
+# arrives without a trailing newline: `read` returns non-zero at EOF even though
+# it consumed the line, so a plain loop drops it and exits 0 — a protected ref
+# silently unexamined (DC1). Splitting into named fields directly would lose the
+# same way on a whitespace-only tail, which reads as four empty fields.
+# Git terminates every record it writes, so this is belt and braces rather than a
+# live bypass.
+set -f   # ref names cannot contain glob metacharacters, but do not rely on it
+while IFS= read -r record || [ -n "${record:-}" ]; do
+  # shellcheck disable=SC2086  # deliberate word splitting: the record's fields
+  set -- $record
+  local_ref="${1:-}"
+  local_sha="${2:-}"
+  remote_ref="${3:-}"
+  remote_sha="${4:-}"
+
+  # Ref names cannot contain whitespace (git-check-ref-format), so the four
+  # fields are unambiguous. Anything other than exactly four is not a
+  # Git-produced record; refuse rather than guess which field is missing.
+  if [ "$#" -ne 4 ] || [ -z "$local_ref" ] || [ -z "$local_sha" ] ||
+     [ -z "$remote_ref" ] || [ -z "$remote_sha" ]; then
+    echo "BLOCKED: unparseable pre-push record: '$record'" >&2
+    blocked=1
+    record=""
+    continue
+  fi
+
+  if protected_ref "$remote_ref"; then
+    if [ "$local_ref" = "(delete)" ]; then
+      echo "BLOCKED: refusing to delete the protected branch '$remote_ref'." >&2
+    else
+      echo "BLOCKED: '$remote_ref' is protected." >&2
+      echo "Push a feature branch and open a PR instead." >&2
+    fi
+    blocked=1
+  fi
+done
+
+exit "$blocked"
